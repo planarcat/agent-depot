@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Agent Session Hub</title>
+<style>
+  :root {
+    --bg:#eef0f1; --panel:#f7f8f8; --panel-2:#fbfcfc;
+    --ink:#171d1f; --ink-2:#3c4447; --ink-3:#5b6669; --ink-4:#8a9497;
+    --rule:#d9dedf; --rule-soft:#e6eaeb; --accent:#0d6a63; --accent-soft:#eef4f3;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB",sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{background:var(--bg);font-family:var(--sans);color:var(--ink);display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .app{width:100%;height:100%;max-width:1500px;background:var(--panel);display:grid;grid-template-rows:48px 1fr 28px;border-left:1px solid var(--rule);border-right:1px solid var(--rule)}
+  .titlebar{display:flex;align-items:center;gap:14px;padding:0 16px;border-bottom:1px solid var(--rule);background:var(--panel-2);user-select:none}
+  .t-name{font-weight:600;font-size:14px}
+  .t-sub{font-family:var(--mono);font-size:11px;color:var(--ink-4)}
+  .spacer{flex:1}
+  .badge{font-family:var(--mono);font-size:10.5px;background:var(--accent-soft);color:var(--accent);border:1px solid #cfe0dd;border-radius:10px;padding:2px 9px}
+  .btn{font-size:12px;padding:5px 12px;border:1px solid var(--rule);border-radius:6px;background:#fff;color:var(--ink-2);cursor:pointer}
+  .btn:hover{border-color:var(--accent);color:var(--accent)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:500}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .main{display:grid;grid-template-columns:252px 1fr 300px;min-height:0}
+
+  .rail{border-right:1px solid var(--rule);background:var(--panel-2);padding:14px;overflow-y:auto}
+  .rail-h{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;color:var(--ink-4);margin:2px 0 10px}
+  .tool-card{border:1px solid var(--rule);border-radius:8px;background:#fff;padding:11px 12px;margin-bottom:10px;cursor:pointer}
+  .tool-card.active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+  .tool-head{display:flex;align-items:center;gap:8px}
+  .tool-dot{width:8px;height:8px;border-radius:50%}
+  .td-claude{background:#d97757}.td-codex{background:#171d1f}.td-opencode{background:#7c5cff}
+  .tool-name{font-weight:600;font-size:13.5px;flex:1}
+  .tool-count{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+  .tool-meta{font-size:11.5px;color:var(--ink-4);margin:5px 0 9px}
+  .tool-acts{display:flex;gap:6px;align-items:center}
+  .mini{font-size:11px;padding:4px 10px;border:1px solid var(--rule);border-radius:5px;background:#fff;color:var(--ink-2);cursor:pointer}
+  .mini:hover{border-color:var(--accent);color:var(--accent)}
+  .switch{margin-left:auto;display:flex;align-items:center;gap:5px;cursor:pointer}
+  .sw-label{font-size:10.5px;color:var(--ink-4)}
+  .sw{width:26px;height:15px;border-radius:8px;background:#cfd6d7;position:relative;transition:background .15s}
+  .sw::after{content:"";position:absolute;top:1.5px;left:1.5px;width:12px;height:12px;border-radius:50%;background:#fff;transition:left .15s}
+  .switch.on .sw{background:var(--accent)}
+  .switch.on .sw::after{left:12.5px}
+
+  .center{display:flex;flex-direction:column;min-width:0}
+  .list-toolbar{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--rule);background:var(--panel-2)}
+  .seg{display:flex;border:1px solid var(--rule);border-radius:6px;overflow:hidden}
+  .seg button{font-size:12px;padding:5px 12px;border:none;background:#fff;color:var(--ink-3);cursor:pointer;border-right:1px solid var(--rule-soft)}
+  .seg button:last-child{border-right:none}
+  .seg button.on{background:var(--accent);color:#fff}
+  .search{flex:1;max-width:280px;margin-left:auto;font-size:12px;padding:5px 10px;border:1px solid var(--rule);border-radius:6px;background:#fff;outline:none}
+  .search:focus{border-color:var(--accent)}
+  .list-head{display:grid;grid-template-columns:34px 1fr 90px 170px;padding:7px 16px;border-bottom:1px solid var(--rule-soft);font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;color:var(--ink-4);background:var(--panel-2)}
+  .rows{overflow-y:auto;flex:1}
+  .row{display:grid;grid-template-columns:34px 1fr 90px 170px;padding:10px 16px;border-bottom:1px solid var(--rule-soft);align-items:center;cursor:pointer;background:#fff}
+  .row:hover{background:#f4f7f6}
+  .row.sel{background:var(--accent-soft)}
+  .row input{width:14px;height:14px;accent-color:var(--accent)}
+  .s-title{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tag{font-family:var(--mono);font-size:9.5px;border:1px solid #cfe0dd;color:var(--accent);background:var(--accent-soft);padding:1px 6px;border-radius:8px;margin-left:8px;vertical-align:1px}
+  .s-msgs{font-family:var(--mono);font-size:11px;color:var(--ink-3);text-align:right;padding-right:14px}
+  .s-meta{font-family:var(--mono);font-size:10.5px;color:var(--ink-4);text-align:right}
+  .s-meta .src{color:var(--ink-3)}
+  .empty{padding:40px;text-align:center;color:var(--ink-4);font-size:13px}
+
+  .side{border-left:1px solid var(--rule);background:var(--panel-2);padding:14px;display:flex;flex-direction:column;overflow-y:auto}
+  .drop{border:1px dashed #b8c2c4;border-radius:8px;background:#fff;padding:12px;margin-bottom:9px;text-align:center;transition:all .15s}
+  .drop .d-name{font-weight:600;font-size:13px}
+  .drop .d-meta{font-size:10.5px;font-family:var(--mono);color:var(--ink-4);margin-top:3px}
+  .drop.hot{border-color:var(--accent);background:var(--accent-soft);box-shadow:0 0 0 1px var(--accent)}
+  .drop.self{opacity:.4}
+  .migrate-box{border:1px solid var(--rule);border-radius:8px;background:#fff;padding:12px;margin:4px 0 16px}
+  .migrate-count{font-size:12.5px;color:var(--ink-2);margin-bottom:9px}
+  .migrate-count b{color:var(--accent)}
+  .ledger{flex:1}
+  .led-item{border-bottom:1px solid var(--rule-soft);padding:9px 0}
+  .led-time{font-family:var(--mono);font-size:10px;color:var(--ink-4)}
+  .led-act{font-size:12px;color:var(--ink-2);margin-top:2px;line-height:1.5;word-break:break-all}
+  .led-act code{font-family:var(--mono);font-size:10.5px;color:var(--accent);background:var(--accent-soft);padding:0 4px;border-radius:3px}
+
+  .statusbar{display:flex;align-items:center;gap:18px;padding:0 16px;border-top:1px solid var(--rule);background:var(--panel-2);font-family:var(--mono);font-size:10.5px;color:var(--ink-4)}
+  .dot-ok{width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block;margin-right:5px}
+
+  .overlay{position:fixed;inset:0;background:rgba(23,29,31,.32);display:none;align-items:center;justify-content:center;z-index:50}
+  .overlay.show{display:flex}
+  .modal{width:620px;max-height:80vh;background:var(--panel-2);border:1px solid var(--rule);border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
+  .modal-head{display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid var(--rule)}
+  .modal-title{font-weight:600;font-size:14.5px;flex:1}
+  .modal-x{cursor:pointer;color:var(--ink-4);font-size:16px;border:none;background:none}
+  .modal-body{padding:10px 18px 14px;overflow-y:auto}
+  .m-msg{margin-bottom:12px;max-width:82%}
+  .m-role{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--ink-4);margin-bottom:4px}
+  .m-bubble{font-size:12.5px;line-height:1.55;padding:9px 12px;border:1px solid var(--rule-soft);border-radius:8px;background:#fff;color:var(--ink-2);white-space:pre-wrap;word-break:break-word}
+  .m-assistant .m-bubble{background:var(--accent-soft);border-color:#cfe0dd}
+  .m-tool .m-bubble{font-family:var(--mono);font-size:10.5px;background:var(--panel);color:var(--ink-3)}
+  .modal-foot{display:flex;justify-content:flex-end;padding:12px 18px;border-top:1px solid var(--rule)}
+
+  .toasts{position:fixed;right:16px;bottom:40px;display:flex;flex-direction:column;gap:8px;z-index:60}
+  .toast{background:var(--ink);color:#f0f0f0;font-size:12.5px;padding:10px 14px;border-radius:8px;min-width:280px}
+  .toast.ok{background:var(--accent)}
+  .toast.err{background:#a03d2e}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="titlebar">
+    <span class="t-name">Agent Session Hub</span>
+    <span class="t-sub">本地控制台 · ~/.agent/hub/</span>
+    <span class="spacer"></span>
+    <span class="badge" id="engineBadge">检测引擎…</span>
+    <button class="btn" id="refreshAllBtn" onclick="refreshAll()">⟳ 全部刷新</button>
+  </div>
+
+  <div class="main">
+    <div class="rail">
+      <div class="rail-h">已接入工具</div>
+      <div id="toolCards"></div>
+    </div>
+
+    <div class="center">
+      <div class="list-toolbar">
+        <div class="seg" id="seg">
+          <button class="on" data-t="all" onclick="setTool(this)">全部</button>
+          <button data-t="claude" onclick="setTool(this)">Claude Code</button>
+          <button data-t="codex" onclick="setTool(this)">Codex CLI</button>
+          <button data-t="opencode" onclick="setTool(this)">OpenCode</button>
+        </div>
+        <input class="search" id="search" placeholder="搜索标题 / 会话 ID…" oninput="loadState()">
+      </div>
+      <div class="list-head"><div><input type="checkbox" id="selAll" style="width:13px;height:13px;accent-color:#0d6a63" onchange="selAll(this)"></div><div>会话</div><div style="text-align:right;padding-right:14px">消息</div><div style="text-align:right">时间 · 来源</div></div>
+      <div class="rows" id="rows"><div class="empty">加载中…</div></div>
+    </div>
+
+    <div class="side">
+      <div class="rail-h">迁移目标 · 拖入或点选</div>
+      <div id="dropZone"></div>
+      <div class="migrate-box">
+        <div class="migrate-count">已选 <b id="selCount">0</b> 条会话</div>
+        <button class="btn primary" id="migBtn" style="width:100%;padding:8px 0" disabled onclick="migrateViaButton()">迁移到…（点选目标卡片）</button>
+      </div>
+      <div class="rail-h">最近操作 · 台账</div>
+      <div class="ledger" id="ledger"></div>
+    </div>
+  </div>
+
+  <div class="statusbar">
+    <span><span class="dot-ok"></span><span id="stDb">hub.db · ~/.agent/hub/</span></span>
+    <span id="stSched">定时调度：未启用</span>
+    <span style="margin-left:auto">仅本地 · 无云端上传</span>
+  </div>
+</div>
+
+<div class="overlay" id="overlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-head"><div class="modal-title" id="mTitle">会话预览</div><button class="modal-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" id="mBody"></div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">关闭</button></div>
+  </div>
+</div>
+<div class="toasts" id="toasts"></div>
+
+<script>
+let STATE = {tools:{}, sessions:[], ledger:[], schedule:{}, engine:{casr:false}};
+let filterTool = 'all';
+let selected = new Set();
+let migTarget = null;
+
+const TOOL_NAMES = {claude:'Claude Code', codex:'Codex CLI', opencode:'OpenCode'};
+const TOOL_DESC  = {claude:'~/.claude/projects/**.jsonl', codex:'~/.codex/sessions/**.jsonl', opencode:'opencode.db (SQLite 只读)'};
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  return r.json();
+}
+
+async function loadState() {
+  STATE = await api('/api/state');
+  renderTools(); renderDrops(); renderRows(); renderLedger(); renderStatus();
+}
+
+/* ---------- tools rail ---------- */
+function renderTools() {
+  const box = document.getElementById('toolCards');
+  box.innerHTML = '';
+  const order = ['claude','codex','opencode'];
+  for (const t of order) {
+    const info = STATE.tools[t] || {count:0, latest:null};
+    const sched = (STATE.schedule||{})[t] || {enabled:false, interval_min:30};
+    const el = document.createElement('div');
+    el.className = 'tool-card' + (filterTool===t ? ' active':'');
+    el.onclick = () => { filterTool = t; migTarget=null; renderDrops(); loadState(); };
+    el.innerHTML = `
+      <div class="tool-head"><span class="tool-dot td-${t}"></span><span class="tool-name">${TOOL_NAMES[t]}</span><span class="tool-count">${info.count}</span></div>
+      <div class="tool-meta">最近活动 <b>${fmtTime(info.latest)}</b><br><span style="font-family:var(--mono);font-size:10px">${TOOL_DESC[t]}</span></div>
+      <div class="tool-acts">
+        <button class="mini" onclick="event.stopPropagation();refreshOne('${t}', this)">⟳ 刷新</button>
+        <div class="switch ${sched.enabled?'on':''}" onclick="event.stopPropagation();toggleSched('${t}', this)">
+          <span class="sw-label">${sched.interval_min}m</span><span class="sw"></span>
+        </div>
+      </div>`;
+    box.appendChild(el);
+  }
+}
+
+function renderDrops() {
+  const box = document.getElementById('dropZone');
+  box.innerHTML = '';
+  for (const t of ['claude','codex','opencode']) {
+    const el = document.createElement('div');
+    el.className = 'drop' + (filterTool===t ? ' self':'') + (migTarget===t ? ' hot':'');
+    el.dataset.tool = t;
+    el.ondragover = e => { e.preventDefault(); el.classList.add('hot'); };
+    el.ondragleave = () => { if (migTarget!==t) el.classList.remove('hot'); };
+    el.ondrop = e => { e.preventDefault(); el.classList.remove('hot'); handleDrop(t); };
+    el.onclick = () => { if (selected.size && filterTool!==t) { migTarget=t; renderDrops(); document.getElementById('migBtn').textContent = `迁移 ${selected.size} 条 → ${TOOL_NAMES[t]}`; } };
+    el.innerHTML = `<div class="d-name">${TOOL_NAMES[t]}</div><div class="d-meta">casr → 原生格式写回</div>`;
+    box.appendChild(el);
+  }
+}
+
+/* ---------- rows ---------- */
+function renderRows() {
+  const box = document.getElementById('rows');
+  const q = document.getElementById('search').value.trim();
+  let list = STATE.sessions || [];
+  if (filterTool !== 'all') list = list.filter(s => s.tool === filterTool);
+  if (q) list = list.filter(s => (s.title||'').toLowerCase().includes(q.toLowerCase()) || (s.sid||'').toLowerCase().includes(q.toLowerCase()));
+  if (!list.length) { box.innerHTML = '<div class="empty">没有会话 — 点左栏「⟳ 刷新」采集</div>'; return; }
+  box.innerHTML = '';
+  for (const s of list) {
+    const row = document.createElement('div');
+    row.className = 'row' + (selected.has(s.sid) ? ' sel' : '');
+    row.draggable = true;
+    row.ondragstart = e => {
+      if (!selected.has(s.sid)) { selected.add(s.sid); }
+      row.classList.add('dragging');
+      e.dataTransfer.setData('text/plain', s.sid);
+      renderRows();
+    };
+    row.onclick = e => { if (e.target.type !== 'checkbox') openSession(s.sid); };
+    row.innerHTML = `
+      <div><input type="checkbox" ${selected.has(s.sid)?'checked':''} onclick="event.stopPropagation();toggleSel('${s.sid}', this)"></div>
+      <div><span class="s-title">${esc(s.title||'(无标题)')}</span>${s.msg_count?'':''}</div>
+      <div class="s-msgs">${s.msg_count} msgs</div>
+      <div class="s-meta">${fmtTime(s.updated_at)}<div class="src">${TOOL_NAMES[s.tool]||s.tool}</div></div>`;
+    box.appendChild(row);
+  }
+}
+
+function toggleSel(sid, cb) {
+  cb.checked ? selected.add(sid) : selected.delete(sid);
+  cb.closest('.row').classList.toggle('sel', cb.checked);
+  document.getElementById('selCount').textContent = selected.size;
+  document.getElementById('migBtn').disabled = selected.size===0;
+  if (!selected.size) { migTarget=null; renderDrops(); document.getElementById('migBtn').textContent='迁移到…（点选目标卡片）'; }
+}
+function selAll(master) {
+  const q = document.getElementById('search').value.trim();
+  let list = STATE.sessions||[];
+  if (filterTool!=='all') list = list.filter(s=>s.tool===filterTool);
+  if (q) list = list.filter(s=>(s.title||'').toLowerCase().includes(q.toLowerCase()));
+  list.forEach(s => master.checked ? selected.add(s.sid) : selected.delete(s.sid));
+  renderRows();
+  document.getElementById('selCount').textContent = selected.size;
+  document.getElementById('migBtn').disabled = selected.size===0;
+}
+function setTool(btn) {
+  document.querySelectorAll('#seg button').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  filterTool = btn.dataset.t; migTarget=null; renderDrops(); loadState();
+}
+
+/* ---------- actions ---------- */
+async function refreshOne(tool, btn) {
+  btn.textContent = '⟳ 刷新中'; btn.disabled = true;
+  const r = await api('/api/refresh', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({tool})});
+  btn.textContent = '⟳ 刷新'; btn.disabled = false;
+  if (r.ok) {
+    const s = (r.results||[])[0]||{};
+    toast(`✓ ${TOOL_NAMES[tool]} 刷新完成 · 新增 ${s.new_messages??'?'} 条消息`, 'ok');
+  } else toast('刷新失败：'+(r.error||''), 'err');
+  loadState();
+}
+async function refreshAll() {
+  const btn = document.getElementById('refreshAllBtn');
+  btn.textContent = '⟳ 刷新中…'; btn.disabled = true;
+  const r = await api('/api/refresh', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
+  btn.textContent = '⟳ 全部刷新'; btn.disabled = false;
+  if (r.ok) {
+    const sum = (r.results||[]).map(x=>`${TOOL_NAMES[x.tool]||x.tool} +${x.new_messages??'err'}`).join(' · ');
+    toast('✓ 全量刷新完成：'+sum, 'ok');
+  } else toast('刷新失败：'+(r.error||''), 'err');
+  loadState();
+}
+async function toggleSched(tool, el) {
+  const enable = !el.classList.contains('on');
+  const r = await api('/api/schedule', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({tool, enabled:enable})});
+  if (r.ok) toast(enable?`✓ 已启用定时刷新 · ${TOOL_NAMES[tool]}`:`已停用定时刷新 · ${TOOL_NAMES[tool]}`, 'ok');
+  loadState();
+}
+async function handleDrop(target) {
+  if (!selected.size) return;
+  const ids = [...selected];
+  for (const sid of ids) {
+    const s = STATE.sessions.find(x=>x.sid===sid);
+    if (!s || s.tool===target) continue;
+    const r = await api('/api/migrate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sid, target})});
+    if (r.ok) toast(`✓ 已迁移到 ${TOOL_NAMES[target]} · ${s.title.slice(0,18)}…${r.new_id?` · 新 ID ${r.new_id.slice(0,8)}`:''}`, 'ok');
+    else toast('迁移失败：'+(r.error||r.output||'').slice(0,120), 'err');
+  }
+  migTarget=null; selected.clear();
+  document.getElementById('migBtn').disabled = true;
+  document.getElementById('migBtn').textContent = '迁移到…（点选目标卡片）';
+  renderDrops(); loadState();
+}
+async function migrateViaButton() {
+  if (!selected.size || !migTarget) { toast('先勾选会话，再点右侧目标卡片选择迁移目标'); return; }
+  await handleDrop(migTarget);
+}
+
+/* ---------- session preview ---------- */
+async function openSession(sid) {
+  const s = await api('/api/session?id='+encodeURIComponent(sid));
+  if (s.error) return;
+  document.getElementById('mTitle').textContent = s.title || '(无标题)';
+  const body = document.getElementById('mBody');
+  body.innerHTML = '';
+  for (const m of (s.messages||[])) {
+    const div = document.createElement('div');
+    const cls = m.role==='assistant' ? 'm-assistant' : (m.role==='tool' ? 'm-tool' : '');
+    div.className = 'm-msg '+cls;
+    const role = (m.role||'?').toUpperCase() + (m.ts?` · ${m.ts.slice(11,16)}`:'');
+    div.innerHTML = `<div class="m-role">${role}</div><div class="m-bubble">${esc((m.content||'').slice(0,4000))}</div>`;
+    body.appendChild(div);
+  }
+  if (!(s.messages||[]).length) body.innerHTML = '<div class="empty">该会话暂无可显示的文本消息</div>';
+  document.getElementById('overlay').classList.add('show');
+}
+function closeModal(){ document.getElementById('overlay').classList.remove('show'); }
+
+/* ---------- ledger / status ---------- */
+function renderLedger() {
+  const box = document.getElementById('ledger');
+  box.innerHTML = '';
+  for (const l of (STATE.ledger||[]).slice(0,12)) {
+    let detail = '';
+    try { const d = JSON.parse(l.detail); 
+      if (l.action==='refresh') detail = (d.results||[]).map(x=>`${x.tool} +${x.new_messages??'err'}`).join(' · ');
+      else if (l.action==='migrate') detail = `${d.from} → ${d.to} · ${d.ok?'✓':'✗'} ${d.sid.slice(0,10)}…`;
+      else detail = l.detail.slice(0,80);
+    } catch { detail = (l.detail||'').slice(0,80); }
+    const el = document.createElement('div');
+    el.className='led-item';
+    el.innerHTML = `<div class="led-time">${l.ts.slice(11,16)} · ${l.action}</div><div class="led-act">${esc(detail)}</div>`;
+    box.appendChild(el);
+  }
+  if (!(STATE.ledger||[]).length) box.innerHTML = '<div class="empty">暂无操作记录</div>';
+}
+function renderStatus() {
+  const eng = document.getElementById('engineBadge');
+  eng.textContent = STATE.engine.casr ? '引擎 casr · 已连接' : '引擎 casr · 未安装（只读浏览）';
+  const schedOn = Object.values(STATE.schedule||{}).filter(s=>s.enabled).length;
+  document.getElementById('stSched').textContent = `定时调度：${schedOn?schedOn+' 个工具已启用':'未启用'}`;
+}
+
+/* ---------- utils ---------- */
+function fmtTime(t) {
+  if (!t) return '—';
+  if (t.includes('T')) { const d=new Date(t); if(!isNaN(d)) return d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); }
+  return t.slice(5,16);
+}
+function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function toast(text, cls) {
+  const box = document.getElementById('toasts');
+  const t = document.createElement('div');
+  t.className = 'toast ' + (cls||'');
+  t.textContent = text;
+  box.appendChild(t);
+  setTimeout(()=>t.remove(), 3500);
+}
+
+loadState();
+setInterval(loadState, 30000);
+</script>
+</body>
+</html>
