@@ -17,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -151,7 +152,8 @@ class Handler(BaseHTTPRequestHandler):
                 "ledger": STORE.ledger_recent(20),
                 "migrations": migration_history(STORE, limit=20),
                 "schedule": json.loads(raw) if raw else DEFAULT_SCHEDULE,
-                "engine": {"casr": migrator.available()},
+                "engine": {"casr": migrator.available(),
+                           "agentmemory": _agentmemory_health()},
                 "memories": list_memories(STORE, limit=50),
                 "now": now_iso(),
             })
@@ -250,6 +252,16 @@ class Handler(BaseHTTPRequestHandler):
             STORE.log("config", {"schedule": tool, "value": data})
             return self._json({"ok": True, "schedule": sched})
         return self._json({"error": "not found"}, 404)
+
+
+def _agentmemory_health():
+    """Lightweight reachability probe for the agentmemory service (optional)."""
+    try:
+        req = urllib.request.Request("http://127.0.0.1:3111/agentmemory/health")
+        with urllib.request.urlopen(req, timeout=0.8) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
 
 
 def main():

@@ -379,6 +379,12 @@ function renderStatus() {
   const schedOn = Object.values(state.schedule || {}).filter(s => s.enabled).length;
   document.getElementById('status-sched').textContent = `定时调度：${schedOn ? schedOn + ' 个范围已启用' : '未启用'}`;
   document.getElementById('status-mem').textContent = `记忆 ${(state.memories || []).length} 条`;
+  const am = document.getElementById('status-am');
+  if (am) {
+    am.textContent = state.engine && state.engine.agentmemory
+      ? '记忆总线 agentmemory · 运行中 (:3113)'
+      : '记忆总线 agentmemory · 未运行';
+  }
 }
 
 /* ---------- preview ---------- */

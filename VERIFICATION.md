@@ -42,10 +42,16 @@ E2E 场景清单：page-load / screenshot-desktop / filter-codex / selection / p
 ```bash
 # 会话与消息（8 会话 / 49 条消息）
 sqlite3 ~/.agent/hub/hub.db "SELECT tool, COUNT(*) FROM sessions GROUP BY tool;"
-# lineage 勾连（4 条，源与副本双向可查）
+# lineage 勾连（源与副本双向可查）
 sqlite3 ~/.agent/hub/hub.db "SELECT lid, src_tool, dst_tool, status FROM migrations;"
-# 台账（74+ 条）
+# 台账（80+ 条）
 sqlite3 ~/.agent/hub/hub.db "SELECT action, COUNT(*) FROM ledger GROUP BY action;"
+# agentmemory（healthy + demo 数据）
+agentmemory status | head -12
+curl -s http://127.0.0.1:3111/agentmemory/health | head -c 120
+# 接线核验
+python3 -c "import json; print(json.load(open('/Users/planarcat/.claude.json'))['mcpServers']['agentmemory']['args'])"
+grep -A2 mcp_servers.agentmemory ~/.codex/config.toml
 ```
 
 ## 你回来后的手工验收清单

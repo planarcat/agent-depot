@@ -71,7 +71,7 @@ agent-session-hub/
 - [x] 记忆区（db + 每日 Markdown 日志）
 - [x] macOS 桌面壳（零依赖 .app；Tauri 因依赖重量暂缓，见 HANDOFF 决策记录）
 - [ ] 真·增量回流（需先解决原生会话文件的追加写风险；建议向 casr 上游提需求）
-- [ ] 与 agentmemory 全套接线（安装进行中）
+- [x] 与 agentmemory 接线（三工具 MCP 已连接，viewer :3113）
 
 ## 相关
 

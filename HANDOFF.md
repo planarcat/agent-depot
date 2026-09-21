@@ -34,7 +34,7 @@ bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E �
 | lineage 编号 + ledger 导出映射 | ✅ 完成（含迁移去重、同步基线、`/api/sync/preview`） |
 | 导出水印 + 循环检测 | ✅ 按保守默认落地：**不写入原生会话文件**（任何工具目录），以「去重守卫 + 消息数基线 + 修订副本"同步更新"」实现等价目标；原因：原生追加写的格式风险远大于收益（casr 官方也仅做整会话转换），详见决策记录 |
 | Tauri 桌面壳 | ⭕ 替代为**零依赖 macOS .app 壳**（双击即开，功能等价）。原因：Rust 工具链 + 数百 MB 依赖 + 本机对 GitHub 大文件下载极慢（23MB 实测 150s 超时）；`scripts/make-app.sh` 一键重建。可复议 |
-| 记忆区接入 agentmemory | 🔄 agentmemory 已通过镜像全局安装并 init（`~/.agentmemory/`），引擎（iii-engine）正在后台自动安装；完成后执行 `agentmemory connect --all` 即完成接线。hub 侧记忆区（db + journal）已独立可用 |
+| 记忆区接入 agentmemory | ✅ 完成：镜像安装 + iii-engine（经 ghfast 镜像）就位；服务 healthy（:3111 / viewer :3113）；已接线 claude-code / codex / opencode 三配置（已核验写入）；demo 通过（3 会话 6 条 observation 持久化）；hub 状态栏显示记忆总线状态 |
 | 定时间隔编辑 UI | ✅ 完成 |
 | 全工具批量开关 | ✅ 完成（"全部工具"范围） |
 | OpenCode 迁移目标实测 | ✅ 完成（opencode→claude、opencode→codex 真实链路均跑通） |
@@ -63,16 +63,20 @@ bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E �
 |---|---|---|---|---|
 | 1 | 测试期间在真实工具目录生成的会话副本（`~/.codex/sessions/2026/09/21/` 下 4 个 rollout、`~/.claude/projects/` 下 1 个副本 75a2f5a5） | 删除文件需你确认 | 各工具 resume 列表可见这些副本 | 验收后可删（或留着当样例） |
 | 2 | `~/.agent/hub/memory/` 下 10 个旧实现产生的单条记忆 md 文件 | 同上 | 无功能影响 | 确认后可清 |
-| 3 | CCHV 桌面版 DMG（`~/Downloads/…universal.dmg`，9MB/23MB 未完成） | GitHub 下载极慢 | 深度查看器不可用（非 hub 依赖） | 网络好时续传 |
-| 4 | agentmemory `connect --all`（若引擎安装未完成） | 引擎后台安装中 | 记忆总线暂未接线 | 见下方命令 |
+| 3 | ~~CCHV 桌面版~~ | — | — | ✅ 已完成（经 ghfast 镜像下载并安装到 `~/Applications/Claude Code History Viewer.app`） |
 
-## agentmemory 收尾命令（引擎安装完成后执行一次）
+## 运行中的服务（管理命令）
 
-```bash
-agentmemory status              # 确认 Running
-agentmemory connect --all       # 接线所有已安装工具（claude-code/codex/opencode 等）
-agentmemory status              # 目视各工具 connected ✓
-```
+| 服务 | 状态 | 管理 |
+|---|---|---|
+| Agent Session Hub | 运行中 · http://127.0.0.1:8317 | `./stop.sh` / `./run.sh` |
+| agentmemory | 运行中 · REST :3111 · Viewer :3113 | `agentmemory stop` / `agentmemory`（重启） |
+
+## agentmemory 使用提示
+
+- 三工具已接线 MCP（`mcpServers.agentmemory`）：重启对应工具或开新会话即生效；
+- keyless 模式为 BM25 检索；如需语义检索，在 `~/.agentmemory/.env` 配置 embedding key；
+- 可选增强：`npx skills add rohitg00/agentmemory -y`（给工具装入 17 个使用技能）。
 
 ## 下一步建议
 
