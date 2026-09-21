@@ -7,8 +7,10 @@
 ## 快速开始
 
 ```bash
-python3 server.py
-# 打开 http://127.0.0.1:8317
+./run.sh          # 后台启动（pid + 日志在仓库内）
+./run.sh --open   # 启动并打开界面
+./stop.sh         # 停止
+# 或前台运行：./run.sh --fg    /    python3 server.py
 ```
 
 ## 功能（MVP）
