@@ -40,9 +40,10 @@
           <button data-filter="claude" data-testid="filter-claude">Claude</button>
           <button data-filter="codex" data-testid="filter-codex">Codex</button>
           <button data-filter="opencode" data-testid="filter-opencode">OpenCode</button>
+          <button data-filter="starred" data-testid="filter-starred">★ 收藏</button>
         </div>
         <input class="hub-input search" data-testid="search-input" id="search-input"
-               placeholder="搜索标题 / 会话 ID…">
+               placeholder="搜索标题 / 消息内容…">
       </div>
       <div class="list-head">
         <div><input type="checkbox" data-testid="sel-all" id="sel-all"
@@ -54,6 +55,7 @@
       <div class="rows" id="session-rows" data-testid="session-rows">
         <div class="hub-empty">加载中…</div>
       </div>
+      <div class="search-panel" id="search-panel" data-testid="search-panel" style="display:none"></div>
     </main>
 
     <!-- right side -->
@@ -118,6 +120,11 @@
       <button class="hub-btn btn-sm" data-testid="preview-close" id="preview-close">关闭</button>
     </div>
     <div class="preview__chain" data-testid="preview-chain" id="preview-chain"></div>
+    <div class="preview__acts">
+      <button class="hub-btn btn-sm" data-testid="preview-star" id="preview-star">☆ 收藏</button>
+      <button class="hub-btn btn-sm" data-testid="preview-resume" id="preview-resume">复制 resume 命令</button>
+      <button class="hub-btn btn-sm" data-testid="preview-export" id="preview-export">导出 Markdown</button>
+    </div>
     <div class="preview__body" data-testid="preview-body" id="preview-body"></div>
   </div>
 </div>

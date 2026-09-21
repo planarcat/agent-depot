@@ -298,6 +298,49 @@ S('duplicate-migration-guard', async () => {
   return `重复迁移被拦截，无新会话产生（计数 ${countsAfter}）`;
 });
 
+S('content-search-flow', async () => {
+  await evaluate(`(() => {
+    const inp = document.getElementById('search-input');
+    inp.value = 'GitNexus';
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await waitFor(`document.getElementById('search-panel').style.display !== 'none'`, 8000, '搜索面板出现');
+  await waitFor(`document.querySelectorAll('[data-testid="search-item"]').length >= 1`, 8000, '搜索结果条目');
+  const n = await evaluate(`document.querySelectorAll('[data-testid="search-item"]').length`);
+  await evaluate(`document.querySelector('[data-testid="search-item"]').click()`);
+  await waitFor(`document.getElementById('preview-overlay').classList.contains('is-open')`, 6000, '点击结果打开预览');
+  const chain = await evaluate(`document.getElementById('preview-chain').textContent`);
+  await click('[data-testid="preview-close"]');
+  await evaluate(`(() => { const inp = document.getElementById('search-input'); inp.value = ''; inp.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  return `${n} 条消息命中 → 点击打开对应会话`;
+});
+
+S('preview-actions', async () => {
+  await evaluate(`(() => { document.querySelector('[data-testid="row"]').click(); })()`);
+  await waitFor(`document.getElementById('preview-overlay').classList.contains('is-open')`, 6000, '预览打开');
+  // star: state-agnostic flip check (initial state may vary between runs)
+  const L0 = await evaluate(`document.getElementById('preview-star').textContent`);
+  await click('[data-testid="preview-star"]');
+  await waitFor(`!!document.querySelector('.hub-toast--success')`, 6000, '收藏 toast');
+  await sleep(300);
+  const L1 = await evaluate(`document.getElementById('preview-star').textContent`);
+  if (L1 === L0) throw new Error('收藏态未翻转: ' + L1);
+  // export
+  await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
+  await click('[data-testid="preview-export"]');
+  await waitFor(`[...document.querySelectorAll('.hub-toast--success')].some(t => t.textContent.includes('已导出'))`, 8000, '导出 toast');
+  // resume copy (clipboard may be restricted headless -> accept success or warn)
+  await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
+  await click('[data-testid="preview-resume"]');
+  await waitFor(`document.querySelector('.hub-toast--success') || document.querySelector('.hub-toast--warn')`, 6000, '复制反馈 toast');
+  // restore star to original state
+  await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
+  await click('[data-testid="preview-star"]');
+  await waitFor(`document.getElementById('preview-star').textContent === ${JSON.stringify(L0)}`, 6000, '恢复收藏初始态');
+  await click('[data-testid="preview-close"]');
+  return `收藏 ${L0.trim()} → ${L1.trim()} → 还原`;
+});
+
 S('screenshot-mobile', async () => {
   await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });

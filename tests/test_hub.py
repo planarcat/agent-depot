@@ -135,6 +135,10 @@ class HubSandbox:
             cls.proc.wait(timeout=5)
         except Exception:
             cls.proc.kill()
+        try:
+            cls.server_log.close()
+        except Exception:
+            pass
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     # ---------- scans ----------
@@ -480,6 +484,59 @@ class EdgeTest(HubSandbox, unittest.TestCase):
         s, after = req("GET", "/api/state")
         self.assertEqual(len(after["sessions"]), n_sessions)
         self.assertIsNotNone(after["schedule"])
+
+
+
+class V3Test(HubSandbox, unittest.TestCase):
+    """v0.3 features: content search / markdown export / star."""
+
+    def setUp(self):
+        # make sure fixture data is scanned
+        req("POST", "/api/refresh", {})
+
+    def test_v01_content_search(self):
+        import urllib.parse
+        qs = urllib.parse.urlencode({"q": "并行"})
+        s, d = req("GET", "/api/search?" + qs)
+        self.assertEqual(s, 200)
+        self.assertTrue(d["ok"])
+        hit = [r for r in d["results"] if r["sid"] == CLAUDE_SID]
+        self.assertTrue(hit, "应命中 claude 夹具会话")
+        self.assertGreaterEqual(hit[0]["hits"], 1)
+        self.assertIn("并行", hit[0]["snippet"])
+
+    def test_v02_search_escape_and_empty(self):
+        s, d = req("GET", "/api/search?q=")
+        self.assertEqual(s, 400)
+        s, d = req("GET", "/api/search?q=" + urllib.parse.quote("%"))
+        self.assertEqual(s, 200)  # wildcard escaped, no crash
+        s, d = req("GET", "/api/search?q=" + urllib.parse.quote("不存在的词xyz123"))
+        self.assertEqual(s, 200)
+        self.assertEqual(d["results"], [])
+
+    def test_v03_export(self):
+        s, d = req("GET", "/api/export?sid=" + CLAUDE_SID)
+        self.assertEqual(s, 200)
+        self.assertTrue(d["ok"])
+        self.assertTrue(os.path.exists(d["path"]))
+        content = open(d["path"]).read()
+        self.assertIn("并行", content)
+        s, d = req("GET", "/api/export?sid=does-not-exist")
+        self.assertEqual(s, 404)
+        s, d = req("GET", "/api/export")
+        self.assertEqual(s, 400)
+
+    def test_v04_star(self):
+        s, d = req("POST", "/api/star", {"sid": CLAUDE_SID})
+        self.assertTrue(d["ok"]); self.assertEqual(d["starred"], 1)
+        s, d = req("GET", "/api/sessions?tool=claude")
+        row = [x for x in d["sessions"] if x["sid"] == CLAUDE_SID][0]
+        self.assertEqual(row["starred"], 1)
+        s, d = req("POST", "/api/star", {"sid": CLAUDE_SID})
+        self.assertEqual(d["starred"], 0)
+        s, d = req("POST", "/api/star", {"sid": "nope"})
+        self.assertEqual(s, 404)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

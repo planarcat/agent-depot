@@ -18,6 +18,9 @@
 ## 功能
 
 - **统一浏览**：所有工具会话一个列表，筛选 / 搜索 / 预览（含 lineage 链）
+- **全文搜索（v0.3）**：搜消息内容（不止标题），命中片段高亮展示，点击直达会话
+- **导出 Markdown（v0.3）**：任意会话一键导出为可读文档（`~/.agent/hub/exports/`）
+- **收藏（v0.3）**：会话星标 + 「★ 收藏」筛选；预览页可复制 resume 命令一键续跑
 - **增量采集**：JSONL 按字节 offset tail；OpenCode SQLite 只读；内容哈希去重、重扫幂等
 - **定时刷新**：4 个范围（全部 + 3 工具）× 开关 × 间隔编辑，配置持久化，执行入台账
 - **跨工具迁移**：拖拽 / 点选 → casr 原生格式写回（原子 + 读回验证），迁移副本自动采集回 hub
@@ -28,7 +31,7 @@
 ## 测试（精确测试体系 · 3 层）
 
 ```bash
-bash tests/run_all.sh        # 全量：lint + API 集成 + E2E 无头 + E2E 有头冒烟
+bash tests/run_all.sh        # 全量 5 套件：lint + API 31 + E2E 14 + 有头 3 + 沙箱 7
 python3 tests/lint_styles.py # 样式规范 lint（游离色值/字号检查）
 python3 tests/test_hub.py    # API 集成（沙箱，不触碰真实会话）
 node tests/e2e.mjs           # E2E：CDP 驱动真实 Chrome（零依赖），--headed 有头模式

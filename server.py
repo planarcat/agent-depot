@@ -27,7 +27,8 @@ sys.path.insert(0, ROOT)
 from hub.store import (Store, now_iso, ensure_lineage_schema,   # noqa: E402
                        lineage_info, migration_history,
                        ensure_memory_schema, add_memory,
-                       list_memories, delete_memory, sync_status)
+                       list_memories, delete_memory, sync_status,
+                       set_star, search_messages, export_markdown)
 from hub.scanners import scan_all             # noqa: E402
 from hub import migrator                      # noqa: E402
 
@@ -195,6 +196,22 @@ class Handler(BaseHTTPRequestHandler):
                 "memories": list_memories(STORE, limit=50),
                 "now": now_iso(),
             })
+        if u.path == "/api/search":
+            q = parse_qs(u.query)
+            query = q.get("q", [""])[0]
+            if not query.strip():
+                return self._json({"ok": False, "error": "q 不能为空"}, 400)
+            results = search_messages(STORE, query)
+            return self._json({"ok": True, "results": results})
+        if u.path == "/api/export":
+            sid = parse_qs(u.query).get("sid", [""])[0]
+            if not sid:
+                return self._json({"ok": False, "error": "sid required"}, 400)
+            path, nbytes = export_markdown(STORE, sid)
+            if path is None:
+                return self._json({"ok": False, "error": "会话不存在"}, 404)
+            STORE.log("export", {"sid": sid, "path": path, "bytes": nbytes})
+            return self._json({"ok": True, "path": path, "bytes": nbytes})
         if u.path == "/api/sessions":
             q = parse_qs(u.query)
             tool = q.get("tool", ["all"])[0]
@@ -281,6 +298,14 @@ class Handler(BaseHTTPRequestHandler):
                            refs={"lid": r.get("lid"), "sid": sid, "target": target},
                            source="migrate")
             return self._json(r)
+        if u.path == "/api/star":
+            sid = data.get("sid")
+            if not sid:
+                return self._json({"ok": False, "error": "sid required"}, 400)
+            new = set_star(STORE, sid)
+            if new is None:
+                return self._json({"ok": False, "error": "会话不存在"}, 404)
+            return self._json({"ok": True, "starred": new})
         if u.path == "/api/memory/add":
             body = (data.get("body") or "").strip()
             if not body:

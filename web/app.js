@@ -79,7 +79,8 @@ function renderToolCards() {
 /* ---------- rows ---------- */
 function visibleSessions() {
   let list = state.sessions || [];
-  if (state.filter !== 'all') list = list.filter(s => s.tool === state.filter);
+  if (state.filter === 'starred') list = list.filter(s => s.starred);
+  else if (state.filter !== 'all') list = list.filter(s => s.tool === state.filter);
   const q = (document.getElementById('search-input').value || '').trim().toLowerCase();
   if (q) list = list.filter(s =>
     (s.title || '').toLowerCase().includes(q) || (s.sid || '').toLowerCase().includes(q));
@@ -114,9 +115,10 @@ function renderRows() {
       openSession(s.sid);
     };
     const lid = s.lid ? `<span class="hub-badge" data-testid="lid-badge">[hub:${s.lid}]</span>` : '';
+    const star = s.starred ? '<span class="row__star" data-testid="row-star">★</span>' : '';
     row.innerHTML = `
       <div><input type="checkbox" data-testid="row-check" ${state.selected.has(s.sid) ? 'checked' : ''}></div>
-      <div class="row__title-wrap"><span class="row__title">${esc(s.title || '(无标题)')}</span>${lid ? '&nbsp;' + lid : ''}</div>
+      <div class="row__title-wrap">${star}<span class="row__title">${esc(s.title || '(无标题)')}</span>${lid ? '&nbsp;' + lid : ''}</div>
       <div class="row__msgs">${esc(String(s.msg_count))}</div>
       <div class="row__meta">${esc(fmtTime(s.updated_at))}<div class="src">${esc(TOOL_NAMES[s.tool] || s.tool)}</div></div>`;
     row.querySelector('input[type=checkbox]').onclick = e => {
@@ -387,6 +389,53 @@ function renderStatus() {
   }
 }
 
+/* ---------- content search (v0.3) ---------- */
+let lastSearchSid = null;
+async function runContentSearch(q) {
+  const r = await api('/api/search?q=' + encodeURIComponent(q));
+  const panel = document.getElementById('search-panel');
+  if (!r.data.ok || !(r.data.results || []).length) {
+    panel.innerHTML = '<div class="hub-empty" style="padding:var(--sp-4)">没有消息内容匹配</div>';
+    panel.style.display = '';
+    return;
+  }
+  panel.innerHTML = r.data.results.map(x => `
+    <div class="search-item" data-testid="search-item" data-sid="${esc(x.sid)}">
+      <span class="search-item__tool">${esc(TOOL_NAMES[x.tool] || x.tool)}</span>
+      <span class="search-item__title">${esc(x.title || x.sid.slice(0, 12))}</span>
+      <span class="search-item__snip">${esc(x.snippet || '')}</span>
+      <span class="search-item__hits">${x.hits}×</span>
+    </div>`).join('');
+  panel.style.display = '';
+  panel.querySelectorAll('.search-item').forEach(el => {
+    el.onclick = () => { hideSearchPanel(); openSession(el.dataset.sid); };
+  });
+}
+function hideSearchPanel() {
+  const panel = document.getElementById('search-panel');
+  if (panel) panel.style.display = 'none';
+}
+
+/* ---------- preview actions (v0.3) ---------- */
+function resumeCommand(s) {
+  if (s.tool === 'claude') return 'claude --resume ' + s.sid;
+  if (s.tool === 'codex') return 'codex resume ' + s.sid;
+  return 'cd "' + (s.cwd || '') + '" && opencode   # 在会话列表中选择 ' + s.sid.slice(0, 12);
+}
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove();
+      return true;
+    } catch (e2) { return false; }
+  }
+}
+
 /* ---------- preview ---------- */
 async function openSession(sid) {
   const r = await api('/api/session?id=' + encodeURIComponent(sid));
@@ -416,6 +465,31 @@ async function openSession(sid) {
         <div class="msg__bubble">${esc((m.content || '').slice(0, 6000))}</div></div>`;
     }).join('');
   }
+  const starBtn = document.getElementById('preview-star');
+  starBtn.textContent = s.starred ? '★ 已收藏' : '☆ 收藏';
+  starBtn.onclick = async () => {
+    const r = await post('/api/star', { sid: s.sid });
+    if (r.data.ok) {
+      s.starred = r.data.starred;
+      starBtn.textContent = r.data.starred ? '★ 已收藏' : '☆ 收藏';
+      HubUI.toast(r.data.starred ? '已收藏' : '已取消收藏', 'success');
+      await loadState();
+    } else HubUI.toast('收藏失败：' + (r.data.error || ''), 'error');
+  };
+  document.getElementById('preview-resume').onclick = async () => {
+    const cmd = resumeCommand(s);
+    const ok = await copyText(cmd);
+    HubUI.toast(ok ? '已复制：' + cmd : '复制失败，请手动复制：' + cmd, ok ? 'success' : 'warn', 5200);
+  };
+  const exportBtn = document.getElementById('preview-export');
+  exportBtn.onclick = async () => {
+    exportBtn.classList.add('is-loading');
+    const r = await api('/api/export?sid=' + encodeURIComponent(s.sid));
+    exportBtn.classList.remove('is-loading');
+    if (r.data.ok) {
+      HubUI.toast('已导出 ' + (r.data.bytes / 1024).toFixed(1) + ' KB → ' + r.data.path, 'success', 5600);
+    } else HubUI.toast('导出失败：' + (r.data.error || ''), 'error');
+  };
   document.getElementById('preview-overlay').classList.add('is-open');
 }
 function closePreview() { document.getElementById('preview-overlay').classList.remove('is-open'); }
@@ -451,7 +525,20 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('sched-overlay').addEventListener('click', e => {
     if (e.target.id === 'sched-overlay') closeSchedule();
   });
-  document.getElementById('search-input').oninput = () => renderRows();
+  let searchTimer = null;
+  document.getElementById('search-input').oninput = e => {
+    renderRows();
+    clearTimeout(searchTimer);
+    const q = e.currentTarget.value.trim();
+    if (q.length < 2) { hideSearchPanel(); return; }
+    searchTimer = setTimeout(() => runContentSearch(q), 250);
+  };
+  document.addEventListener('click', e => {
+    const panel = document.getElementById('search-panel');
+    if (panel && panel.style.display !== 'none' &&
+        !panel.contains(e.target) && e.target.id !== 'search-input') hideSearchPanel();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') hideSearchPanel(); });
   document.getElementById('sel-all').onchange = e => selectAll(e.currentTarget);
   document.getElementById('memory-add').onclick = e => addMemory(e.currentTarget);
   document.getElementById('preview-close').onclick = closePreview;

@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   started_at TEXT,
   updated_at TEXT,
   msg_count INTEGER DEFAULT 0,
-  title_source TEXT                  -- custom-title | first-user | slug | fallback
+  title_source TEXT,                 -- custom-title | first-user | slug | fallback
+  starred INTEGER DEFAULT 0          -- 收藏标记
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_tool ON sessions(tool);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
@@ -78,6 +79,10 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        # migrate older DBs: add starred column if missing
+        cols = [r[1] for r in self.db.execute("PRAGMA table_info(sessions)").fetchall()]
+        if "starred" not in cols:
+            self.db.execute("ALTER TABLE sessions ADD COLUMN starred INTEGER DEFAULT 0")
         self.db.commit()
 
     # ---------- ledger / config ----------
@@ -391,3 +396,98 @@ def delete_memory(store: Store, mid):
         cur = store.db.execute("DELETE FROM memories WHERE id=?", (mid,))
         store.db.commit()
     return cur.rowcount > 0
+
+
+# ====================================================================
+# Search / export / star (v0.3 features)
+# ====================================================================
+EXPORT_DIR = os.path.join(HUB_DIR, "exports")
+
+
+def set_star(store: Store, sid, starred=None):
+    """Toggle (starred=None) or set star state. Returns new state."""
+    with store.lock:
+        row = store.db.execute("SELECT starred FROM sessions WHERE sid=?", (sid,)).fetchone()
+        if not row:
+            return None
+        cur = row["starred"] or 0
+        new = (1 - cur) if starred is None else (1 if starred else 0)
+        store.db.execute("UPDATE sessions SET starred=? WHERE sid=?", (new, sid))
+        store.db.commit()
+    return new
+
+
+def _like_escape(q):
+    return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def search_messages(store: Store, q, limit=40):
+    """Full-text-ish search over message content (LIKE, escaped). Returns grouped hits."""
+    if not q or not q.strip():
+        return []
+    pat = "%%%s%%" % _like_escape(q.strip())
+    with store.lock:
+        rows = store.db.execute(
+            "SELECT m.sid, m.tool, m.role, m.content, m.ts, s.title, s.starred "
+            "FROM messages m LEFT JOIN sessions s ON s.sid = m.sid "
+            "WHERE m.content LIKE ? ESCAPE '\\' "
+            "ORDER BY m.id DESC LIMIT ?", (pat, limit * 5)).fetchall()
+    grouped = {}
+    low = q.strip().lower()
+    for r in rows:
+        sid = r["sid"]
+        g = grouped.setdefault(sid, {"sid": sid, "tool": r["tool"], "title": r["title"],
+                                     "starred": r["starred"] or 0, "hits": 0, "snippet": None})
+        g["hits"] += 1
+        if g["snippet"] is None:
+            c = (r["content"] or "")
+            idx = c.lower().find(low)
+            if idx < 0:
+                idx = 0
+            start = max(0, idx - 30)
+            snippet = c[start:start + 120].replace("\n", " ")
+            g["snippet"] = ("…" if start > 0 else "") + snippet + ("…" if len(c) > start + 120 else "")
+    out = list(grouped.values())
+    out.sort(key=lambda x: -x["hits"])
+    return out[:limit]
+
+
+def export_markdown(store: Store, sid):
+    """Export a session as a human-readable Markdown file. Returns (path, bytes)."""
+    sess = store.session(sid)
+    if not sess:
+        return None, 0
+    msgs = store.messages(sid)
+    toolname = {"claude": "Claude Code", "codex": "Codex CLI", "opencode": "OpenCode"}.get(sess["tool"], sess["tool"])
+    lines = ["# %s" % (sess.get("title") or "(无标题)"), "",
+             "- 工具: %s" % toolname,
+             "- 会话 ID: `%s`" % sid,
+             "- 项目: `%s`" % (sess.get("cwd") or "-"),
+             "- 消息数: %d" % (sess.get("msg_count") or len(msgs)),
+             "- 导出时间: %s" % now_iso(), "", "---", ""]
+    for m in msgs:
+        role = m.get("role") or "?"
+        ts = (m.get("ts") or "")[:16].replace("T", " ")
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        if m.get("content_type") == "tool_use":
+            lines.append("> [tool] %s" % content.replace("\n", " ")[:300])
+            lines.append("")
+            continue
+        if m.get("content_type") == "tool_result":
+            lines.append("> [result] %s" % content.replace("\n", " ")[:300])
+            lines.append("")
+            continue
+        lines.append("**%s**%s" % (role, (" · " + ts) if ts else ""))
+        lines.append("")
+        lines.append(content)
+        lines.append("")
+    body = "\n".join(lines) + "\n"
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    safe = "".join(ch for ch in sid if ch.isalnum() or ch in "-_")[:24]
+    fname = "%s-%s-%s.md" % (sess["tool"], safe, time.strftime("%Y%m%d-%H%M%S"))
+    path = os.path.join(EXPORT_DIR, fname)
+    with open(path, "w") as f:
+        f.write(body)
+    return path, len(body.encode())
