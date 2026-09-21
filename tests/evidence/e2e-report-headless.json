@@ -3,56 +3,56 @@
   "smoke": false,
   "base": "http://127.0.0.1:8317",
   "chrome": "Chrome/153.0.8010.50",
-  "startedAt": "2026-09-21T14:42:41.729Z",
+  "startedAt": "2026-09-21T15:08:07.613Z",
   "passed": 12,
   "failed": 0,
   "results": [
     {
       "name": "page-load",
       "ok": true,
-      "ms": 104,
+      "ms": 43,
       "detail": "8 行会话 · 引擎 casr · 已连接"
     },
     {
       "name": "screenshot-desktop",
       "ok": true,
-      "ms": 102,
+      "ms": 68,
       "detail": "desktop-main.png"
     },
     {
       "name": "filter-codex",
       "ok": true,
-      "ms": 510,
+      "ms": 511,
       "detail": "codex 4 行 · 恢复全部 8 行"
     },
     {
       "name": "selection",
       "ok": true,
-      "ms": 3,
+      "ms": 6,
       "detail": "选中 2 → 取消 1 → 清空 → 0"
     },
     {
       "name": "preview-modal",
       "ok": true,
-      "ms": 190,
+      "ms": 199,
       "detail": "链=OpenCode · ses_072837a66ffeS3nUuWJgzINIr9 · [hub:lx-0004] ·  · 2 条消息"
     },
     {
       "name": "refresh-one",
       "ok": true,
-      "ms": 152,
+      "ms": 154,
       "detail": "刷新成功 toast 出现"
     },
     {
       "name": "schedule-flow",
       "ok": true,
-      "ms": 421,
+      "ms": 422,
       "detail": "启用→保存→重开校验→恢复，均通过"
     },
     {
       "name": "memory-flow",
       "ok": true,
-      "ms": 526,
+      "ms": 539,
       "detail": "记忆 3 → 增 → 删 → 3"
     },
     {
@@ -64,13 +64,13 @@
     {
       "name": "duplicate-migration-guard",
       "ok": true,
-      "ms": 1293,
+      "ms": 1284,
       "detail": "重复迁移被拦截，无新会话产生（计数 3,4,1）"
     },
     {
       "name": "screenshot-mobile",
       "ok": true,
-      "ms": 531,
+      "ms": 500,
       "detail": "390px 视口无横向溢出（scrollWidth=390）"
     },
     {

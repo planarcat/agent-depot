@@ -23,7 +23,8 @@ import unittest
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PORT = 8399
+import socket
+_s = socket.socket(); _s.bind(("127.0.0.1", 0)); PORT = _s.getsockname()[1]; _s.close()
 BASE = "http://127.0.0.1:%d" % PORT
 
 
@@ -52,7 +53,7 @@ def claude_line(typ, role=None, text=None, ts=None):
     return json.dumps(o, ensure_ascii=False)
 
 
-class HubTest(unittest.TestCase):
+class HubSandbox:
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp(prefix="hub-test-")
@@ -113,8 +114,9 @@ class HubTest(unittest.TestCase):
             "HUB_PORT": str(PORT),
             "PATH": env.get("PATH", "") + os.pathsep + os.path.expanduser("~/.local/bin"),
         })
+        cls.server_log = open(os.path.join(cls.tmp, "server.err"), "w")
         cls.proc = subprocess.Popen([sys.executable, os.path.join(ROOT, "server.py")],
-                                    env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                                    env=env, stdout=subprocess.DEVNULL, stderr=cls.server_log)
         # wait for server
         for _ in range(50):
             try:
@@ -136,6 +138,8 @@ class HubTest(unittest.TestCase):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     # ---------- scans ----------
+
+class HubTest(HubSandbox, unittest.TestCase):
     def test_01_scan_all(self):
         s, d = req("POST", "/api/refresh", {})
         self.assertEqual(s, 200)
@@ -222,6 +226,260 @@ class HubTest(unittest.TestCase):
         s, d = req("POST", "/api/migrate", {"sid": "does-not-exist", "target": "codex"})
         self.assertEqual(s, 404)
 
+
+
+
+# ====================================================================
+# Edge & failure cases (boundary hardening round)
+# ====================================================================
+import threading
+
+class EdgeTest(HubSandbox, unittest.TestCase):
+    """Boundary, failure and abuse cases on the same sandbox server."""
+
+    def edge_file(self, sid):
+        return os.path.join(self.claude_dir, sid + ".jsonl")
+
+
+    def refresh(self, tool=None):
+        return req("POST", "/api/refresh", {"tool": tool} if tool else {})
+
+    def test_e01_corrupt_json_lines_skipped(self):
+        """Malformed JSON lines must be skipped without crashing."""
+        sid = "e01aaaaa-1111-4111-8111-111111111111"
+        with open(self.edge_file(sid), "w") as f:
+            f.write(claude_line("user", "user", "正常消息") + "\n")
+            f.write("{corrupt json!!!\n")
+            f.write("\n")  # blank
+            f.write('{"type": "user", "message": ' + '{"x":' * 1)  # truncated
+            f.write("\n")
+            f.write(claude_line("assistant", "assistant", "仍然正常") + "\n")
+        s, d = self.refresh("claude")
+        self.assertEqual(s, 200)
+        s, d = req("GET", "/api/session?id=" + sid)
+        self.assertEqual(s, 200)
+        roles = [m["role"] for m in d["messages"]]
+        self.assertEqual(roles, ["user", "assistant"])  # corrupt lines skipped
+
+    def test_e02_empty_and_whitespace_file(self):
+        sid = "e02aaaaa-1111-4111-8111-111111111111"
+        for content in ("", "\n\n\n", "   \n   "):
+            with open(self.edge_file(sid), "w") as f:
+                f.write(content)
+            s, d = self.refresh("claude")
+            self.assertEqual(s, 200)
+        s, d = req("GET", "/api/session?id=" + sid)
+        self.assertEqual(s, 200)
+        self.assertEqual(len(d["messages"]), 0)
+
+    def test_e03_file_shrink_resync(self):
+        """File truncation/shrink must reset cursor and dedupe cleanly."""
+        sid = "e03aaaaa-1111-4111-8111-111111111111"
+        with open(self.edge_file(sid), "w") as f:
+            f.write(claude_line("user", "user", "第一版内容") + "\n")
+            f.write(claude_line("assistant", "assistant", "回复一") + "\n")
+        self.refresh("claude")
+        # rewrite with FEWER, different lines (shrink + rewrite)
+        with open(self.edge_file(sid), "w") as f:
+            f.write(claude_line("user", "user", "第二版重写内容") + "\n")
+        self.refresh("claude")
+        s, d = req("GET", "/api/session?id=" + sid)
+        # dedupe keeps old rows; new content must appear; no crash
+        texts = [m["content"] for m in d["messages"]]
+        self.assertTrue(any("第二版重写内容" in t for t in texts))
+
+    def test_e04_huge_message_roundtrip(self):
+        """A ~200KB message must round-trip without truncation or crash."""
+        sid = "e04aaaaa-1111-4111-8111-111111111111"
+        big = "边界测试" + "x" * 200000
+        with open(self.edge_file(sid), "w") as f:
+            f.write(claude_line("user", "user", big) + "\n")
+        self.refresh("claude")
+        s, d = req("GET", "/api/session?id=" + sid)
+        self.assertGreaterEqual(len(d["messages"][0]["content"]), 200000)
+
+    def test_e05_unicode_and_emoji(self):
+        sid = "e05aaaaa-1111-4111-8111-111111111111"
+        txt = "中文🎉 emoji <script>alert(1)</script> \\backslash \t tab"
+        with open(self.edge_file(sid), "w") as f:
+            f.write(claude_line("user", "user", txt) + "\n")
+        self.refresh("claude")
+        s, d = req("GET", "/api/session?id=" + sid)
+        self.assertIn("中文🎉", d["messages"][0]["content"])
+        self.assertIn("<script>", d["messages"][0]["content"])  # stored raw; UI escapes
+
+    def test_e06_codex_function_calls(self):
+        """Codex tool events map to tool roles."""
+        sid = "e06bbbb-2222-4111-8111-111111111111"
+        path = os.path.join(self.codex_dir, "rollout-2026-09-21T11-00-00-" + sid + ".jsonl")
+        with open(path, "w") as f:
+            f.write(json.dumps({"timestamp": "2026-09-21T11:00:00.000Z", "type": "session_meta",
+                                "payload": {"session_id": sid, "cwd": "/tmp/e06"}}) + "\n")
+            f.write(json.dumps({"timestamp": "2026-09-21T11:00:01.000Z", "type": "response_item",
+                                "payload": {"type": "function_call", "name": "shell",
+                                            "arguments": json.dumps({"cmd": "ls"})}}) + "\n")
+            f.write(json.dumps({"timestamp": "2026-09-21T11:00:02.000Z", "type": "response_item",
+                                "payload": {"type": "function_call_output", "output": "file1\nfile2"}}) + "\n")
+        self.refresh("codex")
+        s, d = req("GET", "/api/session?id=" + sid)
+        ctypes = [m["content_type"] for m in d["messages"]]
+        self.assertIn("tool_use", ctypes)
+        self.assertIn("tool_result", ctypes)
+
+    def test_e07_codex_no_session_meta(self):
+        """A rollout without session_meta must not crash or create a session."""
+        sid = "e07cccc-3333-4111-8111-111111111111"
+        path = os.path.join(self.codex_dir, "rollout-2026-09-21T12-00-00-" + sid + ".jsonl")
+        with open(path, "w") as f:
+            f.write(json.dumps({"timestamp": "2026-09-21T12:00:00.000Z", "type": "response_item",
+                                "payload": {"type": "message", "role": "user",
+                                            "content": [{"type": "input_text", "text": "孤儿消息"}]}}) + "\n")
+        s, d = self.refresh("codex")
+        self.assertEqual(s, 200)
+        s, d = req("GET", "/api/session?id=" + sid)
+        self.assertEqual(s, 404)  # no meta -> no session
+
+    def test_e08_partial_line_withheld(self):
+        """A trailing line without newline must be withheld until completed."""
+        sid = "e08dddd-4444-4111-8111-111111111111"
+        path = self.edge_file(sid)
+        with open(path, "w") as f:
+            f.write(claude_line("user", "user", "完整行") + "\n")
+        self.refresh("claude")
+        s, d = req("GET", "/api/session?id=" + sid)
+        self.assertEqual(len(d["messages"]), 1)
+        # append a partial line (no trailing newline)
+        partial = claude_line("assistant", "assistant", "未完成的半行")
+        with open(path, "a") as f:
+            f.write(partial)  # no \n
+        self.refresh("claude")
+        s, d = req("GET", "/api/session?id=" + sid)
+        self.assertEqual(len(d["messages"]), 1)  # withheld
+        # complete it
+        with open(path, "a") as f:
+            f.write("\n")
+        self.refresh("claude")
+        s, d = req("GET", "/api/session?id=" + sid)
+        self.assertEqual(len(d["messages"]), 2)  # now consumed
+
+    def test_e09_opencode_zero_message_session(self):
+        sid = "ses_e09_zero"
+        conn = sqlite3.connect(self.opencode_db)
+        conn.execute("INSERT INTO session VALUES(?,?,?,?,?,?,?,?)",
+                     (sid, 'p', 's9', '/tmp/proj-z', '空会话', '1', 1758500000000, 1758500000000))
+        conn.commit(); conn.close()
+        self.refresh("opencode")
+        s, d = req("GET", "/api/state")
+        sess = [x for x in d["sessions"] if x["sid"] == sid]
+        self.assertEqual(len(sess), 1)
+        self.assertEqual(sess[0]["msg_count"], 0)
+
+    def test_e10_failed_migration_not_a_duplicate(self):
+        """A FAILED migration must not block re-migration."""
+        # session exists (claude fixture) but no file on disk for casr? We simulate:
+        # insert a failed migration record, then expect migrate NOT to be blocked.
+        db = os.path.join(self.tmp, "hub", "hub.db")
+        conn = sqlite3.connect(db)
+        conn.execute("INSERT OR IGNORE INTO lineages(lid, created_at, origin_tool, origin_sid) "
+                     "VALUES('lx-e10','2026-09-21T00:00:00','claude',?)", (CLAUDE_SID,))
+        conn.execute("INSERT INTO migrations(lid, ts, src_tool, src_sid, dst_tool, dst_sid, status) "
+                     "VALUES('lx-e10','2026-09-21T00:00:00','claude',?,'codex',NULL,'error')", (CLAUDE_SID,))
+        conn.commit(); conn.close()
+        # duplicate check uses status='ok' only -> must NOT report duplicate.
+        # (the migrate call itself would hit real casr with a synthetic sid and fail;
+        #  we only assert the guard logic via sync/duplicate response absence.)
+        s, d = req("POST", "/api/migrate", {"sid": CLAUDE_SID, "target": "codex"})
+        self.assertFalse(d.get("duplicate"), "failed migration must not block")
+
+    def test_e11_concurrent_refresh_409(self):
+        """Two simultaneous refreshes: exactly one succeeds, the other gets 409."""
+        results = []
+        def hit():
+            s, d = req("POST", "/api/refresh", {"tool": "claude"})
+            results.append(s)
+        t1 = threading.Thread(target=hit); t2 = threading.Thread(target=hit)
+        t1.start(); t2.start(); t1.join(); t2.join()
+        self.assertIn(200, results)
+        self.assertIn(409, results)
+
+    def test_e12_schedule_invalid_interval(self):
+        """Numeric junk is clamped to >=1; non-numeric junk gets a clean 400."""
+        for bad in (0, -5):
+            s, d = req("POST", "/api/schedule", {"tool": "claude", "enabled": False, "interval_min": bad})
+            self.assertEqual(s, 200, "数值型应被钳制: %r" % bad)
+        for bad in ("abc", None):
+            s, d = req("POST", "/api/schedule", {"tool": "claude", "enabled": False, "interval_min": bad})
+            self.assertEqual(s, 400, "非数值应返回 400: %r" % bad)
+            self.assertFalse(d["ok"])
+        s, d = req("GET", "/api/schedule")
+        self.assertGreaterEqual(int(d["claude"]["interval_min"]), 1)
+
+    def test_e13_schedule_unknown_tool_ignored(self):
+        s, before = req("GET", "/api/schedule")
+        s, d = req("POST", "/api/schedule", {"tool": "nonexistent", "enabled": True})
+        self.assertEqual(s, 200)
+        s, after = req("GET", "/api/schedule")
+        self.assertNotIn("nonexistent", after)
+
+    def test_e14_sql_injection_safe(self):
+        """q parameter with SQL meta-characters must be inert (URL-encoded)."""
+        import urllib.parse
+        for payload in ("' OR 1=1 --", "%'; DROP TABLE sessions; --"):
+            qs = urllib.parse.urlencode({"q": payload})
+            s, d = req("GET", "/api/sessions?" + qs)
+            self.assertEqual(s, 200, payload)
+        s, d = req("GET", "/api/state")   # table still intact
+        self.assertGreater(len(d["sessions"]), 0)
+
+    def test_e15_scheduler_tick_direct(self):
+        """Direct scheduler tick: due tool runs and is logged; second tick skips."""
+        sys.path.insert(0, ROOT)
+        import server as hub_server
+        store = self  # not used; use sandbox store via a fresh Store on sandbox dir
+        from hub.store import Store
+        sandbox_store = Store(os.path.join(self.tmp, "hub", "hub.db"))
+        sandbox_store.set_config("schedule", json.dumps(
+            {"claude": {"enabled": True, "interval_min": 30}}))
+        last_run = {}
+        ran1 = hub_server.scheduler_tick(sandbox_store, last_run)
+        self.assertIn("claude", ran1)
+        ran2 = hub_server.scheduler_tick(sandbox_store, last_run)
+        self.assertEqual(ran2, [])  # within interval
+        # invalid interval must not crash
+        sandbox_store.set_config("schedule", json.dumps(
+            {"claude": {"enabled": True, "interval_min": "abc"}}))
+        ran3 = hub_server.scheduler_tick(sandbox_store, {})
+        self.assertIn("claude", ran3)
+
+    def test_e16_restart_persistence(self):
+        """Config + sessions must survive a server restart."""
+        s, before = req("GET", "/api/state")
+        n_sessions = len(before["sessions"])
+        # restart the server subprocess with same env
+        self.__class__.proc.terminate()
+        self.__class__.proc.wait(timeout=5)
+        env = dict(os.environ)
+        env.update({
+            "AGENT_HUB_DIR": os.path.join(self.tmp, "hub"),
+            "HUB_CLAUDE_PROJECTS": os.path.join(self.tmp, "claude"),
+            "CODEX_HOME": self.codex_home,
+            "HUB_OPENCODE_DB": self.opencode_db,
+            "HUB_PORT": str(PORT),
+            "PATH": env.get("PATH", "") + os.pathsep + os.path.expanduser("~/.local/bin"),
+        })
+        self.__class__.proc = subprocess.Popen(
+            [sys.executable, os.path.join(ROOT, "server.py")],
+            env=env, stdout=subprocess.DEVNULL, stderr=self.__class__.server_log)
+        for _ in range(50):
+            try:
+                s, d = req("GET", "/api/state")
+                if s == 200:
+                    break
+            except Exception:
+                time.sleep(0.2)
+        s, after = req("GET", "/api/state")
+        self.assertEqual(len(after["sessions"]), n_sessions)
+        self.assertIsNotNone(after["schedule"])
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

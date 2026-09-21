@@ -59,29 +59,48 @@ class Scheduler(threading.Thread):
             self.stop_event.wait(20)
 
     def tick(self):
-        raw = self.store.get_config("schedule")
-        sched = json.loads(raw) if raw else dict(DEFAULT_SCHEDULE)
-        now = time.time()
-        for tool, cfg in sched.items():
-            if not cfg.get("enabled"):
-                continue
-            iv = max(1, int(cfg.get("interval_min", 30))) * 60
-            if now - self._last_run.get(tool, 0) >= iv:
-                self._last_run[tool] = now
-                if tool == "all":
-                    results = scan_all(self.store)
-                else:
-                    results = scan_all(self.store, tools=[tool])
-                self.store.log("refresh:scheduled", {"tool": tool, "results": results})
-                # per-tool schedule also updates session-level last_seen
+        scheduler_tick(self.store, self._last_run)
 
 
-STORE = Store()
-ensure_lineage_schema(STORE)
-ensure_memory_schema(STORE)
-SCHED = Scheduler(STORE)
-SCHED.start()
+STORE = None       # initialized in main()
+SCHED = None
 REFRESH_LOCK = threading.Lock()
+
+
+def ensure_store():
+    """Initialize global store + schema (idempotent)."""
+    global STORE, SCHED
+    if STORE is None:
+        STORE = Store()
+        ensure_lineage_schema(STORE)
+        ensure_memory_schema(STORE)
+        SCHED = Scheduler(STORE)
+        SCHED.start()
+    return STORE
+
+
+def scheduler_tick(store, last_run):
+    """One scheduler pass. Returns list of tools that ran. Testable directly."""
+    raw = store.get_config("schedule")
+    sched = json.loads(raw) if raw else dict(DEFAULT_SCHEDULE)
+    now = time.time()
+    ran = []
+    for tool, cfg in sched.items():
+        if not cfg.get("enabled"):
+            continue
+        try:
+            iv = max(1, int(cfg.get("interval_min", 30))) * 60
+        except (TypeError, ValueError):
+            iv = 30 * 60
+        if now - last_run.get(tool, 0) >= iv:
+            last_run[tool] = now
+            if tool == "all":
+                results = scan_all(store)
+            else:
+                results = scan_all(store, tools=[tool])
+            store.log("refresh:scheduled", {"tool": tool, "results": results})
+            ran.append(tool)
+    return ran
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -109,8 +128,21 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
+    def _serve_subtree(self, subdir, rel):
+        """Serve a file strictly from ROOT/<subdir>/ — traversal-proof."""
+        base = os.path.realpath(os.path.join(ROOT, subdir))
+        path = os.path.realpath(os.path.join(base, rel))
+        if not (path == base or path.startswith(base + os.sep)):
+            self._json({"error": "forbidden"}, 403)
+            return
+        return self._file(os.path.relpath(path, ROOT))
+
     def _file(self, rel, ctype=None):
-        path = os.path.join(ROOT, rel)
+        base = os.path.realpath(ROOT)
+        path = os.path.realpath(os.path.join(ROOT, rel))
+        if not (path == base or path.startswith(base + os.sep)):
+            self._json({"error": "forbidden"}, 403)
+            return
         if not os.path.exists(path) or not os.path.isfile(path):
             self._json({"error": "not found"}, 404)
             return
@@ -130,14 +162,20 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- GET ----------
     def do_GET(self):
+        try:
+            return self._do_get_inner()
+        except Exception as e:
+            self._json({"error": "服务器内部错误: %s" % e}, 500)
+
+    def _do_get_inner(self):
         u = urlparse(self.path)
         if u.path == "/" or u.path == "/index.html":
             return self._file("web/index.html", "text/html; charset=utf-8")
-        # static assets: web/<name> and tests/<name> are servable (read-only)
+        # static assets: /assets/* -> web/ subtree only; /tests/* -> tests/ subtree only
         if u.path.startswith("/assets/"):
-            return self._file(os.path.join("web", u.path[len("/assets/"):]))
+            return self._serve_subtree("web", u.path[len("/assets/"):])
         if u.path.startswith("/tests/"):
-            return self._file(u.path.lstrip("/"))
+            return self._serve_subtree("tests", u.path[len("/tests/"):])
         if u.path == "/api/state":
             raw = STORE.get_config("schedule")
             sessions = STORE.list_sessions()
@@ -157,6 +195,11 @@ class Handler(BaseHTTPRequestHandler):
                 "memories": list_memories(STORE, limit=50),
                 "now": now_iso(),
             })
+        if u.path == "/api/sessions":
+            q = parse_qs(u.query)
+            tool = q.get("tool", ["all"])[0]
+            query = q.get("q", [""])[0]
+            return self._json({"sessions": STORE.list_sessions(tool=tool, q=query)})
         if u.path == "/api/session":
             sid = parse_qs(u.query).get("id", [""])[0]
             sess = STORE.session(sid)
@@ -188,8 +231,23 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(lineage_info(STORE, tool, sid) or {})
         return self._json({"error": "not found"}, 404)
 
+    def do_HEAD(self):
+        u = urlparse(self.path)
+        status = 200 if (u.path == "/" or u.path.startswith("/api/")) else 404
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     # ---------- POST ----------
     def do_POST(self):
+        try:
+            return self._do_post_inner()
+        except (ValueError, TypeError, KeyError) as e:
+            self._json({"ok": False, "error": "无效输入: %s" % e}, 400)
+        except Exception as e:
+            self._json({"ok": False, "error": "服务器内部错误: %s" % e}, 500)
+
+    def _do_post_inner(self):
         u = urlparse(self.path)
         data = self._body()
         if u.path == "/api/refresh":
@@ -246,7 +304,11 @@ class Handler(BaseHTTPRequestHandler):
                 if "enabled" in data:
                     sched[tool]["enabled"] = bool(data["enabled"])
                 if "interval_min" in data:
-                    sched[tool]["interval_min"] = max(1, int(data["interval_min"]))
+                    try:
+                        sched[tool]["interval_min"] = max(1, int(data["interval_min"]))
+                    except (TypeError, ValueError):
+                        return self._json({"ok": False,
+                                           "error": "interval_min 必须是正整数"}, 400)
                 sched[tool]["interval_min"] = max(1, int(sched[tool].get("interval_min", 30)))
             STORE.set_config("schedule", json.dumps(sched))
             STORE.log("config", {"schedule": tool, "value": data})
@@ -265,6 +327,8 @@ def _agentmemory_health():
 
 
 def main():
+    global STORE
+    ensure_store()
     addr = ("127.0.0.1", PORT)
     httpd = ThreadingHTTPServer(addr, Handler)
     print("Agent Session Hub -> http://127.0.0.1:%d  (Ctrl-C to stop)" % PORT)

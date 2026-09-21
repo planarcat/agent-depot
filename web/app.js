@@ -64,7 +64,7 @@ function renderToolCards() {
         <span class="tool-card__name">${TOOL_NAMES[tool]}</span>
         <span class="tool-card__count" data-testid="count-${tool}">${info.count}</span>
       </div>
-      <div class="tool-card__meta">最近活动 <b>${fmtTime(info.latest)}</b></div>
+      <div class="tool-card__meta">最近活动 <b>${esc(fmtTime(info.latest))}</b></div>
       <div class="tool-card__acts">
         <button class="hub-btn btn-sm" data-testid="refresh-${tool}">⟳ 刷新</button>
         <span class="tool-card__sched">${sched.enabled ? '定时 ' + sched.interval_min + 'm' : ''}</span>
@@ -117,8 +117,8 @@ function renderRows() {
     row.innerHTML = `
       <div><input type="checkbox" data-testid="row-check" ${state.selected.has(s.sid) ? 'checked' : ''}></div>
       <div class="row__title-wrap"><span class="row__title">${esc(s.title || '(无标题)')}</span>${lid ? '&nbsp;' + lid : ''}</div>
-      <div class="row__msgs">${s.msg_count} msgs</div>
-      <div class="row__meta">${fmtTime(s.updated_at)}<div class="src">${TOOL_NAMES[s.tool] || s.tool}</div></div>`;
+      <div class="row__msgs">${esc(String(s.msg_count))}</div>
+      <div class="row__meta">${esc(fmtTime(s.updated_at))}<div class="src">${esc(TOOL_NAMES[s.tool] || s.tool)}</div></div>`;
     row.querySelector('input[type=checkbox]').onclick = e => {
       e.stopPropagation(); toggleSel(s.sid, e.currentTarget);
     };
@@ -353,7 +353,7 @@ function renderLedger() {
     } catch { detail = (l.detail || '').slice(0, 80); }
     const el = document.createElement('div');
     el.className = 'led-item';
-    el.innerHTML = `<div class="led-item__time">${(l.ts || '').slice(11, 16)} · ${l.action}</div>
+    el.innerHTML = `<div class="led-item__time">${esc((l.ts || '').slice(11, 16))} · ${esc(l.action)}</div>
       <div class="led-item__act">${esc(detail)}</div>`;
     box.appendChild(el);
   }
@@ -366,8 +366,8 @@ function renderMigrations() {
   for (const m of list) {
     const el = document.createElement('div');
     el.className = 'led-item';
-    el.innerHTML = `<div class="led-item__time">${(m.ts || '').slice(5, 16)} · <span style="color:var(--c-accent)">${m.lid}</span></div>
-      <div class="led-item__act">${TOOL_NAMES[m.src_tool] || m.src_tool} → ${TOOL_NAMES[m.dst_tool] || m.dst_tool} · ${m.status === 'ok' ? '成功' : '失败'}</div>`;
+    el.innerHTML = `<div class="led-item__time">${esc((m.ts || '').slice(5, 16))} · <span style="color:var(--c-accent)">${esc(m.lid)}</span></div>
+      <div class="led-item__act">${esc(TOOL_NAMES[m.src_tool] || m.src_tool)} → ${esc(TOOL_NAMES[m.dst_tool] || m.dst_tool)} · ${m.status === 'ok' ? '成功' : '失败'}</div>`;
     box.appendChild(el);
   }
 }
