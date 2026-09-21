@@ -1,0 +1,106 @@
+/* ====================================================================
+   Hub UI 组件样式（配合 tokens.css 使用）
+   交互状态规范：hover 边框变 accent；active 按下沉 1px；
+   loading 转 spinner + 禁点击；disabled 半透明。
+   ==================================================================== */
+/* ---- Buttons ---- */
+.hub-btn {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  font-family: var(--font-sans); font-size: var(--fs-body);
+  padding: var(--sp-2) var(--sp-4); border: 1px solid var(--c-line);
+  border-radius: var(--r-s); background: var(--c-surface-2); color: var(--c-ink-2);
+  cursor: pointer; transition: border-color var(--t-fast), color var(--t-fast), background var(--t-fast), transform var(--t-fast);
+  position: relative;
+}
+.hub-btn:hover:not(:disabled) { border-color: var(--c-accent); color: var(--c-accent); }
+.hub-btn:active:not(:disabled) { transform: translateY(1px); }
+.hub-btn:disabled { opacity: .45; cursor: not-allowed; }
+.hub-btn--primary { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+.hub-btn--primary:hover:not(:disabled) { background: var(--c-accent-strong); color: var(--c-on-accent); }
+.hub-btn--danger { background: var(--c-err); border-color: var(--c-err); color: var(--c-on-accent); }
+.hub-btn--danger:hover:not(:disabled) { background: var(--c-err-strong); color: var(--c-on-accent); }
+.hub-btn--ghost { background: transparent; }
+.hub-btn.is-loading { color: transparent !important; pointer-events: none; }
+.hub-btn.is-loading::after {
+  content: ""; position: absolute; inset: 0; margin: auto;
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--c-line); border-top-color: var(--c-accent);
+  animation: hub-spin .7s linear infinite;
+}
+@keyframes hub-spin { to { transform: rotate(360deg); } }
+
+/* ---- Input ---- */
+.hub-input {
+  font-family: var(--font-sans); font-size: var(--fs-body); color: var(--c-ink);
+  padding: var(--sp-2) var(--sp-3); border: 1px solid var(--c-line);
+  border-radius: var(--r-s); background: var(--c-surface-2); outline: none;
+  transition: border-color var(--t-fast);
+  width: 100%;
+}
+.hub-input:focus { border-color: var(--c-accent); }
+.hub-input::placeholder { color: var(--c-ink-4); }
+
+/* ---- Toast（全局唯一反馈样式） ---- */
+.hub-toasts { position: fixed; right: var(--sp-4); bottom: var(--sp-6); z-index: var(--z-toast);
+  display: flex; flex-direction: column; gap: var(--sp-2); pointer-events: none; }
+.hub-toast {
+  display: flex; align-items: flex-start; gap: var(--sp-2);
+  min-width: 280px; max-width: 420px;
+  font-size: var(--fs-body); line-height: 1.5;
+  padding: var(--sp-3) var(--sp-4); border-radius: var(--r-m);
+  background: var(--c-ink); color: var(--c-on-dark);
+  opacity: 0; transform: translateY(8px);
+  transition: opacity var(--t-med), transform var(--t-med);
+  pointer-events: auto;
+}
+.hub-toast.is-in { opacity: 1; transform: translateY(0); }
+.hub-toast__ic { font-size: var(--fs-m); line-height: 1.4; flex: none; }
+.hub-toast--success { background: var(--c-ok); }
+.hub-toast--error   { background: var(--c-err); }
+.hub-toast--warn    { background: var(--c-warn); }
+.hub-toast--info    { background: var(--c-ink); }
+.hub-toast__msg { word-break: break-word; }
+
+/* ---- Modal ---- */
+.hub-overlay {
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  background: rgba(23,29,31,.36);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity var(--t-med);
+}
+.hub-overlay.is-in { opacity: 1; }
+.hub-modal {
+  width: 560px; max-width: calc(100vw - 48px); max-height: 82vh;
+  background: var(--c-surface); border: 1px solid var(--c-line); border-radius: var(--r-m);
+  display: flex; flex-direction: column; overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(23,29,31,.04);
+  transform: translateY(6px); transition: transform var(--t-med);
+}
+.hub-overlay.is-in .hub-modal { transform: translateY(0); }
+.hub-modal__head { display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--c-line); }
+.hub-modal__title { font-size: var(--fs-l); font-weight: 600; color: var(--c-ink); flex: 1; }
+.hub-modal__x { border: none; background: none; color: var(--c-ink-4); font-size: var(--fs-m); cursor: pointer; padding: var(--sp-1); }
+.hub-modal__x:hover { color: var(--c-ink); }
+.hub-modal__body { padding: var(--sp-4) var(--sp-5); overflow-y: auto;
+  font-size: var(--fs-body); color: var(--c-ink-2); line-height: 1.6; }
+.hub-modal__input { padding: 0 var(--sp-5) var(--sp-4); }
+.hub-modal__foot { display: flex; justify-content: flex-end; gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--c-line); }
+
+/* ---- Badge / Tag ---- */
+.hub-badge {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  font-family: var(--font-mono); font-size: var(--fs-s); letter-spacing: .04em;
+  color: var(--c-accent); background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-line); border-radius: 999px;
+  padding: 1px var(--sp-2);
+}
+.hub-badge--neutral { color: var(--c-ink-3); background: var(--c-surface); border-color: var(--c-line); }
+
+/* ---- Empty state（全局空态样式） ---- */
+.hub-empty {
+  padding: var(--sp-7) var(--sp-5); text-align: center;
+  color: var(--c-ink-4); font-size: var(--fs-m);
+}
+.hub-empty .hub-empty__hint { font-size: var(--fs-body); margin-top: var(--sp-2); color: var(--c-ink-4); }

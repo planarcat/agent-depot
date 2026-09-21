@@ -1,0 +1,76 @@
+/* ====================================================================
+   Agent Session Hub · Design Tokens
+   规范：Müller-Brockmann 网格功能主义（preset 10）
+   原则：8pt 基线网格 · 双色方案（墨 + 单强调）· 全部样式走变量，
+        界面不允许出现游离的硬编码颜色/字号/间距。
+   详见 docs/STYLE_GUIDE.md
+   ==================================================================== */
+:root {
+  /* ---- 色彩：中性阶梯（墨系，非纯黑） ---- */
+  --c-ink:        #171d1f;   /* 主文本 */
+  --c-ink-2:      #3c4447;   /* 次文本 */
+  --c-ink-3:      #5b6669;   /* 辅助文本 */
+  --c-ink-4:      #8a9497;   /* 弱化文本 / 时间戳 */
+  /* ---- 色彩：表面 ---- */
+  --c-bg:         #f2f4f4;   /* 应用底 */
+  --c-surface:    #f9fafa;   /* 面板 */
+  --c-surface-2:  #ffffff;   /* 卡片 */
+  --c-line:       #d9dedf;   /* 分隔线 hairline */
+  --c-line-soft:  #e6eaeb;   /* 更弱的分隔 */
+  /* ---- 色彩：强调（唯一 accent，双色方案的第二色） ---- */
+  --c-accent:       #0d6a63;  /* 深青绿：主操作/激活/链接 */
+  --c-accent-strong:#0a544e;  /* 强调按下态 */
+  --c-accent-soft:  #eaf2f1;  /* 强调底色（选中行、标签底） */
+  --c-accent-line:  #bfd6d2;  /* 强调边框 */
+  --c-on-accent:    #ffffff;  /* 强调底色上的文字 */
+  --c-on-dark:      #f4f6f6;  /* 深色反馈底上的文字 */
+  --c-err-strong:   #8a3325;  /* 危险按下态 */
+  --c-switch-off:   #cfd6d7;  /* 开关关闭态 */
+  /* ---- 色彩：语义状态（成功/警告/失败，全局唯一出处） ---- */
+  --c-ok:         #1a7f4b;   /* 成功 */
+  --c-ok-soft:    #e9f4ee;
+  --c-warn:       #8a6d1f;   /* 警告/降级 */
+  --c-warn-soft:  #f6f1e2;
+  --c-err:        #a03d2e;   /* 失败/错误 */
+  --c-err-soft:   #f8ece9;
+  /* 工具识别色（仅用于来源标识点/徽章，不参与交互色） */
+  --c-tool-claude:  #d97757;
+  --c-tool-codex:   #171d1f;
+  --c-tool-opencode:#7c5cff;
+
+  /* ---- 字号阶梯（1.25 模数，px，仅此 7 档） ---- */
+  --fs-xs:   10px;   /* 微标注：状态栏、时间戳 */
+  --fs-s:    11px;   /* 标签、徽章、次要元数据 */
+  --fs-body: 13px;   /* 正文基准 */
+  --fs-m:    14px;   /* 强调正文、列表主字 */
+  --fs-l:    16px;   /* 卡片标题、区块题 */
+  --fs-xl:   20px;   /* 视图标题 */
+  --fs-2xl:  26px;   /* 应用标题（本工具内仅头部用） */
+
+  /* ---- 字体 ---- */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* ---- 间距（8pt 网格 + 4pt 半格） ---- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+
+  /* ---- 圆角（功能主义：克制，仅 3 档） ---- */
+  --r-s: 4px;
+  --r-m: 8px;
+  --r-l: 12px;
+
+  /* ---- 层级 ---- */
+  --z-dropdown: 40;
+  --z-modal:    50;
+  --z-toast:    60;
+
+  /* ---- 动效（唯一时长曲线） ---- */
+  --t-fast: 120ms cubic-bezier(.2,.6,.3,1);
+  --t-med:  200ms cubic-bezier(.2,.6,.3,1);
+}

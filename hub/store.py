@@ -190,3 +190,204 @@ class Store:
         with self.lock:
           rows = self.db.execute("SELECT * FROM ledger ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
           return [dict(r) for r in rows]
+
+
+# ====================================================================
+# Lineage / migration ledger (增量勾连底座)
+# ====================================================================
+LINEAGE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS lineages (
+  lid TEXT PRIMARY KEY,              -- lx-0001 style hub tag
+  created_at TEXT NOT NULL,
+  origin_tool TEXT,
+  origin_sid TEXT,
+  note TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lineages_origin ON lineages(origin_tool, origin_sid);
+CREATE TABLE IF NOT EXISTS migrations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lid TEXT NOT NULL,                 -- lineage id
+  ts TEXT NOT NULL,
+  src_tool TEXT NOT NULL,
+  src_sid TEXT NOT NULL,
+  dst_tool TEXT NOT NULL,
+  dst_sid TEXT,                      -- new native session id (may be NULL on failure)
+  status TEXT NOT NULL,              -- ok | error
+  src_msg_count INTEGER,             -- messages at migration time (增量基线)
+  detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_migrations_src ON migrations(src_tool, src_sid);
+CREATE INDEX IF NOT EXISTS idx_migrations_dst ON migrations(dst_tool, dst_sid);
+CREATE INDEX IF NOT EXISTS idx_migrations_lid ON migrations(lid);
+"""
+
+
+def ensure_lineage_schema(store: Store):
+    with store.lock:
+        store.db.executescript(LINEAGE_SCHEMA)
+        store.db.commit()
+
+
+def _next_lid(store: Store) -> str:
+    """Generate next lineage id lx-NNNN (monotonic per db)."""
+    with store.lock:
+        row = store.db.execute("SELECT COUNT(*) c FROM lineages").fetchone()
+        n = (row["c"] if row else 0) + 1
+        return "lx-%04d" % n
+
+
+def find_or_create_lineage(store: Store, src_tool, src_sid, note=None) -> str:
+    """A source session maps to exactly one lineage (its identity across tools)."""
+    with store.lock:
+        # 1) origin mapping in lineages table
+        row = store.db.execute(
+            "SELECT lid FROM lineages WHERE origin_tool=? AND origin_sid=?",
+            (src_tool, src_sid)).fetchone()
+        if row:
+            return row["lid"]
+        # 2) appeared as migration source
+        row = store.db.execute(
+            "SELECT lid FROM migrations WHERE src_tool=? AND src_sid=? LIMIT 1",
+            (src_tool, src_sid)).fetchone()
+        if row:
+            return row["lid"]
+        # 3) appeared as migration destination (session born from a migration)
+        row = store.db.execute(
+            "SELECT lid FROM migrations WHERE dst_tool=? AND dst_sid=? LIMIT 1",
+            (src_tool, src_sid)).fetchone()
+        if row:
+            return row["lid"]
+        lid = _next_lid(store)
+        store.db.execute(
+            "INSERT INTO lineages(lid, created_at, origin_tool, origin_sid, note) VALUES(?,?,?,?,?) "
+            "ON CONFLICT(lid) DO NOTHING",
+            (lid, now_iso(), src_tool, src_sid, note))
+        store.db.commit()
+        return lid
+
+
+def record_migration(store: Store, lid, src_tool, src_sid, dst_tool, dst_sid, status, detail=None):
+    with store.lock:
+        row = store.db.execute("SELECT COUNT(*) c FROM messages WHERE sid=?", (src_sid,)).fetchone()
+        src_count = row["c"] if row else 0
+        store.db.execute(
+            "INSERT INTO migrations(lid, ts, src_tool, src_sid, dst_tool, dst_sid, status, src_msg_count, detail) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (lid, now_iso(), src_tool, src_sid, dst_tool, dst_sid, status, src_count,
+             json.dumps(detail, ensure_ascii=False) if detail and not isinstance(detail, str) else detail))
+        store.db.commit()
+
+
+def sync_status(store: Store, src_tool, src_sid, dst_tool):
+    """Increment baseline: messages added since the last successful migration."""
+    with store.lock:
+        row = store.db.execute(
+            "SELECT * FROM migrations WHERE src_tool=? AND src_sid=? AND dst_tool=? AND status='ok' "
+            "ORDER BY id DESC LIMIT 1", (src_tool, src_sid, dst_tool)).fetchone()
+        if not row:
+            return None
+        cur = store.db.execute("SELECT COUNT(*) c FROM messages WHERE sid=?", (src_sid,)).fetchone()["c"]
+        base = row["src_msg_count"]
+        delta = None if base is None else max(0, cur - base)
+    return {"last_ts": row["ts"], "last_dst_sid": row["dst_sid"],
+            "base_count": base, "current_count": cur, "delta": delta}
+
+
+def migration_history(store: Store, tool=None, sid=None, limit=50):
+    """All migrations involving (tool, sid) as source or destination."""
+    with store.lock:
+        if tool and sid:
+            rows = store.db.execute(
+                "SELECT * FROM migrations WHERE (src_tool=? AND src_sid=?) OR (dst_tool=? AND dst_sid=?) "
+                "ORDER BY id DESC LIMIT ?",
+                (tool, sid, tool, sid, limit)).fetchall()
+        else:
+            rows = store.db.execute(
+                "SELECT * FROM migrations ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def lineage_info(store: Store, tool, sid):
+    """Lineage + full cross-tool history for a native session."""
+    with store.lock:
+        row = store.db.execute(
+            "SELECT lid FROM migrations WHERE (src_tool=? AND src_sid=?) OR (dst_tool=? AND dst_sid=?) LIMIT 1",
+            (tool, sid, tool, sid)).fetchone()
+        if not row:
+            return None
+        lid = row["lid"]
+        migs = store.db.execute("SELECT * FROM migrations WHERE lid=? ORDER BY id", (lid,)).fetchall()
+        lin = store.db.execute("SELECT * FROM lineages WHERE lid=?", (lid,)).fetchone()
+    return {
+        "lid": lid,
+        "created_at": lin["created_at"] if lin else None,
+        "migrations": [dict(m) for m in migs],
+    }
+
+
+# ====================================================================
+# Memory region (记忆区): hub.db + ~/.agent/hub/memory/*.md 双写
+# ====================================================================
+import textwrap
+
+MEMORY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS memories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'note',    -- note | migration-summary | manual
+  title TEXT,
+  body TEXT NOT NULL,
+  refs TEXT,                            -- JSON: {sid?, lid?, tool?}
+  source TEXT DEFAULT 'ui'
+);
+"""
+
+MEMORY_DIR = os.path.join(HUB_DIR, "memory")
+
+
+def ensure_memory_schema(store: Store):
+    with store.lock:
+        store.db.executescript(MEMORY_SCHEMA)
+        store.db.commit()
+    os.makedirs(MEMORY_DIR, exist_ok=True)
+
+
+def add_memory(store: Store, body, title=None, kind="note", refs=None, source="ui"):
+    """Insert memory row + write a Markdown twin for human reading."""
+    with store.lock:
+        cur = store.db.execute(
+            "INSERT INTO memories(ts, kind, title, body, refs, source) VALUES(?,?,?,?,?,?)",
+            (now_iso(), kind, title, body,
+             json.dumps(refs, ensure_ascii=False) if refs else None, source))
+        store.db.commit()
+        mid = cur.lastrowid
+    # markdown twin: append-only daily journal（人类可读 · 无删除问题）
+    try:
+        os.makedirs(MEMORY_DIR, exist_ok=True)
+        day = time.strftime("%Y-%m-%d", time.localtime())
+        jpath = os.path.join(MEMORY_DIR, day + ".md")
+        with open(jpath, "a") as f:
+            f.write("\n## [%s] %s\n\n- id: %d · kind: %s · refs: %s\n\n%s\n"
+                    % (now_iso()[11:16], title or "(无标题)", mid, kind,
+                       json.dumps(refs, ensure_ascii=False) if refs else "-", body))
+    except OSError:
+        pass
+    return mid
+
+
+def list_memories(store: Store, kind=None, limit=100):
+    with store.lock:
+        if kind:
+            rows = store.db.execute(
+                "SELECT * FROM memories WHERE kind=? ORDER BY id DESC LIMIT ?", (kind, limit)).fetchall()
+        else:
+            rows = store.db.execute(
+                "SELECT * FROM memories ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_memory(store: Store, mid):
+    with store.lock:
+        cur = store.db.execute("DELETE FROM memories WHERE id=?", (mid,))
+        store.db.commit()
+    return cur.rowcount > 0

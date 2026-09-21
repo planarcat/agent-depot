@@ -97,7 +97,7 @@ class ClaudeScanner:
     tool = "claude"
 
     def sources(self):
-        base = os.path.expanduser("~/.claude/projects")
+        base = os.environ.get("HUB_CLAUDE_PROJECTS") or os.path.expanduser("~/.claude/projects")
         out = []
         for path in glob.glob(os.path.join(base, "*", "*.jsonl")):
             out.append(path)
@@ -327,8 +327,12 @@ class OpenCodeScanner:
         os.path.expanduser("~/.local/share/opencode/storage/db.sqlite"),  # older layout
     ]
 
+    def _candidates(self):
+        override = os.environ.get("HUB_OPENCODE_DB")
+        return [override] if override else self.DB_CANDIDATES
+
     def sources(self):
-        return [p for p in self.DB_CANDIDATES if os.path.exists(p)]
+        return [p for p in self._candidates() if os.path.exists(p)]
 
     def _connect_ro(self, path):
         uri = "file:%s?mode=ro&immutable=0" % path

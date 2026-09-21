@@ -1,6 +1,6 @@
 # Agent Session Hub
 
-本地优先的 AI 编码会话枢纽：把 Claude Code / Codex / OpenCode 等工具的会话统一到一个公共目录（`~/.agent/hub/`），提供浏览、增量采集、定时刷新与跨工具迁移。
+本地优先的 AI 编码会话枢纽：把 Claude Code / Codex / OpenCode 等工具的会话统一到一个公共目录（`~/.agent/hub/`），提供浏览、增量采集、定时刷新、跨工具迁移与 lineage 勾连。
 
 **零第三方依赖**：Python 3.9+ 标准库运行。迁移引擎调用 [casr](https://github.com/Dicklesworthstone/cross_agent_session_resumer)（未安装时优雅降级为只读浏览）。
 
@@ -8,53 +8,70 @@
 
 ```bash
 ./run.sh          # 后台启动（pid + 日志在仓库内）
-./run.sh --open   # 启动并打开界面
+./run.sh --open   # 启动并打开控制台
 ./stop.sh         # 停止
-# 或前台运行：./run.sh --fg    /    python3 server.py
+# 或双击 ~/Applications/AgentSessionHub.app（脚本：scripts/make-app.sh 重建）
 ```
 
-## 功能（MVP）
+控制台：<http://127.0.0.1:8317>
 
-- **统一浏览**：所有工具的会话一个列表，按工具 / 关键词过滤
-- **增量采集**：JSONL 工具按字节 offset 增量读取；OpenCode（SQLite 只读）按更新时间增量
-- **定时刷新**：应用内调度器，按工具开关与间隔，配置持久化
-- **会话预览**：对话流只读预览（深度 diff / 用量统计推荐 CCHV）
-- **跨工具迁移**：调用 casr 转换会话到目标工具原生格式（需安装 casr）
-- **台账**：每次刷新 / 迁移记录在 ledger 表，可审计、可回溯
+## 功能
 
-## 数据源（已适配）
+- **统一浏览**：所有工具会话一个列表，筛选 / 搜索 / 预览（含 lineage 链）
+- **增量采集**：JSONL 按字节 offset tail；OpenCode SQLite 只读；内容哈希去重、重扫幂等
+- **定时刷新**：4 个范围（全部 + 3 工具）× 开关 × 间隔编辑，配置持久化，执行入台账
+- **跨工具迁移**：拖拽 / 点选 → casr 原生格式写回（原子 + 读回验证），迁移副本自动采集回 hub
+- **lineage 勾连**：每条会话唯一编号 `lx-NNNN`，源与副本双向可查；重复迁移自动拦截；支持「同步更新」生成修订副本
+- **记忆区**：`~/.agent/hub/memory/` 每日 Markdown 日志 + 数据库双写
+- **台账**：所有操作可审计（`ledger` 表）
 
-| 工具 | 位置 | 方式 |
-|---|---|---|
-| Claude Code | `~/.claude/projects/**/*.jsonl` | tail 增量 |
-| Codex CLI | `~/.codex/sessions/**/*.jsonl`（CODEX_HOME 可重定向） | tail 增量 |
-| OpenCode | `~/.local/share/opencode/opencode.db`（SQLite 只读） | 更新时间游标 |
+## 测试（精确测试体系 · 3 层）
+
+```bash
+bash tests/run_all.sh        # 全量：lint + API 集成 + E2E 无头 + E2E 有头冒烟
+python3 tests/lint_styles.py # 样式规范 lint（游离色值/字号检查）
+python3 tests/test_hub.py    # API 集成（沙箱，不触碰真实会话）
+node tests/e2e.mjs           # E2E：CDP 驱动真实 Chrome（零依赖），--headed 有头模式
+```
+
+证据输出：`tests/evidence/`（E2E 报告 + 桌面/移动端截图）。
+
+## 设计系统
+
+`web/tokens.css`（token 唯一出处）+ `web/hub-ui.{js,css}`（统一反馈组件）+ 规范文档 [docs/STYLE_GUIDE.md](docs/STYLE_GUIDE.md)。风格：Müller-Brockmann 网格功能主义。界面禁止游离色值/字号（lint 强制）。
 
 ## 架构
 
 ```
 agent-session-hub/
-├── server.py        # HTTP 服务 + API + 调度器
+├── server.py           # HTTP 服务 + API + 调度器
 ├── hub/
-│   ├── store.py     # SQLite（~/.agent/hub/hub.db）：会话/消息/台账/游标/配置
-│   ├── scanners.py  # 三家采集适配器（增量、内容哈希去重）
-│   └── migrator.py  # casr 封装
-└── web/index.html   # 控制台界面（原生 JS，无构建）
+│   ├── store.py        # SQLite：会话/消息/lineage/迁移/记忆/台账/游标/配置
+│   ├── scanners.py     # 三家采集适配器（增量、去重、噪声过滤）
+│   └── migrator.py     # casr 封装 + 迁移守卫 + 同步基线
+├── web/                # tokens.css / hub-ui / app.css / app.js / index.html
+├── tests/              # lint + unittest + CDP E2E + run_all.sh + evidence/
+├── scripts/make-app.sh # macOS 桌面壳构建
+├── docs/STYLE_GUIDE.md # 样式规范
+├── HANDOFF.md          # 交接说明（先读这个）
+└── VERIFICATION.md     # 测试记录
 ```
 
 ## 设计约定
 
-- **只读采集**：从不修改源工具的会话文件；OpenCode 数据库以只读 URI 打开
-- **内容哈希去重**：同会话内相同 role+content 的消息只入一次库
-- **追加式台账**：所有操作可审计；ledger 是未来增量勾连（lineage/水位）的底座
-- **迁移 = 新副本**：经 casr 迁移在目标工具生成新会话，绝不覆盖原生会话文件
+- **只读采集**：从不修改源工具的会话文件；OpenCode 数据库只读打开
+- **迁移 = 新副本**：经 casr 在目标工具生成新会话，绝不覆盖原生会话文件
+- **去重守卫**：同一 (会话, 目标) 重复迁移默认拦截；「同步更新」显式生成修订副本
+- **追加式台账**：`ledger` 可审计可回溯
 
 ## Roadmap
 
-- [ ] lineage 编号 + ledger 导出映射（跨工具增量勾连）
-- [ ] 导出水印与循环检测（A→B→A 增量回流）
-- [ ] Tauri 桌面壳
-- [ ] 记忆区接入 agentmemory
+- [x] lineage 编号 + 迁移守卫 + 同步基线
+- [x] 定时调度增强（间隔编辑 / 批量 / 执行记录）
+- [x] 记忆区（db + 每日 Markdown 日志）
+- [x] macOS 桌面壳（零依赖 .app；Tauri 因依赖重量暂缓，见 HANDOFF 决策记录）
+- [ ] 真·增量回流（需先解决原生会话文件的追加写风险；建议向 casr 上游提需求）
+- [ ] 与 agentmemory 全套接线（安装进行中）
 
 ## 相关
 
