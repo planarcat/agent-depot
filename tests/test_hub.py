@@ -756,6 +756,17 @@ class ToolsTest(HubSandbox, unittest.TestCase):
         self.assertEqual(s, 200)
         s, d = req("POST", "/api/refresh", {"tool": "pi-fixture"})
         self.assertEqual(s, 200)
+        # 自定义工具可改会话格式；未知格式 400；内置格式锁定 400
+        s, d = req("PATCH", "/api/tools/pi-fixture", {"adapter": "claude"})
+        self.assertEqual(s, 200)
+        self.assertEqual(d["tool"]["adapter"], "claude")
+        s, d = req("PATCH", "/api/tools/pi-fixture", {"adapter": "pi"})
+        self.assertEqual(s, 200)
+        self.assertEqual(d["tool"]["adapter"], "pi")
+        s, d = req("PATCH", "/api/tools/pi-fixture", {"adapter": "nope"})
+        self.assertEqual(s, 400)
+        s, d = req("PATCH", "/api/tools/claude", {"adapter": "pi"})
+        self.assertEqual(s, 400)
 
     def test_t07_delete_protections_and_retention(self):
         s, d = req("DELETE", "/api/tools/claude")

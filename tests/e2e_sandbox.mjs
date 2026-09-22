@@ -252,6 +252,44 @@ const failures = () => results.filter(r => !r.ok);
     return '添加 → 采集 1 会话 / 3 消息 → 动态筛选出现';
   });
 
+  S('tools-adapter-edit', async () => {
+    // 自定义工具：编辑时可改格式（持久化 + 还原）
+    await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
+    await click('[data-testid="manage-pi-sandbox"]');
+    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '设置弹窗');
+    let st = await evaluate(`(() => ({
+      adDisabled: document.getElementById('tool-adapter').disabled,
+      hint: getComputedStyle(document.getElementById('tool-adapter-hint')).display !== 'none' }))()`);
+    if (st.adDisabled) throw new Error('自定义工具的会话格式应可修改，实际被禁用');
+    if (st.hint) throw new Error('自定义工具不应显示内置锁定提示');
+    await evaluate(`(() => { const s = document.getElementById('tool-adapter'); s.value = 'claude'; s.dispatchEvent(new Event('change')); })()`);
+    await click('[data-testid="tool-save"]');
+    await waitFor(`!!document.querySelector('.hub-toast--success')`, 8000, '格式修改保存 toast');
+    let ad = await evaluate(`(window.hubApp.state.tool_list.find(t => t.id === 'pi-sandbox') || {}).adapter`);
+    if (ad !== 'claude') throw new Error('格式修改未持久化：' + ad);
+    await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
+    await click('[data-testid="manage-pi-sandbox"]');
+    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '设置弹窗');
+    await evaluate(`(() => { const s = document.getElementById('tool-adapter'); s.value = 'pi'; s.dispatchEvent(new Event('change')); })()`);
+    await click('[data-testid="tool-save"]');
+    await waitFor(`!!document.querySelector('.hub-toast--success')`, 8000, '格式还原保存 toast');
+    ad = await evaluate(`(window.hubApp.state.tool_list.find(t => t.id === 'pi-sandbox') || {}).adapter`);
+    if (ad !== 'pi') throw new Error('格式还原失败：' + ad);
+    // 内置工具：格式与路径锁定 + 提示可见
+    await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
+    await click('[data-testid="manage-claude"]');
+    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '内置工具设置弹窗');
+    st = await evaluate(`(() => ({
+      adDisabled: document.getElementById('tool-adapter').disabled,
+      rootDisabled: document.getElementById('tool-root').disabled,
+      hint: getComputedStyle(document.getElementById('tool-adapter-hint')).display !== 'none' }))()`);
+    if (!st.adDisabled) throw new Error('内置工具格式应锁定，实际可改');
+    if (!st.rootDisabled) throw new Error('内置工具路径应锁定，实际可改');
+    if (!st.hint) throw new Error('内置工具应显示锁定提示');
+    await click('[data-testid="tool-close"]');
+    return '自定义可改（持久化+还原）· 内置锁定+提示可见';
+  });
+
   S('tools-disable-and-remove', async () => {
     await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
     await click('[data-testid="manage-pi-sandbox"]');

@@ -361,13 +361,13 @@ class Handler(BaseHTTPRequestHandler):
                     return 404, {"ok": False, "error": "工具不存在：%s" % tid}
                 except ValueError as e:
                     return 400, {"ok": False, "error": str(e)}
-                keys = [k for k in ("name", "enabled", "root", "skills_dir", "mcp_config")
+                keys = [k for k in ("name", "enabled", "adapter", "root", "skills_dir", "mcp_config")
                         if isinstance(body, dict) and k in body]
                 linked = _sync_tool_targets(t)
                 core_ops.log_op(STORE, "tools", "update", "ok", item_name=t["name"],
                                 detail={"id": tid, "keys": keys,
                                         "targets_created": linked.get("created")})
-                return 200, {"ok": True, "tool": {"id": t["id"], "name": t["name"],
+                return 200, {"ok": True, "tool": {"id": t["id"], "name": t["name"], "adapter": t.get("adapter"),
                                                   "enabled": bool(t.get("enabled", True)),
                                                   "root": t.get("root"),
                                                   "skills_dir": t.get("skills_dir"),

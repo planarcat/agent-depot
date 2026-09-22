@@ -195,6 +195,13 @@ def update_tool(store, tid, patch):
     for k in ("skills_dir", "mcp_config"):
         if k in patch:
             patch[k] = _norm_path_opt(patch.get(k))
+    if "adapter" in patch and patch.get("adapter") is not None:
+        ad = str(patch["adapter"]).strip()
+        if ad not in ADAPTERS:
+            raise ValueError("未知的会话格式：%s" % ad)
+        if cur.get("builtin") and ad != cur.get("adapter"):
+            raise ValueError("内置工具的会话格式不可修改")
+        patch["adapter"] = ad
     entries = _saved_entries(store)
     ent = next((s for s in entries if s["id"] == tid), None)
     if cur.get("builtin"):
@@ -205,7 +212,7 @@ def update_tool(store, tid, patch):
             entries.append(ent)
     if ent is None:
         raise KeyError(tid)
-    for k in ("name", "enabled", "root", "skills_dir", "mcp_config", "mcp_format"):
+    for k in ("name", "enabled", "adapter", "root", "skills_dir", "mcp_config", "mcp_format"):
         if k in patch and patch[k] is not None:
             ent[k] = patch[k]
         elif k in ("skills_dir", "mcp_config") and k in patch and patch[k] is None:

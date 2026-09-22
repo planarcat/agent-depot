@@ -340,6 +340,7 @@ body {
 .tool-form { display: grid; gap: var(--sp-3); }
 .tool-form label > span:first-child { display: block; font-size: var(--fs-s); color: var(--c-ink-4); margin-bottom: var(--sp-1); }
 .tool-form select { width: 100%; font-size: var(--fs-body); padding: 6px var(--sp-2); border: 1px solid var(--c-line); border-radius: var(--r-s); background: var(--c-surface-2); color: var(--c-ink); }
+.tool-form select:disabled, .tool-form input:disabled { opacity: .55; cursor: not-allowed; }
 .tool-hint { font-size: var(--fs-xs); color: var(--c-ink-4); line-height: 1.6; }
 .tool-enable-row { display: flex; align-items: center; gap: var(--sp-3); }
 .tool-enable-row .switch { margin-left: auto; }

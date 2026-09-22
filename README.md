@@ -47,7 +47,7 @@
 ## 测试（精确测试体系 · 3 层）
 
 ```bash
-bash tests/run_all.sh        # 全量 6 套件 / 108 项：lint + API 46 + Skills 13 + MCP 9 + Extras 8 + E2E 16 + 有头 3 + 沙箱 13
+bash tests/run_all.sh        # 全量 6 套件 / 109 项：lint + API 46 + Skills 13 + MCP 9 + Extras 8 + E2E 16 + 有头 3 + 沙箱 14
 python3 scripts/drill_v04.py # 干净环境端到端演练（源→拉取→分发→回退→台账，8 步）
 python3 tests/lint_styles.py # 样式规范 lint（游离色值/字号检查）
 python3 tests/test_hub.py    # API 集成（沙箱，不触碰真实会话）

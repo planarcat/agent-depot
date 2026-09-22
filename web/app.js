@@ -338,8 +338,10 @@ async function ensureAdapters() {
 function adapterDef(id) { return ADAPTER_LIST.find(a => a.id === id) || {}; }
 function updRootHint() {
   const a = adapterDef(document.getElementById('tool-adapter').value);
-  document.getElementById('tool-root-hint').textContent =
-    a.root_hint ? '路径示例：' + a.root_hint + '（绝对路径，可用 ~）' : '';
+  const rootEl = document.getElementById('tool-root');
+  let txt = a.root_hint ? '路径示例：' + a.root_hint + '（绝对路径，可用 ~）' : '';
+  if (rootEl && rootEl.disabled) txt += (txt ? ' ' : '') + '（内置工具路径不可修改）';
+  document.getElementById('tool-root-hint').textContent = txt;
 }
 let toolModalMode = 'add';
 let toolModalId = null;
@@ -370,8 +372,9 @@ async function openToolModal(toolId) {
   presetEl.value = '';
   presetRow.style.display = t ? 'none' : '';
   const isBuiltin = !!(t && t.builtin);
-  adEl.disabled = !!t;
+  adEl.disabled = isBuiltin; // 自定义工具创建后仍可修改格式；内置工具由预设固定
   rootEl.disabled = isBuiltin;
+  document.getElementById('tool-adapter-hint').style.display = isBuiltin ? '' : 'none';
   document.getElementById('tool-enable-row').style.display = t ? '' : 'none';
   document.getElementById('tool-enabled').classList.toggle('is-on', t ? !!t.enabled : true);
   document.getElementById('tool-delete').style.display = (t && !t.builtin) ? '' : 'none';
@@ -409,6 +412,7 @@ async function submitTool(btn) {
     const patch = { name, enabled: document.getElementById('tool-enabled').classList.contains('is-on'),
                     skills_dir: skills, mcp_config: mcp };
     if (!rootEl.disabled) patch.root = root;
+    if (!document.getElementById('tool-adapter').disabled) patch.adapter = adapter;
     if (toolMcpFormat) patch.mcp_format = toolMcpFormat;
     r = await api('/api/tools/' + encodeURIComponent(toolModalId), {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
