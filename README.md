@@ -69,7 +69,8 @@ agent-depot/
 │   └── migrator.py     # casr 封装 + 迁移守卫 + 同步基线
 ├── web/                # tokens.css / hub-ui / app.css / app.js / index.html
 ├── tests/              # lint + unittest + CDP E2E + run_all.sh + evidence/
-├── scripts/make-app.sh # macOS 桌面壳构建
+├── desktop/            # Tauri 桌面壳工程（原生窗口；构建说明见 desktop/README.md）
+├── scripts/            # make-app.sh（Tauri 构建/安装）· make-thin-app.sh（薄壳回退）
 ├── docs/STYLE_GUIDE.md # 样式规范
 ├── HANDOFF.md          # 交接说明（先读这个）
 └── VERIFICATION.md     # 测试记录
@@ -87,7 +88,7 @@ agent-depot/
 - [x] lineage 编号 + 迁移守卫 + 同步基线
 - [x] 定时调度增强（间隔编辑 / 批量 / 执行记录）
 - [x] 记忆区（db + 每日 Markdown 日志）
-- [x] macOS 桌面壳（零依赖 .app；Tauri 因依赖重量暂缓，见 HANDOFF 决策记录）
+- [x] macOS 桌面壳（Tauri 原生窗口；`desktop/` 工程，`bash scripts/make-app.sh` 重建；零依赖薄壳保留为回退）
 - [ ] 真·增量回流（需先解决原生会话文件的追加写风险；建议向 casr 上游提需求）
 - [x] 与 agentmemory 接线（三工具 MCP 已连接，viewer :3113）
 

@@ -48,7 +48,7 @@ bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E �
 | 8 | **迁移去重守卫** | 重复迁移拦截 + 自上次迁移后新增 N 条的**同步更新**（修订副本） | E2E duplicate-migration-guard |
 | 9 | **记忆区** | hub.db + `~/.agent/hub/memory/` 每日 Markdown 日志双写；增删查 | E2E memory-flow |
 | 10 | 台账 | 每次刷新/迁移/配置变更入 ledger，可审计 | 数据核验 |
-| 11 | 桌面壳 | `~/Applications/AgentDepot.app` 双击即开独立窗口 | 启动器实测 |
+| 11 | 桌面壳 | `~/Applications/AgentDepot.app`（Tauri 原生窗口，冷启动自动确保服务）双击即开 | 冷启动 + 边界实测 |
 | 12 | 设计系统 | tokens + HubUI 组件 + STYLE_GUIDE + lint 强制 | lint + 视觉走查 |
 
 ## 延后项落实情况（本次全部处理）
@@ -57,7 +57,7 @@ bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E �
 |---|---|
 | lineage 编号 + ledger 导出映射 | ✅ 完成（含迁移去重、同步基线、`/api/sync/preview`） |
 | 导出水印 + 循环检测 | ✅ 按保守默认落地：**不写入原生会话文件**（任何工具目录），以「去重守卫 + 消息数基线 + 修订副本"同步更新"」实现等价目标；原因：原生追加写的格式风险远大于收益（casr 官方也仅做整会话转换），详见决策记录 |
-| Tauri 桌面壳 | ⭕ 替代为**零依赖 macOS .app 壳**（双击即开，功能等价）。原因：Rust 工具链 + 数百 MB 依赖 + 本机对 GitHub 大文件下载极慢（23MB 实测 150s 超时）；`scripts/make-app.sh` 一键重建。可复议 |
+| Tauri 桌面壳 | ✅ 2026-09-22 落地（复议实施）：Rust 1.98.1 + tauri 2.11.6；构建经 rsproxy.cn（工具链/crates）与 npmmirror（tauri-cli）镜像，「GitHub 大文件慢」障碍已化解；`desktop/` 工程 + `scripts/make-app.sh` 一键重建；零依赖薄壳降级为回退（`scripts/make-thin-app.sh`） |
 | 记忆区接入 agentmemory | ✅ 完成：镜像安装 + iii-engine（经 ghfast 镜像）就位；服务 healthy（:3111 / viewer :3113）；已接线 claude-code / codex / opencode 三配置（已核验写入）；demo 通过（3 会话 6 条 observation 持久化）；hub 状态栏显示记忆总线状态 |
 | 定时间隔编辑 UI | ✅ 完成 |
 | 全工具批量开关 | ✅ 完成（"全部工具"范围） |
@@ -112,4 +112,4 @@ bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E �
 
 1. **迁移=新副本、绝不写入原生会话文件**——最保守且与 casr 官方语义一致（官方明确"not a live sync"）；
 2. **去重守卫默认开启**——防手滑产生重复副本；需要时「同步更新」显式生成修订版；
-3. **UI 库自建**（见上）；4. **桌面壳用 .app**（见上）；5. **记忆日志 append-only 按日**——避免"删除记忆=删文件"的权限敏感操作。
+3. **UI 库自建**（见上）；4. **桌面壳**：v0.4 期用零依赖 .app，2026-09-22 复议升级为 Tauri 原生壳（见上）；5. **记忆日志 append-only 按日**——避免"删除记忆=删文件"的权限敏感操作。

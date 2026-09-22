@@ -1,39 +1,36 @@
 #!/bin/bash
-# 构建 macOS 桌面壳（零依赖 .app，双击启动服务并打开独立窗口）
-# 说明：原计划 Tauri 壳经评估放弃 —— Rust 工具链 + 数百 MB 依赖
-# 在本机网络条件下不可靠；本方案功能等价（双击即开），升级路径保留。
+# 构建 Agent Depot 桌面壳（Tauri：原生窗口，启动时确保本地服务后加载控制台）
+# 构建期依赖：Rust 工具链（~/.cargo/bin）+ 项目内 tauri-cli（desktop/node_modules）。
+# 国内网络镜像：Rust 走 rsproxy.cn；npm 走 npmmirror（详见 desktop/README.md）。
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
+DESKTOP="$REPO/desktop"
 APP="$HOME/Applications/AgentDepot.app"
-rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cat > "$APP/Contents/Info.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>CFBundleName</key><string>Agent Depot</string>
-  <key>CFBundleDisplayName</key><string>Agent Depot</string>
-  <key>CFBundleIdentifier</key><string>local.planarcat.agent-depot</string>
-  <key>CFBundleVersion</key><string>0.5.0</string>
-  <key>CFBundleShortVersionString</key><string>0.5.0</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleExecutable</key><string>launcher</string>
-  <key>LSMinimumSystemVersion</key><string>10.15</string>
-  <key>LSUIElement</key><false/>
-</dict></plist>
-PLIST
-cat > "$APP/Contents/MacOS/launcher" <<LAUNCH
-#!/bin/bash
-# Agent Depot 启动器：确保服务运行，然后以独立窗口打开控制台
-REPO="$REPO"
-cd "\$REPO" || exit 1
-./run.sh >>.hub.log 2>&1
-if [ "\${HUB_SKIP_OPEN:-0}" = "1" ]; then exit 0; fi
-if [ -d "/Applications/Google Chrome.app" ]; then
-  open -na "Google Chrome" --args --app="http://127.0.0.1:8317" --window-size=1480,960
-else
-  open "http://127.0.0.1:8317"
+BUNDLE="$DESKTOP/src-tauri/target/release/bundle/macos/Agent Depot.app"
+mkdir -p "$HOME/Applications"
+
+if [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+  echo '缺少 Rust 工具链：以 RUSTUP_DIST_SERVER=https://rsproxy.cn 安装 rustup 后重试' >&2
+  exit 1
 fi
-LAUNCH
-chmod +x "$APP/Contents/MacOS/launcher"
+
+cd "$DESKTOP"
+if [ ! -d node_modules ]; then
+  npm --registry=https://registry.npmmirror.com install
+fi
+export PATH="$HOME/.cargo/bin:$PATH"
+./node_modules/.bin/tauri build
+
+if [ ! -d "$BUNDLE" ]; then
+  echo "构建产物缺失: $BUNDLE" >&2
+  exit 1
+fi
+
+if [ -d "$APP" ]; then
+  TRASH="$HOME/.Trash/AgentDepot-$(date +%Y%m%d-%H%M%S).app"
+  mv "$APP" "$TRASH"
+  echo "旧版已移入废纸篓: $TRASH"
+fi
+
+cp -R "$BUNDLE" "$APP"
 echo "built: $APP"
