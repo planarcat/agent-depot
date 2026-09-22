@@ -516,6 +516,43 @@ function esc(s) {
   return (s == null ? '' : String(s)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/* ---------- v0.4: session stats (S1) ---------- */
+async function openStats() {
+  const r = await api('/api/stats');
+  const st = (r.data || {}).stats;
+  if (!st) { HubUI.toast('统计加载失败', 'error'); return; }
+  const row = (label, n, max) => `
+    <div class="stat-row"><span class="stat-label" title="${esc(label)}">${esc(label)}</span>
+      <span class="stat-track"><span class="stat-bar" style="width:${Math.max(3, Math.round(n / Math.max(1, max) * 100))}%"></span></span>
+      <span class="stat-n">${n}</span></div>`;
+  const maxTool = Math.max(...st.by_tool.map(x => x.sessions), 1);
+  const maxDay = Math.max(...st.by_day.map(x => x.sessions), 1);
+  const maxProj = Math.max(...st.by_project.map(x => x.sessions), 1);
+  HubUI.modal({
+    title: '会话统计（S1）', confirmText: '批量导出全部（zip）', cancelText: '关闭',
+    bodyHTML: `
+      <div class="stats-wrap">
+        <div class="stats-totals">
+          <div><b>${st.totals.sessions}</b><span>会话</span></div>
+          <div><b>${st.totals.messages}</b><span>消息</span></div>
+          <div><b>${st.totals.starred}</b><span>收藏</span></div>
+          <div><b>${st.totals.migrations}</b><span>迁移</span></div>
+        </div>
+        <div class="rail__h">按工具</div>
+        ${st.by_tool.map(x => row(TOOL_NAMES[x.tool] || x.tool, x.sessions, maxTool)).join('')}
+        <div class="rail__h">按天（近 14 天）</div>
+        ${st.by_day.map(x => row(x.day, x.sessions, maxDay)).join('')}
+        <div class="rail__h">按项目（Top 10）</div>
+        ${st.by_project.map(x => row(x.project.replace(/^\/Users\/[^/]+/, '~'), x.sessions, maxProj)).join('')}
+      </div>`,
+    onConfirm: async () => {
+      const r2 = await post('/api/export/batch', {});
+      if (r2.data.ok) HubUI.toast(`已导出 ${r2.data.count} 个会话 → ${r2.data.path}`, 'success', 6400);
+      else HubUI.toast('批量导出失败：' + (r2.data.error || ''), 'error');
+    },
+  });
+}
+
 /* ---------- module navigation (v0.4) ---------- */
 const VIEWS = [];
 function switchView(id) {
@@ -529,8 +566,20 @@ function switchView(id) {
   if (id === 'ops' && window.OpsView) OpsView.render(root).catch(e => HubUI.toast('台账加载失败', 'error'));
   if (id === 'memory') renderMemoryView(root);
 }
+function memItemsHTML(list) {
+  return list.length ? list.map(m => `
+    <div class="mem-item" data-testid="mv-item">
+      <div class="mem-item__head">
+        <span class="hub-badge hub-badge--neutral">${m.kind === 'migration-summary' ? '迁移记录' : '笔记'}</span>
+        <span class="mem-item__title">${esc(m.title || '(无标题)')}</span>
+        <span class="mem-item__ts">${fmtTime(m.ts)}</span>
+      </div>
+      <div class="mem-item__body">${esc(m.body)}</div>
+    </div>`).join('') : '<div class="hub-empty">记忆区还是空的</div>';
+}
 function renderMemoryView(root) {
   const list = (state.memories || []);
+  const hits = (q) => (q || []);
   root.innerHTML = `
     <div class="mem-view">
       <div class="rail__h">新增记忆</div>
@@ -540,17 +589,13 @@ function renderMemoryView(root) {
         <div><button class="hub-btn hub-btn--primary" data-testid="mv-add">保存记忆</button></div>
       </div>
       <div class="rail__h">记忆列表 <span class="mono-xs">（${list.length} 条 · 存于 ~/.agent/hub/memory/ 每日日志）</span></div>
-      <div data-testid="mv-list">
-        ${list.length ? list.map(m => `
-          <div class="mem-item" data-testid="mv-item">
-            <div class="mem-item__head">
-              <span class="hub-badge hub-badge--neutral">${m.kind === 'migration-summary' ? '迁移记录' : '笔记'}</span>
-              <span class="mem-item__title">${esc(m.title || '(无标题)')}</span>
-              <span class="mem-item__ts">${fmtTime(m.ts)}</span>
-            </div>
-            <div class="mem-item__body">${esc(m.body)}</div>
-          </div>`).join('') : '<div class="hub-empty">记忆区还是空的</div>'}
+      <div class="mem-tools">
+        <input class="hub-input" id="mv-q" data-testid="mv-search"
+               placeholder="搜索记忆（全文，250ms 防抖）…">
+        <a class="hub-btn btn-sm" data-testid="mv-export-md" href="/api/memory/export?format=md">导出 MD</a>
+        <a class="hub-btn btn-sm" data-testid="mv-export-json" href="/api/memory/export?format=json">导出 JSON</a>
       </div>
+      <div data-testid="mv-list">${memItemsHTML(list)}</div>
     </div>`;
   root.querySelector('[data-testid="mv-add"]').onclick = async (e) => {
     const body = root.querySelector('#mv-body').value.trim();
@@ -560,6 +605,26 @@ function renderMemoryView(root) {
     e.currentTarget.classList.remove('is-loading');
     if (r.data.ok) { HubUI.toast('记忆已保存', 'success'); await loadState(); renderMemoryView(root); }
     else HubUI.toast('保存失败：' + (r.data.error || ''), 'error');
+  };
+  let t = null;
+  root.querySelector('#mv-q').oninput = (e) => {
+    clearTimeout(t);
+    const q = e.target.value.trim();
+    t = setTimeout(async () => {
+      const box = root.querySelector('[data-testid="mv-list"]');
+      if (!q) { box.innerHTML = memItemsHTML(list); return; }
+      const r = await api('/api/memory/search?q=' + encodeURIComponent(q));
+      const res = ((r.data || {}).results) || [];
+      box.innerHTML = res.length ? res.map(h => `
+        <div class="mem-item" data-testid="mv-hit">
+          <div class="mem-item__head">
+            <span class="hub-badge hub-badge--neutral">${h.kind === 'migration-summary' ? '迁移记录' : '笔记'}</span>
+            <span class="mem-item__title">${esc(h.title || '(无标题)')}</span>
+            <span class="mem-item__ts">${fmtTime(h.ts)}</span>
+          </div>
+          <div class="mem-item__body">${esc(h.snippet || '')}</div>
+        </div>`).join('') : '<div class="hub-empty">没有匹配的记忆</div>';
+    }, 250);
   };
 }
 
@@ -602,6 +667,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.mod-nav button').forEach(b => {
     b.onclick = () => switchView(b.dataset.view);
   });
+  const statsBtn = document.getElementById('stats-open');
+  if (statsBtn) statsBtn.onclick = openStats;
   loadState().catch(e => renderLoadError(e.message));
   setInterval(() => loadState().catch(() => {}), 30000);
 });

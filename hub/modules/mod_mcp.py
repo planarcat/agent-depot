@@ -231,12 +231,23 @@ def rollback_registry(store, name):
         os.rename(dest, os.path.join(vroot, time.strftime("%Y%m%d-%H%M%S") + "-pre-rollback"))
     os.rename(latest, dest)
     new_hash = fsutil.sha256_file(dest)
+    new_version = None
     with store.lock:
-        store.db.execute("UPDATE registry_items SET hash=?, updated_at=? WHERE kind=? AND name=?",
-                         (new_hash, ops.now_iso(), KIND, name))
-        store.db.commit()
-    ops.log_op(store, MODULE, "rollback", "ok", item_kind="mcp", item_name=name)
-    return {"ok": True, "hash": new_hash[:12]}
+        row = store.db.execute("SELECT * FROM registry_items WHERE kind=? AND name=?",
+                               (KIND, name)).fetchone()
+        if row:
+            row = dict(row)
+            new_version = row["prev_version"] or row["version"]
+            store.db.execute(
+                "UPDATE registry_items SET version=?, hash=?, updated_at=?, "
+                "prev_version=?, prev_hash=? WHERE kind=? AND name=?",
+                (new_version, new_hash, ops.now_iso(),
+                 row["version"], row["hash"], KIND, name))
+            store.db.commit()
+    ops.log_op(store, MODULE, "rollback", "ok", item_kind="mcp", item_name=name,
+               item_version=new_version, detail={"restored_from": snaps[-1]})
+    return {"ok": True, "hash": new_hash[:12], "version": new_version,
+            "restored_from": snaps[-1]}
 
 
 # ============================================================ targets

@@ -538,5 +538,90 @@ class V3Test(HubSandbox, unittest.TestCase):
         self.assertEqual(s, 404)
 
 
+class V4Test(HubSandbox, unittest.TestCase):
+    """v0.4 extras endpoints: stats / memory search+export / batch export."""
+
+    def setUp(self):
+        req("POST", "/api/refresh", {})
+
+    def _raw(self, path):
+        with urllib.request.urlopen(BASE + path, timeout=10) as r:
+            return r.status, r.headers.get("Content-Type", ""), r.read()
+
+    def test_v4_1_stats(self):
+        s, d = req("GET", "/api/stats")
+        self.assertEqual(s, 200)
+        st = d["stats"]
+        self.assertGreaterEqual(st["totals"]["sessions"], 3)
+        self.assertGreaterEqual(st["totals"]["messages"], 1)
+        tools = {t["tool"] for t in st["by_tool"]}
+        self.assertTrue({"claude", "codex", "opencode"} <= tools)
+        self.assertTrue(st["by_day"])
+        self.assertTrue(st["by_project"])
+
+    def test_v4_2_memory_search_and_export(self):
+        import urllib.parse as up
+        req("POST", "/api/memory/add",
+            {"title": "v4-marker", "body": "独特内容 v4-xyz-marker"})
+        s, d = req("GET", "/api/memory/search?q=" + up.quote("v4-xyz-marker"))
+        self.assertEqual(s, 200)
+        self.assertTrue(d["results"])
+        self.assertIn("v4-xyz-marker", d["results"][0]["snippet"])
+        s, d = req("GET", "/api/memory/search?q=")
+        self.assertEqual(s, 400)
+        s, d = req("GET", "/api/memory/search?q=" + up.quote("%"))
+        self.assertEqual(s, 200)
+        # md export (raw download)
+        s, ct, body = self._raw("/api/memory/export?format=md")
+        self.assertEqual(s, 200)
+        self.assertIn("text/markdown", ct)
+        self.assertIn("v4-marker", body.decode())
+        # json export
+        s, ct, body = self._raw("/api/memory/export?format=json")
+        self.assertEqual(s, 200)
+        self.assertIsInstance(json.loads(body.decode()), list)
+        # invalid format
+        s, d = req("GET", "/api/memory/export?format=xml")
+        self.assertEqual(s, 400)
+
+    def test_v4_3_export_batch(self):
+        s, d = req("POST", "/api/export/batch", {"sids": [CLAUDE_SID, CODEX_SID]})
+        self.assertEqual(s, 200)
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["count"], 2)
+        self.assertTrue(os.path.exists(d["path"]))
+        import zipfile
+        with zipfile.ZipFile(d["path"]) as zf:
+            self.assertEqual(len(zf.namelist()), 2)
+        # all-mode
+        s, d = req("POST", "/api/export/batch", {})
+        self.assertTrue(d["ok"])
+        self.assertGreaterEqual(d["count"], 3)
+        # invalid type
+        s, d = req("POST", "/api/export/batch", {"sids": "abc"})
+        self.assertEqual(s, 400)
+
+    def test_v4_4_source_patch_and_delete_http(self):
+        """HTTP verbs: PATCH update + DELETE removal must work on module routes."""
+        s, d = req("POST", "/api/skills/sources",
+                   {"name": "verb-test", "url": "/tmp/nowhere-demo"})
+        self.assertEqual(s, 200)
+        self.assertTrue(d["ok"])
+        sid = d["id"]
+        s, d = req("PATCH", "/api/skills/sources/%d" % sid, {"poll_min": 42})
+        self.assertEqual(s, 200)
+        self.assertTrue(d["ok"])
+        s, d = req("GET", "/api/skills/sources")
+        row = [x for x in d["sources"] if x["id"] == sid][0]
+        self.assertEqual(row["poll_min"], 42)
+        # non-POST verbs must not leak into legacy POST routes
+        s, d = req("PATCH", "/api/refresh", {})
+        self.assertEqual(s, 404)
+        s, d = req("DELETE", "/api/skills/sources/%d" % sid)
+        self.assertEqual(s, 200)
+        s, d = req("GET", "/api/skills/sources")
+        self.assertFalse(any(x["id"] == sid for x in d["sources"]))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

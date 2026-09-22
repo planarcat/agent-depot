@@ -113,6 +113,10 @@ class SkillsFlow(unittest.TestCase):
         self.assertTrue(r["ok"], r)
         content = open(os.path.join(S.registry_root(), "alpha", "SKILL.md")).read()
         self.assertIn("LOCAL EDIT", content)
+        # 版本号随内容回退（force 更新前为 1.1.0）
+        self.assertEqual(r.get("version"), "1.1.0", r)
+        row = [x for x in S.registry_view(self.store) if x["name"] == "alpha"][0]
+        self.assertEqual(row["version"], "1.1.0")
 
     def test_06_distribute_two_targets(self):
         # 用 beta 做干净分发（alpha 处于回退后的本地修改态）

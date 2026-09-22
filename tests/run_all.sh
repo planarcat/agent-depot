@@ -8,9 +8,10 @@ echo "========== 1/6 样式规范 lint =========="
 python3 tests/lint_styles.py || FAIL=1
 echo; echo "========== 2/6 API 集成测试（沙箱隔离） =========="
 python3 tests/test_hub.py 2>&1 | tail -4 || FAIL=1
-echo; echo "========== 3/6 模块集成测试（Skills + MCP） =========="
+echo; echo "========== 3/6 模块集成测试（Skills + MCP + Extras） =========="
 python3 tests/test_skills.py 2>&1 | tail -3 || FAIL=1
 python3 tests/test_mcp.py 2>&1 | tail -3 || FAIL=1
+python3 tests/test_extras.py 2>&1 | tail -3 || FAIL=1
 echo; echo "========== 4/6 E2E 无头（真实 Chrome + CDP） =========="
 node tests/e2e.mjs; [ $? -ne 0 ] && FAIL=1
 echo; echo "========== 5/6 E2E 有头冒烟（GUI 会话） =========="

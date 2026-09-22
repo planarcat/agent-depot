@@ -28,7 +28,9 @@ from hub.store import (Store, now_iso, ensure_lineage_schema,   # noqa: E402
                        lineage_info, migration_history,
                        ensure_memory_schema, add_memory,
                        list_memories, delete_memory, sync_status,
-                       set_star, search_messages, export_markdown)
+                       set_star, search_messages, export_markdown,
+                       session_stats, search_memories, export_memories,
+                       export_batch)
 from hub.scanners import scan_all             # noqa: E402
 from hub import migrator                      # noqa: E402
 from hub.core import registry as mod_registry  # noqa: E402
@@ -114,6 +116,48 @@ def scheduler_tick(store, last_run):
                 results = scan_all(store, tools=[tool])
             store.log("refresh:scheduled", {"tool": tool, "results": results})
             ran.append(tool)
+    ran.extend(registry_autopull(store, last_run, now=now))
+    return ran
+
+
+def registry_autopull(store, last_run, now=None):
+    """S3: 按源配置的 poll_min 定时拉取 registry 源（skills/mcp）。
+
+    模块被禁用 → 跳过；poll_min<=0 或未到期 → 跳过。
+    返回本次执行的 "auto:<kind>:<id>" 键列表（便于测试与诊断）。"""
+    now = time.time() if now is None else now
+    ran = []
+    for mod, kind in ((mod_skills, "skills"), (mod_mcp, "mcp")):
+        if not mod_registry.enabled(store, kind):
+            continue
+        try:
+            srcs = mod.list_sources(store)
+        except Exception:
+            continue
+        for s in srcs:
+            try:
+                pm = int(s.get("poll_min") or 0)
+            except (TypeError, ValueError):
+                pm = 0
+            if pm <= 0 or not s.get("enabled", 1):
+                continue
+            key = "auto:%s:%s" % (kind, s.get("id"))
+            if now - last_run.get(key, 0) < pm * 60:
+                continue
+            last_run[key] = now
+            try:
+                res = mod.pull_source(store, s.get("id"))
+                core_ops.log_op(store, kind, "auto-pull", "ok" if res.get("ok") else "failed",
+                                source_id=s.get("id"), item_name=s.get("name"),
+                                item_version=res.get("commit"),
+                                detail={"added": len(res.get("added") or []),
+                                        "changed": len(res.get("changed") or [])},
+                                reason=None if res.get("ok") else (res.get("error") or "")[:200])
+            except Exception as e:
+                core_ops.log_op(store, kind, "auto-pull", "failed",
+                                source_id=s.get("id"), item_name=s.get("name"),
+                                reason=str(e)[:200])
+            ran.append(key)
     return ran
 
 
@@ -268,6 +312,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     # ---------- GET ----------
+    def _download(self, filename, content, mime="text/plain; charset=utf-8"):
+        data = content.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Disposition", 'attachment; filename="%s"' % filename)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self):
         try:
             return self._do_get_inner()
@@ -328,6 +381,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "error": "会话不存在"}, 404)
             STORE.log("export", {"sid": sid, "path": path, "bytes": nbytes})
             return self._json({"ok": True, "path": path, "bytes": nbytes})
+        if u.path == "/api/stats":
+            return self._json({"ok": True, "stats": session_stats(STORE)})
         if u.path == "/api/sessions":
             q = parse_qs(u.query)
             tool = q.get("tool", ["all"])[0]
@@ -345,6 +400,25 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(json.loads(raw) if raw else DEFAULT_SCHEDULE)
         if u.path == "/api/memories":
             return self._json({"memories": list_memories(STORE, limit=100)})
+        if u.path == "/api/memory/search":
+            q = parse_qs(u.query)
+            query = q.get("q", [""])[0]
+            if not query.strip():
+                return self._json({"ok": False, "error": "q 不能为空"}, 400)
+            try:
+                lim = max(1, min(200, int(q.get("limit", ["50"])[0])))
+            except (TypeError, ValueError):
+                lim = 50
+            return self._json({"ok": True, "results": search_memories(STORE, query, limit=lim)})
+        if u.path == "/api/memory/export":
+            fmt = parse_qs(u.query).get("format", ["md"])[0]
+            if fmt not in ("md", "json"):
+                return self._json({"ok": False, "error": "format 仅支持 md/json"}, 400)
+            payload = export_memories(STORE, fmt)
+            core_ops.log_op(STORE, "memory", "export", "ok",
+                            detail={"format": fmt,
+                                    "bytes": len(payload["content"].encode("utf-8"))})
+            return self._download(payload["filename"], payload["content"], payload["mime"])
         if u.path == "/api/sync/preview":
             q = parse_qs(u.query)
             sid = q.get("sid", [""])[0]
@@ -373,22 +447,36 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- POST ----------
     def do_POST(self):
+        return self._do_write("POST")
+
+    def do_DELETE(self):
+        return self._do_write("DELETE")
+
+    def do_PATCH(self):
+        return self._do_write("PATCH")
+
+    def do_PUT(self):
+        return self._do_write("PUT")
+
+    def _do_write(self, method):
         try:
-            return self._do_post_inner()
+            return self._do_post_inner(method)
         except (ValueError, TypeError, KeyError) as e:
             self._json({"ok": False, "error": "无效输入: %s" % e}, 400)
         except Exception as e:
             self._json({"ok": False, "error": "服务器内部错误: %s" % e}, 500)
 
-    def _do_post_inner(self):
+    def _do_post_inner(self, method="POST"):
         u = urlparse(self.path)
         data = self._body()
-        r = self._dispatch_modules("POST", u.path, parse_qs(u.query), data)
+        r = self._dispatch_modules(method, u.path, parse_qs(u.query), data)
         if r is not None:
             return self._json(r[1], r[0])
-        r = self._control_routes("POST", u.path, parse_qs(u.query), data)
+        r = self._control_routes(method, u.path, parse_qs(u.query), data)
         if r is not None:
             return self._json(r[1], r[0])
+        if method != "POST":
+            return self._json({"error": "not found"}, 404)
         if u.path == "/api/refresh":
             tool = data.get("tool")
             if not REFRESH_LOCK.acquire(blocking=False):
@@ -447,6 +535,15 @@ class Handler(BaseHTTPRequestHandler):
             if ok:
                 core_ops.log_op(STORE, "memory", "delete", "ok", item_name=str(mid))
             return self._json({"ok": ok})
+        if u.path == "/api/export/batch":
+            sids = data.get("sids")
+            if sids is not None and not isinstance(sids, list):
+                return self._json({"ok": False, "error": "sids 必须是数组"}, 400)
+            res = export_batch(STORE, sids if sids else None)
+            core_ops.log_op(STORE, "sessions", "export-batch", "ok",
+                            detail={"count": res["count"], "zip_bytes": res["zip_bytes"]})
+            return self._json({"ok": True, "path": res["path"], "count": res["count"],
+                               "bytes": res["bytes"], "zip_bytes": res["zip_bytes"]})
         if u.path == "/api/schedule":
             sched = json.loads(STORE.get_config("schedule") or "null") or dict(DEFAULT_SCHEDULE)
             # ensure keys exist (e.g. "all" added after first boot)

@@ -95,6 +95,7 @@
           <label>分支<input class="hub-input" id="src-branch" value="main"></label>
           <label>子目录（可选）<input class="hub-input" id="src-subdir" placeholder="skills/"></label>
           <label>凭据引用（可选）<input class="hub-input" id="src-auth" placeholder="env:GITHUB_TOKEN 或 file:~/.secrets/token"></label>
+          <label>定时拉取（分钟，0=关闭）<input class="hub-input" id="src-poll" value="0" inputmode="numeric"></label>
         </div>`,
       onConfirm: async () => {
         const body = {
@@ -103,6 +104,7 @@
           branch: document.getElementById('src-branch').value.trim() || 'main',
           subdir: document.getElementById('src-subdir').value.trim(),
           auth_ref: document.getElementById('src-auth').value.trim() || null,
+          poll_min: Math.max(0, parseInt(document.getElementById('src-poll').value, 10) || 0),
         };
         const r = await post('/api/skills/sources', body);
         if (r.data.ok) { HubUI.toast('已添加源', 'success'); await refresh(); }

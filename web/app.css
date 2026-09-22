@@ -306,3 +306,23 @@ body {
 .mem-view { padding: var(--sp-6) var(--sp-7); max-width: 860px; margin: 0 auto; }
 .mem-view .mem-form { margin-bottom: var(--sp-6); }
 .mem-search { margin: var(--sp-4) 0; }
+
+
+/* v0.4 S1/S2: stats modal + memory tools */
+.mem-tools { display: flex; gap: var(--sp-2); align-items: center; margin: var(--sp-3) 0; }
+.mem-tools .hub-input { flex: 1; }
+.stats-wrap { display: grid; gap: var(--sp-1); }
+.stats-totals { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-3);
+  margin-bottom: var(--sp-4); }
+.stats-totals div { text-align: center; padding: var(--sp-3); background: var(--c-surface-2);
+  border-radius: var(--r-m); }
+.stats-totals b { display: block; font-size: var(--fs-2xl); font-weight: 300; letter-spacing: -0.02em; }
+.stats-totals span { font-size: var(--fs-xs); color: var(--c-ink-4); }
+.stat-row { display: grid; grid-template-columns: 150px 1fr 44px; gap: var(--sp-2);
+  align-items: center; padding: 3px 0; }
+.stat-label { font-size: var(--fs-xs); color: var(--c-ink-3); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; text-align: right; }
+.stat-track { height: 10px; background: var(--c-surface-2); border-radius: 5px; overflow: hidden; }
+.stat-bar { display: block; height: 100%; background: var(--c-accent-soft);
+  border-right: 2px solid var(--c-accent); border-radius: 5px 0 0 5px; }
+.stat-n { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--c-ink-2); }

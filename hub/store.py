@@ -491,3 +491,96 @@ def export_markdown(store: Store, sid):
     with open(path, "w") as f:
         f.write(body)
     return path, len(body.encode())
+
+
+# ============================================================ v0.4 extras (S1/S2)
+
+
+def session_stats(store: Store):
+    """S1: 会话统计（总量 / 按工具 / 按天 / 按项目）。"""
+    with store.lock:
+        t = store.db.execute(
+            "SELECT COUNT(*) AS sessions, COALESCE(SUM(msg_count),0) AS messages, "
+            "COALESCE(SUM(CASE WHEN starred=1 THEN 1 ELSE 0 END),0) AS starred "
+            "FROM sessions").fetchone()
+        by_tool = [dict(r) for r in store.db.execute(
+            "SELECT tool, COUNT(*) AS sessions, COALESCE(SUM(msg_count),0) AS messages "
+            "FROM sessions GROUP BY tool ORDER BY sessions DESC, tool").fetchall()]
+        by_day = [dict(r) for r in store.db.execute(
+            "SELECT substr(COALESCE(NULLIF(started_at,''), NULLIF(updated_at,''), '0000'), 1, 10) AS day, "
+            "COUNT(*) AS sessions FROM sessions GROUP BY day ORDER BY day DESC LIMIT 14").fetchall()]
+        by_project = [dict(r) for r in store.db.execute(
+            "SELECT COALESCE(NULLIF(cwd,''), '(未知)') AS project, COUNT(*) AS sessions "
+            "FROM sessions GROUP BY project ORDER BY sessions DESC LIMIT 10").fetchall()]
+        try:
+            mig = store.db.execute(
+                "SELECT COUNT(*) AS n FROM migrations WHERE status='ok'").fetchone()["n"]
+        except Exception:
+            mig = 0
+    return {"totals": {"sessions": t["sessions"], "messages": t["messages"],
+                       "starred": t["starred"], "migrations": mig},
+            "by_tool": by_tool, "by_day": by_day, "by_project": by_project}
+
+
+def search_memories(store: Store, q, limit=50):
+    """S2: 记忆全文搜索（title/body LIKE，转义，含 snippet）。"""
+    if not q or not q.strip():
+        return []
+    pat = "%%%s%%" % _like_escape(q.strip())
+    low = q.strip().lower()
+    with store.lock:
+        rows = store.db.execute(
+            "SELECT * FROM memories WHERE body LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' "
+            "ORDER BY id DESC LIMIT ?", (pat, pat, limit)).fetchall()
+    out = []
+    for r in rows:
+        r = dict(r)
+        c = r.get("body") or ""
+        idx = c.lower().find(low)
+        start = max(0, (idx if idx >= 0 else 0) - 30)
+        snippet = c[start:start + 120].replace("\n", " ")
+        r["snippet"] = ("…" if start > 0 else "") + snippet + ("…" if len(c) > start + 120 else "")
+        out.append(r)
+    return out
+
+
+def export_memories(store: Store, fmt="md"):
+    """S2: 导出全部记忆。返回 {filename, mime, content}。"""
+    mems = list_memories(store, limit=10000)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    if fmt == "json":
+        return {"filename": "memories-%s.json" % stamp,
+                "mime": "application/json",
+                "content": json.dumps(mems, ensure_ascii=False, indent=2)}
+    lines = ["# Agent Hub 记忆导出", "",
+             "- 导出时间: %s" % now_iso(), "- 条数: %d" % len(mems), "", "---", ""]
+    for m in mems:
+        lines.append("## %s" % (m.get("title") or "(无标题)"))
+        lines.append("")
+        lines.append("- 时间: %s · 类型: %s" % (m.get("ts") or "-", m.get("kind") or "note"))
+        lines.append("")
+        lines.append(m.get("body") or "")
+        lines.append("")
+    return {"filename": "memories-%s.md" % stamp,
+            "mime": "text/markdown; charset=utf-8",
+            "content": "\n".join(lines) + "\n"}
+
+
+def export_batch(store: Store, sids=None, limit=500):
+    """S1: 批量导出会话为 Markdown 并打包 zip。sids 为空 -> 全部（上限 limit）。"""
+    import zipfile
+    if not sids:
+        sids = [s["sid"] for s in store.list_sessions(tool="all")][:limit]
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    zpath = os.path.join(EXPORT_DIR, "batch-%s.zip" % stamp)
+    count, total = 0, 0
+    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
+        for sid in sids:
+            path, nbytes = export_markdown(store, sid)
+            if path:
+                zf.write(path, arcname=os.path.basename(path))
+                count += 1
+                total += nbytes
+    return {"path": zpath, "count": count, "bytes": total,
+            "zip_bytes": os.path.getsize(zpath)}

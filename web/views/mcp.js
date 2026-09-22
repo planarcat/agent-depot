@@ -81,6 +81,7 @@
           <label>Git URL<input class="hub-input" id="msrc-url" placeholder="https://... 或 本地路径"></label>
           <label>分支<input class="hub-input" id="msrc-branch" value="main"></label>
           <label>凭据引用（可选）<input class="hub-input" id="msrc-auth" placeholder="env:GITHUB_TOKEN"></label>
+          <label>定时拉取（分钟，0=关闭）<input class="hub-input" id="msrc-poll" value="0" inputmode="numeric"></label>
         </div>`,
       onConfirm: async () => {
         const r = await post('/api/mcp/sources', {
@@ -88,6 +89,7 @@
           url: document.getElementById('msrc-url').value.trim(),
           branch: document.getElementById('msrc-branch').value.trim() || 'main',
           auth_ref: document.getElementById('msrc-auth').value.trim() || null,
+          poll_min: Math.max(0, parseInt(document.getElementById('msrc-poll').value, 10) || 0),
         });
         if (r.data.ok) { HubUI.toast('已添加 MCP 源', 'success'); await refresh(); }
         else { HubUI.toast('添加失败：' + (r.data.error || ''), 'error'); return false; }
@@ -113,6 +115,7 @@
     el.innerHTML = `
       <div class="center__toolbar">
         <button class="hub-btn btn-sm" data-testid="mcp-update-selected">更新所选到本地</button>
+        <button class="hub-btn btn-sm" data-testid="mcp-update-all">一键更新全部可更新</button>
         <button class="hub-btn btn-sm" data-testid="mcp-verify">验证连接</button>
         <span class="sb-spacer"></span>
         <button class="hub-btn btn-sm hub-btn--primary" data-testid="mcp-distribute">分发所选…</button>
@@ -121,6 +124,11 @@
         ${rows || '<div class="hub-empty">目录为空<div class="hub-empty__hint">先在左侧「拉取」MCP 源</div></div>'}
       </div>`;
     el.querySelector('[data-testid="mcp-update-selected"]').onclick = () => updateToLocal([...S.selected]);
+    el.querySelector('[data-testid="mcp-update-all"]').onclick = () => {
+      const upd = S.catalog.filter(i => i.status === 'update-available' || i.status === 'not-installed').map(i => i.name);
+      if (!upd.length) { HubUI.toast('没有可更新的条目', 'info'); return; }
+      updateToLocal(upd);
+    };
     el.querySelector('[data-testid="mcp-verify"]').onclick = verifySelected;
     el.querySelector('[data-testid="mcp-distribute"]').onclick = () => {
       if (!S.selected.size) { HubUI.toast('先勾选要分发的条目', 'warn'); return; }

@@ -15,14 +15,15 @@ MODULES = {
         # 路由归属（legacy 路由由 server.py 承载，归属声明用于诊断与 UI 元数据）
         "routes": ["/api/state", "/api/sessions", "/api/session", "/api/refresh",
                    "/api/migrate", "/api/sync/preview", "/api/lineage", "/api/search",
-                   "/api/export"],
+                   "/api/export", "/api/export/batch", "/api/stats"],
         "nav": {"key": "sessions", "label": "会话", "order": 1},
     },
     "memory": {
         "id": "memory",
         "name": "记忆",
         "desc": "长期记忆（db + 每日 Markdown 日志）",
-        "routes": ["/api/memories", "/api/memory/add", "/api/memory/delete"],
+        "routes": ["/api/memories", "/api/memory/add", "/api/memory/delete",
+                   "/api/memory/search", "/api/memory/export"],
         "nav": {"key": "memory", "label": "记忆", "order": 2},
     },
     "skills": {
