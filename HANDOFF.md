@@ -10,6 +10,17 @@ cd ~/Documents/Projects/@planarcat/agent-session-hub
 bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E 有头冒烟
 ```
 
+## v0.4 增量（Skills 与 MCP 一级模块）
+
+- **四模块并列**：顶部导航 会话/记忆/Skills/MCP + 台账；`/api/modules` 可独立启停
+- **双管线**：远程 Git 源 →（拉取+快照）→ hub 本地库 →（分发）→ 工具全局目录 / 项目仓库
+- **安全默认**：不覆盖手改（冲突停手，force 才覆盖且先备份）；不写回远程；凭据 env/600 文件引用+日志脱敏
+- **MCP 握手验证**：stdio initialize+tools/list、http 探测，结果记台账
+- **演示闭环**（可复现）：`bash scripts/make-demo-sources.sh` 重建演示源 →
+  `hub-demo-src-skills` / `hub-demo-src-mcp` → 本地库 → `hub-demo-target-a/b` 两项目仓库
+- 测试：新增 Skills 13 + MCP 9 集成用例；E2E +2 场景（五视图/拉取向导）；全量 79 项全绿
+- 设计评审：`docs/design/v0.4-skills-mcp-modules.md`（含实现对照 §13）
+
 ## v0.3 增量（23:30 前完成第二部分自我复盘开发）
 
 | # | 功能 | 说明 |

@@ -516,6 +516,53 @@ function esc(s) {
   return (s == null ? '' : String(s)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/* ---------- module navigation (v0.4) ---------- */
+const VIEWS = [];
+function switchView(id) {
+  document.querySelectorAll('.mod-nav button').forEach(b =>
+    b.classList.toggle('is-on', b.dataset.view === id));
+  document.querySelectorAll('.view').forEach(v =>
+    v.classList.toggle('is-active', v.id === 'view-' + id));
+  const root = document.getElementById('view-' + id);
+  if (id === 'skills' && window.SkillsView) SkillsView.render(root).catch(e => HubUI.toast('Skills 视图加载失败', 'error'));
+  if (id === 'mcp' && window.McpView) McpView.render(root).catch(e => HubUI.toast('MCP 视图加载失败', 'error'));
+  if (id === 'ops' && window.OpsView) OpsView.render(root).catch(e => HubUI.toast('台账加载失败', 'error'));
+  if (id === 'memory') renderMemoryView(root);
+}
+function renderMemoryView(root) {
+  const list = (state.memories || []);
+  root.innerHTML = `
+    <div class="mem-view">
+      <div class="rail__h">新增记忆</div>
+      <div class="mem-form">
+        <input class="hub-input" id="mv-title" placeholder="标题（可选）">
+        <textarea class="hub-input" id="mv-body" placeholder="内容：偏好、决策、约定…" rows="3"></textarea>
+        <div><button class="hub-btn hub-btn--primary" data-testid="mv-add">保存记忆</button></div>
+      </div>
+      <div class="rail__h">记忆列表 <span class="mono-xs">（${list.length} 条 · 存于 ~/.agent/hub/memory/ 每日日志）</span></div>
+      <div data-testid="mv-list">
+        ${list.length ? list.map(m => `
+          <div class="mem-item" data-testid="mv-item">
+            <div class="mem-item__head">
+              <span class="hub-badge hub-badge--neutral">${m.kind === 'migration-summary' ? '迁移记录' : '笔记'}</span>
+              <span class="mem-item__title">${esc(m.title || '(无标题)')}</span>
+              <span class="mem-item__ts">${fmtTime(m.ts)}</span>
+            </div>
+            <div class="mem-item__body">${esc(m.body)}</div>
+          </div>`).join('') : '<div class="hub-empty">记忆区还是空的</div>'}
+      </div>
+    </div>`;
+  root.querySelector('[data-testid="mv-add"]').onclick = async (e) => {
+    const body = root.querySelector('#mv-body').value.trim();
+    if (!body) { HubUI.toast('内容不能为空', 'error'); return; }
+    e.currentTarget.classList.add('is-loading');
+    const r = await post('/api/memory/add', { title: root.querySelector('#mv-title').value.trim(), body, kind: 'note' });
+    e.currentTarget.classList.remove('is-loading');
+    if (r.data.ok) { HubUI.toast('记忆已保存', 'success'); await loadState(); renderMemoryView(root); }
+    else HubUI.toast('保存失败：' + (r.data.error || ''), 'error');
+  };
+}
+
 /* ---------- init ---------- */
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('refresh-all').onclick = e => refreshAll(e.currentTarget);
@@ -552,7 +599,12 @@ document.addEventListener('DOMContentLoaded', () => {
     b.onclick = () => setFilter(b.dataset.filter);
   });
   setTab('migrate');
+  document.querySelectorAll('.mod-nav button').forEach(b => {
+    b.onclick = () => switchView(b.dataset.view);
+  });
   loadState().catch(e => renderLoadError(e.message));
   setInterval(() => loadState().catch(() => {}), 30000);
 });
-window.hubApp = { loadState, setFilter, openSession, migrateFlow: (t, ids) => migrateFlow(t, ids || [...state.selected]), get state() { return state; } };
+window.hubApp = { loadState, setFilter, openSession, switchView,
+  migrateFlow: (t, ids) => migrateFlow(t, ids || [...state.selected]),
+  get state() { return state; } };

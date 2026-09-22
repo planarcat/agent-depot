@@ -31,6 +31,14 @@ from hub.store import (Store, now_iso, ensure_lineage_schema,   # noqa: E402
                        set_star, search_messages, export_markdown)
 from hub.scanners import scan_all             # noqa: E402
 from hub import migrator                      # noqa: E402
+from hub.core import registry as mod_registry  # noqa: E402
+from hub.core import schema as core_schema     # noqa: E402
+from hub.core import ops as core_ops           # noqa: E402
+from hub.lib import gitsrc                     # noqa: E402
+from hub.modules import mod_skills             # noqa: E402
+from hub.modules import mod_mcp                # noqa: E402
+
+MODULE_HANDLERS = (mod_skills, mod_mcp)
 
 PORT = int(os.environ.get("HUB_PORT", "8317"))
 
@@ -75,6 +83,11 @@ def ensure_store():
         STORE = Store()
         ensure_lineage_schema(STORE)
         ensure_memory_schema(STORE)
+        core_schema.ensure(STORE)
+        mod_skills.seed_defaults(STORE)
+        mod_mcp.seed_defaults(STORE)
+        ops = core_ops
+        ops.log_op(STORE, "system", "boot", "ok", detail={"version": "0.4.0"})
         SCHED = Scheduler(STORE)
         SCHED.start()
     return STORE
@@ -105,7 +118,100 @@ def scheduler_tick(store, last_run):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AgentSessionHub/0.1"
+    server_version = "AgentSessionHub/0.4"
+
+    def _dispatch_modules(self, method, path, query, body):
+        """四模块路由分发。未命中返回 None；模块禁用返回 503。"""
+        for mod in MODULE_HANDLERS:
+            if path.startswith(mod.PREFIX):
+                r = mod.handle(STORE, method, path, query, body)
+                if r is not None:
+                    return r
+        return None
+
+    def _control_routes(self, method, path, query, body):
+        """核心控制面：模块注册表 / 统一台账 / 诊断。"""
+        if path == "/api/modules" and method == "GET":
+            return 200, {"ok": True, "modules": mod_registry.snapshot(STORE)}
+        if path.startswith("/api/modules/") and path.endswith("/toggle") and method == "POST":
+            mid = path[len("/api/modules/"):-len("/toggle")]
+            if mid not in mod_registry.MODULE_IDS:
+                return 404, {"ok": False, "error": "未知模块"}
+            on = bool(body.get("enabled"))
+            mod_registry.set_enabled(STORE, mid, on)
+            return 200, {"ok": True, "modules": mod_registry.snapshot(STORE)}
+        if path == "/api/ops" and method == "GET":
+            def g(k, d=None):
+                v = query.get(k)
+                return (v[0] if isinstance(v, list) else v) if v else d
+            r = core_ops.query_ops(STORE, module=g("module"), status=g("status"),
+                                   target_id=int(g("target_id")) if g("target_id") else None,
+                                   since=g("since"), q=g("q"),
+                                   limit=int(g("limit") or 100), offset=int(g("offset") or 0))
+            return 200, {"ok": True, **r}
+        if path == "/api/ops/export" and method == "GET":
+            fmt = (query.get("format", ["json"])[0] if isinstance(query.get("format"), list)
+                   else query.get("format")) or "json"
+            text, ctype = core_ops.export_ops(STORE, fmt=fmt)
+            body_b = text.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype + "; charset=utf-8")
+            self.send_header("Content-Disposition", "attachment; filename=hub-ops.%s" % fmt)
+            self.send_header("Content-Length", str(len(body_b)))
+            self.end_headers()
+            self.wfile.write(body_b)
+            return "sent"
+        if path == "/api/doctor" and method == "GET":
+            checks = []
+            # git
+            code, out, _ = gitsrc.run_git(["--version"])
+            checks.append({"name": "git", "ok": code == 0, "detail": out.strip()})
+            # hub dir writable
+            try:
+                probe = os.path.join(os.path.expanduser("~/.agent/hub"), ".doctor-probe")
+                with open(probe, "w") as f:
+                    f.write("x")
+                os.unlink(probe)
+                checks.append({"name": "hub_dir_writable", "ok": True, "detail": "~/.agent/hub"})
+            except Exception as e:
+                checks.append({"name": "hub_dir_writable", "ok": False, "detail": str(e)[:120]})
+            # casr
+            checks.append({"name": "casr", "ok": migrator.available(),
+                           "detail": "会话迁移引擎"})
+            # agentmemory
+            checks.append({"name": "agentmemory", "ok": _agentmemory_health(),
+                           "detail": "记忆总线 :3111"})
+            # modules
+            for m in mod_registry.snapshot(STORE):
+                checks.append({"name": "module:" + m["id"], "ok": True,
+                               "detail": "enabled" if m["enabled"] else "disabled"})
+            # sources health
+            with STORE.lock:
+                srcs = STORE.db.execute("SELECT kind, name, last_error FROM sources").fetchall()
+            for s in srcs:
+                checks.append({"name": "source:%s/%s" % (s["kind"], s["name"]),
+                               "ok": not s["last_error"], "detail": s["last_error"] or "ok"})
+            ok = all(c["ok"] for c in checks)
+            return 200, {"ok": ok, "checks": checks}
+        if path == "/api/targets/seed" and method == "POST":
+            c1 = mod_skills.seed_defaults(STORE)
+            c2 = mod_mcp.seed_defaults(STORE)
+            return 200, {"ok": True, "created": {"skills": c1, "mcp": c2}}
+        if path == "/api/backup" and method == "GET":
+            import time as _t
+            db = os.path.join(os.path.expanduser("~/.agent/hub"), "hub.db")
+            if not os.path.exists(db):
+                return 404, {"ok": False, "error": "hub.db 不存在"}
+            body_b = open(db, "rb").read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition",
+                             "attachment; filename=hub-backup-%s.db" % _t.strftime("%Y%m%d-%H%M%S"))
+            self.send_header("Content-Length", str(len(body_b)))
+            self.end_headers()
+            self.wfile.write(body_b)
+            return "sent"
+        return None
 
     def log_message(self, fmt, *args):
         pass  # keep console quiet
@@ -170,6 +276,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def _do_get_inner(self):
         u = urlparse(self.path)
+        r = self._dispatch_modules("GET", u.path, parse_qs(u.query), None)
+        if r is not None:
+            if r == "sent":
+                return
+            return self._json(r[1], r[0])
+        r = self._control_routes("GET", u.path, parse_qs(u.query), None)
+        if r is not None:
+            if r == "sent":
+                return
+            return self._json(r[1], r[0])
         if u.path == "/" or u.path == "/index.html":
             return self._file("web/index.html", "text/html; charset=utf-8")
         # static assets: /assets/* -> web/ subtree only; /tests/* -> tests/ subtree only
@@ -267,6 +383,12 @@ class Handler(BaseHTTPRequestHandler):
     def _do_post_inner(self):
         u = urlparse(self.path)
         data = self._body()
+        r = self._dispatch_modules("POST", u.path, parse_qs(u.query), data)
+        if r is not None:
+            return self._json(r[1], r[0])
+        r = self._control_routes("POST", u.path, parse_qs(u.query), data)
+        if r is not None:
+            return self._json(r[1], r[0])
         if u.path == "/api/refresh":
             tool = data.get("tool")
             if not REFRESH_LOCK.acquire(blocking=False):
@@ -289,6 +411,9 @@ class Handler(BaseHTTPRequestHandler):
             if r.get("ok") and r.get("new_id"):
                 # pick up the new native session immediately
                 scan_all(STORE, tools=[target])
+                core_ops.log_op(STORE, "sessions", "migrate", "ok", item_name=sess.get("title"),
+                                item_version=r.get("lid"), target_id=None,
+                                detail={"from": sess["tool"], "to": target})
                 add_memory(STORE,
                            "会话「%s」已迁移 %s → %s（lid %s，新会话 %s）。目标工具内 resume 即可继续。"
                            % (sess.get("title") or sid[:16], sess["tool"], target,
@@ -312,12 +437,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "error": "内容不能为空"}, 400)
             mid = add_memory(STORE, body, title=data.get("title"),
                              kind=data.get("kind") or "note")
+            core_ops.log_op(STORE, "memory", "add", "ok", item_name=data.get("title"))
             return self._json({"ok": True, "id": mid})
         if u.path == "/api/memory/delete":
             mid = data.get("id")
             if not mid:
                 return self._json({"ok": False, "error": "id required"}, 400)
             ok = delete_memory(STORE, int(mid))
+            if ok:
+                core_ops.log_op(STORE, "memory", "delete", "ok", item_name=str(mid))
             return self._json({"ok": ok})
         if u.path == "/api/schedule":
             sched = json.loads(STORE.get_config("schedule") or "null") or dict(DEFAULT_SCHEDULE)

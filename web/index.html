@@ -17,13 +17,21 @@
       <span class="topbar__name">Agent Session Hub</span>
       <span class="topbar__path">~/.agent/hub/</span>
     </div>
+    <nav class="mod-nav" id="mod-nav" data-testid="mod-nav">
+      <button data-view="sessions" data-testid="nav-sessions" class="is-on">会话</button>
+      <button data-view="memory" data-testid="nav-memory">记忆</button>
+      <button data-view="skills" data-testid="nav-skills">Skills</button>
+      <button data-view="mcp" data-testid="nav-mcp">MCP</button>
+      <button data-view="ops" data-testid="nav-ops">台账</button>
+    </nav>
     <span class="topbar__spacer"></span>
     <span class="hub-badge" data-testid="engine-badge" id="engine-badge">检测引擎…</span>
     <button class="hub-btn" data-testid="schedule-open" id="schedule-open">定时任务</button>
     <button class="hub-btn hub-btn--primary" data-testid="refresh-all" id="refresh-all">⟳ 全部刷新</button>
   </header>
 
-  <!-- ===== main ===== -->
+  <!-- ===== views ===== -->
+  <div class="view is-active" id="view-sessions">
   <div class="main">
 
     <!-- left rail -->
@@ -100,6 +108,11 @@
       </div>
     </aside>
   </div>
+  </div><!-- /view-sessions -->
+  <div class="view" id="view-memory"></div>
+  <div class="view" id="view-skills"></div>
+  <div class="view" id="view-mcp"></div>
+  <div class="view" id="view-ops"></div>
 
   <!-- ===== status bar ===== -->
   <footer class="statusbar">
@@ -149,5 +162,8 @@
 
 <script src="/assets/hub-ui.js"></script>
 <script src="/assets/app.js"></script>
+<script src="/assets/views/skills.js"></script>
+<script src="/assets/views/mcp.js"></script>
+<script src="/assets/views/ops.js"></script>
 </body>
 </html>

@@ -15,6 +15,18 @@
 
 控制台：<http://127.0.0.1:8317>
 
+## 一级模块（v0.4）
+
+| 模块 | 说明 |
+|---|---|
+| 会话 | 多工具会话采集 / 浏览 / 迁移（lineage 勾连） |
+| 记忆 | hub.db + 每日 Markdown 日志 |
+| **Skills** | 远程 Git 源 → 拉取/快照 → 本地库（版本/冲突/回退）→ 分发到各目标 |
+| **MCP** | 同构管线 + JSON/TOML 配置写入 + MCP 协议握手验证 |
+| 台账 | 统一 ops 流水，按模块/状态筛选，CSV/JSON 导出 |
+
+模块注册表驱动（`/api/modules`），可独立启停；模块间零隐式依赖。
+
 ## 功能
 
 - **统一浏览**：所有工具会话一个列表，筛选 / 搜索 / 预览（含 lineage 链）
@@ -31,7 +43,7 @@
 ## 测试（精确测试体系 · 3 层）
 
 ```bash
-bash tests/run_all.sh        # 全量 5 套件：lint + API 31 + E2E 14 + 有头 3 + 沙箱 7
+bash tests/run_all.sh        # 全量 6 套件：lint + API 31 + Skills 13 + MCP 9 + E2E 16 + 有头 3 + 沙箱 7
 python3 tests/lint_styles.py # 样式规范 lint（游离色值/字号检查）
 python3 tests/test_hub.py    # API 集成（沙箱，不触碰真实会话）
 node tests/e2e.mjs           # E2E：CDP 驱动真实 Chrome（零依赖），--headed 有头模式

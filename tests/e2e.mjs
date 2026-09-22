@@ -341,6 +341,41 @@ S('preview-actions', async () => {
   return `收藏 ${L0.trim()} → ${L1.trim()} → 还原`;
 });
 
+S('module-nav-views', async () => {
+  await click('[data-testid="nav-skills"]');
+  await waitFor(`document.getElementById('view-skills').classList.contains('is-active')`, 6000, 'skills 视图');
+  await waitFor(`document.querySelectorAll('[data-testid="skills-row"]').length >= 2`, 10000, 'skills 目录行');
+  const sRows = await evaluate(`document.querySelectorAll('[data-testid="skills-row"]').length`);
+  await click('[data-testid="nav-mcp"]');
+  await waitFor(`document.querySelectorAll('[data-testid="mcp-row"]').length >= 2`, 10000, 'mcp 行');
+  const mRows = await evaluate(`document.querySelectorAll('[data-testid="mcp-row"]').length`);
+  await click('[data-testid="nav-ops"]');
+  await waitFor(`document.querySelectorAll('[data-testid="ops-row"]').length >= 5`, 10000, '台账行');
+  const opsCount = await evaluate(`document.querySelector('[data-testid="ops-count"]').textContent`);
+  await click('[data-testid="nav-memory"]');
+  await waitFor(`!!document.querySelector('[data-testid="mv-list"]')`, 6000, '记忆视图');
+  await click('[data-testid="nav-sessions"]');
+  await waitFor(`document.getElementById('view-sessions').classList.contains('is-active')`, 6000, '回到会话');
+  return `五视图切换 OK · skills ${sRows} / mcp ${mRows} / ops ${opsCount} 条`;
+});
+
+S('skills-pull-and-wizard', async () => {
+  await click('[data-testid="nav-skills"]');
+  await waitFor(`document.querySelectorAll('[data-testid="skills-row"]').length >= 2`, 10000, 'skills 行');
+  // pull from first source via UI
+  await evaluate(`document.querySelector('[data-testid^="skills-pull-"]').click()`);
+  await waitFor(`!!document.querySelector('.hub-toast--success, .hub-toast--info')`, 12000, '拉取反馈');
+  // select first row -> open distribute wizard -> cancel (no write)
+  await evaluate(`document.querySelector('[data-testid="skills-row"] input').click()`);
+  await click('[data-testid="skills-distribute"]');
+  await waitFor(`document.querySelectorAll('.wiz-targets input').length >= 1`, 6000, '分发向导目标列表');
+  const targets = await evaluate(`document.querySelectorAll('.wiz-targets input').length`);
+  await evaluate(`document.querySelector('.hub-modal__cancel').click()`);
+  await sleep(300);
+  await click('[data-testid="nav-sessions"]');
+  return `UI 拉取 OK · 分发向导展示 ${targets} 个目标（未执行写入）`;
+});
+
 S('screenshot-mobile', async () => {
   await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
