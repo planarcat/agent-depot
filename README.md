@@ -43,7 +43,8 @@
 ## 测试（精确测试体系 · 3 层）
 
 ```bash
-bash tests/run_all.sh        # 全量 6 套件：lint + API 31 + Skills 13 + MCP 9 + E2E 16 + 有头 3 + 沙箱 7
+bash tests/run_all.sh        # 全量 6 套件 / 91 项：lint + API 35 + Skills 13 + MCP 9 + Extras 8 + E2E 16 + 有头 3 + 沙箱 7
+python3 scripts/drill_v04.py # 干净环境端到端演练（源→拉取→分发→回退→台账，8 步）
 python3 tests/lint_styles.py # 样式规范 lint（游离色值/字号检查）
 python3 tests/test_hub.py    # API 集成（沙箱，不触碰真实会话）
 node tests/e2e.mjs           # E2E：CDP 驱动真实 Chrome（零依赖），--headed 有头模式

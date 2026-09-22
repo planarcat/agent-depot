@@ -18,7 +18,9 @@ bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E �
 - **MCP 握手验证**：stdio initialize+tools/list、http 探测，结果记台账
 - **演示闭环**（可复现）：`bash scripts/make-demo-sources.sh` 重建演示源 →
   `hub-demo-src-skills` / `hub-demo-src-mcp` → 本地库 → `hub-demo-target-a/b` 两项目仓库
-- 测试：新增 Skills 13 + MCP 9 集成用例；E2E +2 场景（五视图/拉取向导）；全量 79 项全绿
+- **建议项 S1–S8 全部完成**：会话统计面板+批量导出 zip · 记忆搜索+导出（md/json） · **定时拉取**（源表单 poll_min，调度器自动执行入台账） · 一键更新全部 · doctor · 备份 · 演示源
+- 测试：Skills 13 + MCP 9 + Extras 8 + API 35；E2E +2 场景；全量 **91 项全绿** + lint
+- 演练：`python3 scripts/drill_v04.py`（干净环境 8 步：注册→拉取→更新→分发×2→幂等→升级→回退→台账）
 - 设计评审：`docs/design/v0.4-skills-mcp-modules.md`（含实现对照 §13）
 
 ## v0.3 增量（23:30 前完成第二部分自我复盘开发）
