@@ -2,6 +2,7 @@
 /* ====================================================================
    失败场景 / 边界 E2E —— 在沙箱服务器上运行，不触碰真实数据。
    覆盖：空态 · casr 缺失 · casr 报错 · 空内容校验 · 100 行渲染性能 · 长标题
+        · 工具注册表（添加 / 校验 / 停用 / 移除）
    ==================================================================== */
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -83,6 +84,7 @@ async function scenario(name, fn) {
 
 /* ---------- main ---------- */
 let serverProc, cdp;
+let sbxTmp = '';
 const failures = () => results.filter(r => !r.ok);
 
 (async () => {
@@ -90,9 +92,28 @@ const failures = () => results.filter(r => !r.ok);
   serverProc = spawn('python3', [join(__dirname, 'sandbox_server.py'), '--port', String(PORT), '--strip-casr', '--rows', '100'],
                      { stdio: ['ignore', 'pipe', 'pipe'] });
   let ready = false;
-  serverProc.stdout.on('data', d => { if (String(d).includes('READY')) ready = true; });
+  serverProc.stdout.on('data', d => {
+    const m = String(d).match(/READY port=\d+ tmp=(.+)/);
+    if (m) { sbxTmp = m[1].trim(); ready = true; }
+  });
   for (let i = 0; i < 50 && !ready; i++) await sleep(200);
   if (!ready) { console.error('sandbox server 未就绪'); process.exit(2); }
+
+  /* 工具注册表夹具：pi-agent JSONL（写入沙箱临时目录，不触碰真实数据） */
+  const piFixtureDir = join(sbxTmp, 'pi-fixture');
+  mkdirSync(piFixtureDir, { recursive: true });
+  const piLines = [
+    { type: 'session', id: '019f0000-1111-7222-8333-444455556666',
+      timestamp: '2026-09-21T10:00:00.000Z', cwd: '/tmp/sbx-pi' },
+    { type: 'message', timestamp: '2026-09-21T10:00:01.000Z',
+      message: { role: 'user', content: [{ type: 'text', text: '沙箱 Pi 会话' }] } },
+    { type: 'message', timestamp: '2026-09-21T10:00:02.000Z',
+      message: { role: 'assistant', content: [{ type: 'text', text: '收到' }] } },
+    { type: 'message', timestamp: '2026-09-21T10:00:03.000Z',
+      message: { role: 'toolResult', toolName: 'bash', content: [{ type: 'text', text: 'ok' }] } },
+  ];
+  writeFileSync(join(piFixtureDir, '2026-09-21T10-00-00-000Z_019f0000-1111-7222-8333-444455556666.jsonl'),
+    piLines.map(o => JSON.stringify(o)).join('\n') + '\n');
 
   /* launch chrome headless */
   const profile = join(tmpdirOverride(), 'hub-sbx-profile');
@@ -179,6 +200,65 @@ const failures = () => results.filter(r => !r.ok);
     if (overflow > 391) throw new Error('移动端溢出: ' + overflow);
     await cdp.send('Emulation.clearDeviceMetricsOverride');
     return '沙箱移动端 390px 无溢出';
+  });
+
+  S('tools-add-validation', async () => {
+    await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
+    await click('[data-testid="tool-add"]');
+    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '工具弹窗');
+    await click('[data-testid="tool-save"]');
+    await waitFor(`!!document.querySelector('.hub-toast--error')`, 6000, '校验错误 toast');
+    const txt = await evaluate(`document.querySelector('.hub-toast--error').textContent`);
+    if (!txt.includes('名称不能为空')) throw new Error('错误文案不符: ' + txt);
+    await click('[data-testid="tool-close"]');
+    return '空表单被拦截：' + txt.slice(0, 24);
+  });
+
+  S('tools-add-and-refresh', async () => {
+    await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
+    await click('[data-testid="tool-add"]');
+    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '工具弹窗');
+    await evaluate(`(() => {
+      const set = (id, v) => { const el = document.getElementById(id); el.value = v;
+        el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); };
+      set('tool-name', 'Pi Sandbox');
+      set('tool-adapter', 'pi');
+      set('tool-root', ${JSON.stringify(join(sbxTmp, 'pi-fixture'))});
+    })()`);
+    await click('[data-testid="tool-save"]');
+    await waitFor(`!!document.querySelector('.hub-toast--success')`, 8000, '添加成功 toast');
+    await waitFor(`!!document.querySelector('[data-testid="tool-card-pi-sandbox"]')`, 6000, '新卡片出现');
+    await click('[data-testid="refresh-pi-sandbox"]');
+    await waitFor(`document.querySelector('[data-testid="count-pi-sandbox"]') && document.querySelector('[data-testid="count-pi-sandbox"]').textContent === '1'`, 10000, '会话计数=1');
+    const mc = await evaluate(`(window.hubApp.state.sessions.find(s => s.tool === 'pi-sandbox') || {}).msg_count`);
+    if (mc !== 3) throw new Error('消息数应为 3，实际 ' + mc);
+    const feed = await evaluate(`!!document.querySelector('[data-testid="filter-pi-sandbox"]')`);
+    if (!feed) throw new Error('动态筛选按钮缺失');
+    await shot('sandbox-tool-added.png');
+    return '添加 → 采集 1 会话 / 3 消息 → 动态筛选出现';
+  });
+
+  S('tools-disable-and-remove', async () => {
+    await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
+    await click('[data-testid="manage-pi-sandbox"]');
+    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '设置弹窗');
+    await click('[data-testid="tool-enabled"]');
+    await click('[data-testid="tool-save"]');
+    await waitFor(`!!document.querySelector('.hub-toast--success')`, 8000, '停用保存 toast');
+    await waitFor(`document.querySelector('[data-testid="tool-card-pi-sandbox"]').classList.contains('is-off')`, 6000, '卡片停用态');
+    const kept = await evaluate(`window.hubApp.state.sessions.some(s => s.tool === 'pi-sandbox')`);
+    if (!kept) throw new Error('停用后会话不应消失');
+    await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
+    await click('[data-testid="manage-pi-sandbox"]');
+    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '设置弹窗');
+    await click('[data-testid="tool-delete"]');
+    await waitFor(`!!document.querySelector('.hub-modal__ok')`, 4000, '移除确认弹层');
+    await click('.hub-modal__ok');
+    await waitFor(`!!document.querySelector('.hub-toast--success')`, 8000, '移除 toast');
+    await waitFor(`!document.querySelector('[data-testid="tool-card-pi-sandbox"]')`, 6000, '卡片消失');
+    const still = await evaluate(`window.hubApp.state.sessions.some(s => s.tool === 'pi-sandbox')`);
+    if (!still) throw new Error('移除后会话数据应保留');
+    return '停用→数据保留→移除→卡片消失、数据仍保留';
   });
 
   for (const s of scenarios) await scenario(s.name, s.fn);

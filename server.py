@@ -4,7 +4,8 @@
 Zero-dependency (stdlib only). Serves the web UI and a JSON API:
   GET  /api/state                 -> tools + sessions + ledger + engine status
   GET  /api/session?id=...        -> session detail + messages
-  POST /api/refresh               -> {tool?: "claude"|"codex"|"opencode"} incremental scan
+  POST /api/refresh               -> {tool?: <tool id>} incremental scan
+  GET/POST/PATCH/DELETE /api/tools -> 工具注册表（添加 / 启停 / 改名 / 移除）
   POST /api/migrate               -> {sid, target} migrate via casr
   GET/POST /api/schedule          -> per-tool schedule config (enabled, interval_min)
   GET  /                          -> web/index.html
@@ -32,6 +33,7 @@ from hub.store import (Store, now_iso, ensure_lineage_schema,   # noqa: E402
                        session_stats, search_memories, export_memories,
                        export_batch)
 from hub.scanners import scan_all             # noqa: E402
+from hub import tools_registry               # noqa: E402
 from hub import migrator                      # noqa: E402
 from hub.core import registry as mod_registry  # noqa: E402
 from hub.core import schema as core_schema     # noqa: E402
@@ -184,6 +186,46 @@ class Handler(BaseHTTPRequestHandler):
             on = bool(body.get("enabled"))
             mod_registry.set_enabled(STORE, mid, on)
             return 200, {"ok": True, "modules": mod_registry.snapshot(STORE)}
+        if path == "/api/tools" and method == "GET":
+            counts = STORE.counts_by_tool()
+            return 200, {"ok": True,
+                         "tools": tools_registry.public_list(STORE, counts),
+                         "adapters": [dict(id=k, **v) for k, v in tools_registry.ADAPTERS.items()]}
+        if path == "/api/tools" and method == "POST":
+            try:
+                entry, warning = tools_registry.add_tool(
+                    STORE, body.get("name"), body.get("adapter"), body.get("root"))
+            except ValueError as e:
+                return 400, {"ok": False, "error": str(e)}
+            core_ops.log_op(STORE, "tools", "add", "ok", item_name=entry["name"],
+                            detail={"adapter": entry["adapter"], "root": entry["root"]})
+            STORE.log("config", {"tools": "add:" + entry["id"]})
+            return 200, {"ok": True, "tool": entry, "warning": warning}
+        if path.startswith("/api/tools/") and method in ("PATCH", "DELETE"):
+            tid = path[len("/api/tools/"):]
+            if method == "PATCH":
+                try:
+                    t = tools_registry.update_tool(STORE, tid, body)
+                except KeyError:
+                    return 404, {"ok": False, "error": "工具不存在：%s" % tid}
+                except ValueError as e:
+                    return 400, {"ok": False, "error": str(e)}
+                keys = [k for k in ("name", "enabled", "root")
+                        if isinstance(body, dict) and k in body]
+                core_ops.log_op(STORE, "tools", "update", "ok", item_name=t["name"],
+                                detail={"id": tid, "keys": keys})
+                return 200, {"ok": True, "tool": {"id": t["id"], "name": t["name"],
+                                                  "enabled": bool(t.get("enabled", True)),
+                                                  "root": t.get("root")}}
+            try:
+                t = tools_registry.remove_tool(STORE, tid)
+            except KeyError:
+                return 404, {"ok": False, "error": "工具不存在：%s" % tid}
+            except ValueError as e:
+                return 400, {"ok": False, "error": str(e)}
+            core_ops.log_op(STORE, "tools", "remove", "ok", item_name=t["name"])
+            STORE.log("config", {"tools": "remove:" + tid})
+            return 200, {"ok": True, "removed": tid}
         if path == "/api/ops" and method == "GET":
             def g(k, d=None):
                 v = query.get(k)
@@ -229,6 +271,11 @@ class Handler(BaseHTTPRequestHandler):
             for m in mod_registry.snapshot(STORE):
                 checks.append({"name": "module:" + m["id"], "ok": True,
                                "detail": "enabled" if m["enabled"] else "disabled"})
+            # registered tools（自定义路径可用性）
+            for t in tools_registry.public_list(STORE, {}):
+                if t.get("root") and t.get("root_exists") is False:
+                    checks.append({"name": "tool:" + t["id"], "ok": False,
+                                   "detail": "路径不存在：%s" % t["root"]})
             # sources health
             with STORE.lock:
                 srcs = STORE.db.execute("SELECT kind, name, last_error FROM sources").fetchall()
@@ -348,6 +395,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_subtree("tests", u.path[len("/tests/"):])
         if u.path == "/api/state":
             raw = STORE.get_config("schedule")
+            counts = STORE.counts_by_tool()
             sessions = STORE.list_sessions()
             for s in sessions:
                 lin = lineage_info(STORE, s["tool"], s["sid"])
@@ -355,7 +403,8 @@ class Handler(BaseHTTPRequestHandler):
                     s["lid"] = lin["lid"]
                     s["migrations"] = lin["migrations"]
             return self._json({
-                "tools": STORE.counts_by_tool(),
+                "tools": counts,
+                "tool_list": tools_registry.public_list(STORE, counts),
                 "sessions": sessions,
                 "ledger": STORE.ledger_recent(20),
                 "migrations": migration_history(STORE, limit=20),
@@ -479,6 +528,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "not found"}, 404)
         if u.path == "/api/refresh":
             tool = data.get("tool")
+            if tool and not tools_registry.is_active(STORE, tool):
+                return self._json({"ok": False, "error": "工具不存在或已停用：%s" % tool}, 400)
             if not REFRESH_LOCK.acquire(blocking=False):
                 return self._json({"ok": False, "error": "刷新正在进行中"}, 409)
             try:
@@ -550,7 +601,9 @@ class Handler(BaseHTTPRequestHandler):
             for k, v in DEFAULT_SCHEDULE.items():
                 sched.setdefault(k, dict(v))
             tool = data.get("tool")
-            if tool in sched:
+            valid_scopes = {"all"} | {t["id"] for t in tools_registry.load_tools(STORE)}
+            if tool in valid_scopes:
+                sched.setdefault(tool, {"enabled": False, "interval_min": 30})
                 if "enabled" in data:
                     sched[tool]["enabled"] = bool(data["enabled"])
                 if "interval_min" in data:
@@ -560,6 +613,8 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json({"ok": False,
                                            "error": "interval_min 必须是正整数"}, 400)
                 sched[tool]["interval_min"] = max(1, int(sched[tool].get("interval_min", 30)))
+            else:
+                return self._json({"ok": False, "error": "未知范围：%s" % (tool or "")}, 400)
             STORE.set_config("schedule", json.dumps(sched))
             STORE.log("config", {"schedule": tool, "value": data})
             return self._json({"ok": True, "schedule": sched})

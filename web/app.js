@@ -12,6 +12,9 @@ window.__hubErrors = [];
 window.addEventListener('error', e => window.__hubErrors.push(String(e.message)));
 
 const TOOL_NAMES = { claude: 'Claude Code', codex: 'Codex CLI', opencode: 'OpenCode' };
+let TOOL_LIST = [];
+let ADAPTER_LIST = [];
+function syncToolMap() { for (const t of TOOL_LIST) TOOL_NAMES[t.id] = t.name; }
 
 /* ---------- fetch helpers ---------- */
 async function api(path, opts) {
@@ -33,6 +36,8 @@ async function loadState() {
   const r = await api('/api/state');
   if (r.status !== 200) { renderLoadError(r.data.error); return; }
   Object.assign(state, r.data);
+  TOOL_LIST = state.tool_list || [];
+  syncToolMap();
   const valid = new Set(state.sessions.map(s => s.sid));
   [...state.selected].forEach(sid => { if (!valid.has(sid)) state.selected.delete(sid); });
   renderAll();
@@ -43,7 +48,7 @@ function renderLoadError(msg) {
 }
 
 function renderAll() {
-  renderToolCards(); renderRows(); renderDrops(); renderLedger();
+  renderToolCards(); renderFilterSeg(); renderRows(); renderDrops(); renderLedger();
   renderMemories(); renderMigrations(); renderStatus(); renderSelCount();
 }
 
@@ -51,29 +56,55 @@ function renderAll() {
 function renderToolCards() {
   const box = document.getElementById('tool-cards');
   box.innerHTML = '';
-  for (const tool of ['claude', 'codex', 'opencode']) {
-    const info = state.tools[tool] || { count: 0, latest: null };
-    const sched = (state.schedule || {})[tool] || { enabled: false, interval_min: 30 };
+  for (const t of TOOL_LIST) {
+    const info = (state.tools || {})[t.id] || { count: 0, latest: null };
+    const sched = (state.schedule || {})[t.id] || { enabled: false, interval_min: 30 };
     const card = document.createElement('div');
-    card.className = 'tool-card' + (state.filter === tool ? ' is-active' : '');
-    card.dataset.testid = 'tool-card-' + tool;
-    card.onclick = () => setFilter(tool);
+    card.className = 'tool-card' + (state.filter === t.id ? ' is-active' : '') + (t.enabled ? '' : ' is-off');
+    card.dataset.testid = 'tool-card-' + t.id;
+    card.onclick = () => setFilter(t.id);
+    const warn = !t.enabled ? '已停用' : (t.root && t.root_exists === false ? '路径不可用' : '');
     card.innerHTML = `
       <div class="tool-card__head">
-        <span class="tool-dot tool-dot--${tool}"></span>
-        <span class="tool-card__name">${TOOL_NAMES[tool]}</span>
-        <span class="tool-card__count" data-testid="count-${tool}">${info.count}</span>
+        <span class="tool-dot tool-dot--p${t.color || 1}"></span>
+        <span class="tool-card__name">${esc(t.name)}</span>
+        <span class="tool-card__count" data-testid="count-${t.id}">${info.count}</span>
       </div>
-      <div class="tool-card__meta">最近活动 <b>${esc(fmtTime(info.latest))}</b></div>
+      <div class="tool-card__meta">最近活动 <b>${esc(fmtTime(info.latest))}</b>${warn ? ' · <b>' + esc(warn) + '</b>' : ''}</div>
       <div class="tool-card__acts">
-        <button class="hub-btn btn-sm" data-testid="refresh-${tool}">⟳ 刷新</button>
+        <button class="hub-btn btn-sm" data-testid="refresh-${t.id}" ${t.enabled ? '' : 'disabled'}>⟳ 刷新</button>
+        <button class="hub-btn btn-sm" data-testid="manage-${t.id}">设置</button>
         <span class="tool-card__sched">${sched.enabled ? '定时 ' + sched.interval_min + 'm' : ''}</span>
       </div>`;
-    card.querySelector('[data-testid="refresh-' + tool + '"]').onclick = ev => {
-      ev.stopPropagation(); refreshOne(tool, ev.currentTarget);
+    card.querySelector('[data-testid="refresh-' + t.id + '"]').onclick = ev => {
+      ev.stopPropagation();
+      if (t.enabled) refreshOne(t.id, ev.currentTarget);
+    };
+    card.querySelector('[data-testid="manage-' + t.id + '"]').onclick = ev => {
+      ev.stopPropagation(); openToolModal(t.id);
     };
     box.appendChild(card);
   }
+}
+
+/* ---------- filter seg（内置 + 动态自定义工具） ---------- */
+let lastSegSig = '__init__';
+function renderFilterSeg() {
+  const seg = document.getElementById('filter-seg');
+  const customs = TOOL_LIST.filter(t => !['claude', 'codex', 'opencode'].includes(t.id));
+  const sig = customs.map(t => t.id).join(',');
+  if (sig === lastSegSig) return;
+  lastSegSig = sig;
+  const on = f => state.filter === f ? ' class="is-on"' : '';
+  seg.innerHTML = [
+    `<button data-filter="all" data-testid="filter-all"${on('all')}>全部</button>`,
+    `<button data-filter="claude" data-testid="filter-claude"${on('claude')}>Claude</button>`,
+    `<button data-filter="codex" data-testid="filter-codex"${on('codex')}>Codex</button>`,
+    `<button data-filter="opencode" data-testid="filter-opencode"${on('opencode')}>OpenCode</button>`,
+    ...customs.map(t => `<button data-filter="${esc(t.id)}" data-testid="filter-${esc(t.id)}"${on(t.id)}>${esc(t.name)}</button>`),
+    `<button data-filter="starred" data-testid="filter-starred"${on('starred')}>★ 收藏</button>`,
+  ].join('');
+  seg.querySelectorAll('button').forEach(b => { b.onclick = () => setFilter(b.dataset.filter); });
 }
 
 /* ---------- rows ---------- */
@@ -254,11 +285,15 @@ async function refreshOne(tool, btn) {
 }
 
 /* ---------- schedule ---------- */
-const SCHED_SCOPES = [['all', '全部工具'], ['claude', 'Claude Code'], ['codex', 'Codex CLI'], ['opencode', 'OpenCode']];
+function schedScopes() {
+  const list = [['all', '全部工具']];
+  for (const t of TOOL_LIST) if (t.enabled) list.push([t.id, t.name]);
+  return list;
+}
 const INTERVALS = [5, 10, 15, 30, 60, 180];
 function openSchedule() {
   const body = document.getElementById('sched-body');
-  body.innerHTML = SCHED_SCOPES.map(([k, name]) => {
+  body.innerHTML = schedScopes().map(([k, name]) => {
     const cfg = (state.schedule || {})[k] || { enabled: false, interval_min: 30 };
     return `<div class="sched__row" data-testid="sched-row-${k}">
       <span class="sched__name">${name}</span>
@@ -277,7 +312,7 @@ function openSchedule() {
 function closeSchedule() { document.getElementById('sched-overlay').classList.remove('is-open'); }
 async function saveSchedule(btn) {
   btn.classList.add('is-loading');
-  for (const [k] of SCHED_SCOPES) {
+  for (const [k] of schedScopes()) {
     const row = document.querySelector(`[data-testid="sched-row-${k}"]`);
     const enabled = row.querySelector('.switch').classList.contains('is-on');
     const interval = parseInt(row.querySelector('select').value, 10);
@@ -287,6 +322,88 @@ async function saveSchedule(btn) {
   HubUI.toast('定时任务已保存', 'success');
   closeSchedule();
   await loadState();
+}
+
+/* ---------- tools registry（v0.5.1：添加 / 设置 / 停用 / 移除） ---------- */
+async function ensureAdapters() {
+  if (ADAPTER_LIST.length) return;
+  try {
+    const ar = await api('/api/tools');
+    if (ar.data && Array.isArray(ar.data.adapters)) ADAPTER_LIST = ar.data.adapters;
+  } catch (e) { /* 降级：仍可用默认空列表 */ }
+}
+function adapterDef(id) { return ADAPTER_LIST.find(a => a.id === id) || {}; }
+function updRootHint() {
+  const a = adapterDef(document.getElementById('tool-adapter').value);
+  document.getElementById('tool-root-hint').textContent =
+    a.root_hint ? '路径示例：' + a.root_hint + '（绝对路径，可用 ~）' : '';
+}
+let toolModalMode = 'add';
+let toolModalId = null;
+async function openToolModal(toolId) {
+  await ensureAdapters();
+  toolModalMode = toolId ? 'edit' : 'add';
+  toolModalId = toolId || null;
+  const t = toolId ? TOOL_LIST.find(x => x.id === toolId) : null;
+  document.getElementById('tool-modal-title').textContent = t ? '工具设置 · ' + t.name : '添加工具';
+  document.getElementById('tool-modal-hint').textContent = t
+    ? '可改名 / 停用；移除仅断开登记，已采集数据保留。'
+    : '登记一个新工具后，它会被纳入采集、筛选与定时刷新。';
+  const nameEl = document.getElementById('tool-name');
+  const adEl = document.getElementById('tool-adapter');
+  const rootEl = document.getElementById('tool-root');
+  adEl.innerHTML = ADAPTER_LIST.map(a =>
+    `<option value="${esc(a.id)}">${esc(a.label || a.id)}</option>`).join('');
+  nameEl.value = t ? t.name : '';
+  adEl.value = t ? t.adapter : (ADAPTER_LIST[0] ? ADAPTER_LIST[0].id : 'claude');
+  rootEl.value = (t && t.root) ? t.root : '';
+  const isBuiltin = !!(t && t.builtin);
+  adEl.disabled = !!t;
+  rootEl.disabled = isBuiltin;
+  document.getElementById('tool-enable-row').style.display = t ? '' : 'none';
+  document.getElementById('tool-enabled').classList.toggle('is-on', t ? !!t.enabled : true);
+  document.getElementById('tool-delete').style.display = (t && !t.builtin) ? '' : 'none';
+  updRootHint();
+  document.getElementById('tool-overlay').classList.add('is-open');
+}
+function closeToolModal() { document.getElementById('tool-overlay').classList.remove('is-open'); }
+async function submitTool(btn) {
+  const name = document.getElementById('tool-name').value.trim();
+  const adapter = document.getElementById('tool-adapter').value;
+  const rootEl = document.getElementById('tool-root');
+  const root = rootEl.value.trim();
+  if (!name) { HubUI.toast('名称不能为空', 'error'); return; }
+  if (!rootEl.disabled && !root) { HubUI.toast('路径不能为空', 'error'); return; }
+  btn.classList.add('is-loading');
+  let r;
+  if (toolModalMode === 'add') {
+    r = await post('/api/tools', { name, adapter, root });
+  } else {
+    const patch = { name, enabled: document.getElementById('tool-enabled').classList.contains('is-on') };
+    if (!rootEl.disabled) patch.root = root;
+    r = await api('/api/tools/' + encodeURIComponent(toolModalId), {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+  }
+  btn.classList.remove('is-loading');
+  if (r.data.ok) {
+    HubUI.toast(toolModalMode === 'add' ? '工具已添加' : '工具已更新', 'success');
+    if (r.data.warning) HubUI.toast(r.data.warning, 'warn', 5600);
+    closeToolModal();
+    await loadState();
+  } else {
+    HubUI.toast((toolModalMode === 'add' ? '添加失败：' : '更新失败：') + (r.data.error || ''), 'error', 5600);
+  }
+}
+async function deleteTool() {
+  HubUI.confirm('移除工具',
+    '将断开该工具的登记（不再采集）。<br>已采集的会话与台账<b>不会删除</b>，可随时重新添加。',
+    async () => {
+      const r = await api('/api/tools/' + encodeURIComponent(toolModalId), { method: 'DELETE' });
+      if (r.data.ok) { HubUI.toast('已移除工具', 'success'); closeToolModal(); await loadState(); }
+      else HubUI.toast('移除失败：' + (r.data.error || ''), 'error');
+    }, { confirmText: '移除', danger: true });
 }
 
 /* ---------- memory ---------- */
@@ -420,7 +537,8 @@ function hideSearchPanel() {
 function resumeCommand(s) {
   if (s.tool === 'claude') return 'claude --resume ' + s.sid;
   if (s.tool === 'codex') return 'codex resume ' + s.sid;
-  return 'cd "' + (s.cwd || '') + '" && opencode   # 在会话列表中选择 ' + s.sid.slice(0, 12);
+  if (s.tool === 'opencode') return 'cd "' + (s.cwd || '') + '" && opencode   # 在会话列表中选择 ' + s.sid.slice(0, 12);
+  return '# 在 ' + TOOL_NAMES[s.tool] + ' 中继续会话 ' + s.sid.slice(0, 12) + (s.cwd ? '（目录：' + s.cwd + '）' : '');
 }
 async function copyText(text) {
   try {
@@ -636,6 +754,17 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('sched-save').onclick = e => saveSchedule(e.currentTarget);
   document.getElementById('sched-overlay').addEventListener('click', e => {
     if (e.target.id === 'sched-overlay') closeSchedule();
+  });
+  document.getElementById('tool-add').onclick = () => openToolModal(null);
+  document.getElementById('tool-close').onclick = closeToolModal;
+  document.getElementById('tool-cancel').onclick = closeToolModal;
+  document.getElementById('tool-save').onclick = e => submitTool(e.currentTarget);
+  document.getElementById('tool-delete').onclick = () => deleteTool();
+  document.getElementById('tool-adapter').onchange = updRootHint;
+  document.getElementById('tool-enabled').onclick = e =>
+    e.currentTarget.classList.toggle('is-on');
+  document.getElementById('tool-overlay').addEventListener('click', e => {
+    if (e.target.id === 'tool-overlay') closeToolModal();
   });
   let searchTimer = null;
   document.getElementById('search-input').oninput = e => {

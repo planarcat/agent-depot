@@ -36,8 +36,9 @@
 - **导出 Markdown（v0.3）**：任意会话一键导出为可读文档（`~/.agent/hub/exports/`）
 - **收藏（v0.3）**：会话星标 + 「★ 收藏」筛选；预览页可复制 resume 命令一键续跑
 - **增量采集**：JSONL 按字节 offset tail；OpenCode SQLite 只读；内容哈希去重、重扫幂等
-- **定时刷新**：4 个范围（全部 + 3 工具）× 开关 × 间隔编辑，配置持久化，执行入台账
+- **定时刷新**：范围随工具注册表动态（全部 + 各启用工具）× 开关 × 间隔编辑，配置持久化，执行入台账
 - **跨工具迁移**：拖拽 / 点选 → casr 原生格式写回（原子 + 读回验证），迁移副本自动采集回 hub
+- **工具注册表（v0.5.1）**：左侧「＋ 添加工具」登记新采集工具（Claude / Codex / OpenCode / Pi-Agent / Cursor 五种格式模板 + 自定义路径）；可改名 / 停用 / 移除（移除仅断开登记，数据保留）；面板、筛选、定时、刷新全动态
 - **lineage 勾连**：每条会话唯一编号 `lx-NNNN`，源与副本双向可查；重复迁移自动拦截；支持「同步更新」生成修订副本
 - **记忆区**：`~/.agent/hub/memory/` 每日 Markdown 日志 + 数据库双写
 - **台账**：所有操作可审计（`ledger` 表）
@@ -45,7 +46,7 @@
 ## 测试（精确测试体系 · 3 层）
 
 ```bash
-bash tests/run_all.sh        # 全量 6 套件 / 91 项：lint + API 35 + Skills 13 + MCP 9 + Extras 8 + E2E 16 + 有头 3 + 沙箱 7
+bash tests/run_all.sh        # 全量 6 套件 / 102 项：lint + API 43 + Skills 13 + MCP 9 + Extras 8 + E2E 16 + 有头 3 + 沙箱 10
 python3 scripts/drill_v04.py # 干净环境端到端演练（源→拉取→分发→回退→台账，8 步）
 python3 tests/lint_styles.py # 样式规范 lint（游离色值/字号检查）
 python3 tests/test_hub.py    # API 集成（沙箱，不触碰真实会话）
@@ -91,6 +92,7 @@ agent-depot/
 - [x] macOS 桌面壳（Tauri 原生窗口；`desktop/` 工程，`bash scripts/make-app.sh` 重建；零依赖薄壳保留为回退）
 - [ ] 真·增量回流（需先解决原生会话文件的追加写风险；建议向 casr 上游提需求）
 - [x] 与 agentmemory 接线（三工具 MCP 已连接，viewer :3113）
+- [x] 工具注册表（v0.5.1）：Pi-Agent / Cursor 首批接入，可添加 / 停用 / 移除
 
 ## 相关
 

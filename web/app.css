@@ -326,3 +326,21 @@ body {
 .stat-bar { display: block; height: 100%; background: var(--c-accent-soft);
   border-right: 2px solid var(--c-accent); border-radius: 5px 0 0 5px; }
 .stat-n { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--c-ink-2); }
+
+/* ---------- v0.5.1: 工具注册表 ---------- */
+.rail__add { width: 100%; margin-top: var(--sp-2); }
+.tool-card.is-off { opacity: .55; }
+.hub-btn:disabled { opacity: .5; cursor: default; }
+.tool-dot--p1 { background: var(--c-tool-claude); }
+.tool-dot--p2 { background: var(--c-tool-codex); }
+.tool-dot--p3 { background: var(--c-tool-opencode); }
+.tool-dot--p4 { background: var(--c-tool-p4); }
+.tool-dot--p5 { background: var(--c-tool-p5); }
+.tool-dot--p6 { background: var(--c-tool-p6); }
+.tool-form { display: grid; gap: var(--sp-3); }
+.tool-form label > span:first-child { display: block; font-size: var(--fs-s); color: var(--c-ink-4); margin-bottom: var(--sp-1); }
+.tool-form select { width: 100%; font-size: var(--fs-body); padding: 6px var(--sp-2); border: 1px solid var(--c-line); border-radius: var(--r-s); background: var(--c-surface-2); color: var(--c-ink); }
+.tool-hint { font-size: var(--fs-xs); color: var(--c-ink-4); line-height: 1.6; }
+.tool-enable-row { display: flex; align-items: center; gap: var(--sp-3); }
+.tool-enable-row .switch { margin-left: auto; }
+.tool-foot-spacer { flex: 1; }

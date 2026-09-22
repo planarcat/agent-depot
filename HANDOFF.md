@@ -108,6 +108,14 @@ bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E �
 2. 如需要：`agentmemory remove --keep-data`/重连可逆；
 3. 长期：修订副本→真增量（需先解决原生追加写的格式风险，建议先给 casr 上游提需求）。
 
+## v0.5.1 工具注册表（2026-09-22）
+
+- 采集工具从写死三只 → **注册表驱动**：`/api/tools` CRUD；左侧「＋ 添加工具」；五种格式模板（Claude / Codex / OpenCode / Pi-Agent / Cursor）+ 自定义路径；可改名 / 停用 / 移除（移除仅断开登记、数据保留；内置三只可停用不可删）。
+- 全链路动态化：面板卡片 / 筛选 / 定时范围 / 刷新 / 计数 / 来源标签随注册表；未知定时范围 → 400（原为静默忽略）。
+- 新适配器：**Pi-Agent**（`~/.pi/agent/sessions/*.jsonl`，字节增量 tail）与 **Cursor**（`globalStorage/state.vscdb` 的 `composerData:` + `bubbleId:` 只读解析，richText 展平）。
+- 实机接入：Pi-Agent 38 会话 / 4989 消息；Cursor 9 composer / 637 消息。
+- 测试：全量 **102 项 + lint 全绿**（API 43 · 模块 30 · E2E 无头 16 · 有头 3 · 沙箱 10）。
+
 ## 决策记录（执行期间无反馈，按保守默认推进）
 
 1. **迁移=新副本、绝不写入原生会话文件**——最保守且与 casr 官方语义一致（官方明确"not a live sync"）；

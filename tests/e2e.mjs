@@ -210,7 +210,7 @@ S('schedule-flow', async () => {
   await click('[data-testid="schedule-open"]');
   await waitFor(`document.getElementById('sched-overlay').classList.contains('is-open')`, 4000, '调度面板');
   const rowN = await evaluate(`document.querySelectorAll('[data-testid^="sched-row-"]').length`);
-  if (rowN !== 4) throw new Error('调度范围应为 4，实际 ' + rowN);
+  if (rowN < 4) throw new Error('调度范围应 ≥ 4，实际 ' + rowN);
   await click('[data-testid="sched-toggle-claude"]');
   await evaluate(`(() => { const s = document.querySelector('[data-testid="sched-interval-claude"]'); s.value = '15'; return true; })()`);
   await click('[data-testid="sched-save"]');

@@ -418,12 +418,15 @@ class EdgeTest(HubSandbox, unittest.TestCase):
         s, d = req("GET", "/api/schedule")
         self.assertGreaterEqual(int(d["claude"]["interval_min"]), 1)
 
-    def test_e13_schedule_unknown_tool_ignored(self):
+    def test_e13_schedule_unknown_scope_rejected(self):
+        """v0.5.1: 未知范围不再静默忽略，返回 400 且配置不变。"""
         s, before = req("GET", "/api/schedule")
         s, d = req("POST", "/api/schedule", {"tool": "nonexistent", "enabled": True})
-        self.assertEqual(s, 200)
+        self.assertEqual(s, 400)
+        self.assertFalse(d["ok"])
         s, after = req("GET", "/api/schedule")
         self.assertNotIn("nonexistent", after)
+        self.assertEqual(before, after)
 
     def test_e14_sql_injection_safe(self):
         """q parameter with SQL meta-characters must be inert (URL-encoded)."""
@@ -623,5 +626,157 @@ class V4Test(HubSandbox, unittest.TestCase):
         self.assertFalse(any(x["id"] == sid for x in d["sources"]))
 
 
+
+
+class ToolsTest(HubSandbox, unittest.TestCase):
+    """v0.5.1: 工具注册表 —— 添加 / 扫描 / 校验 / 停用 / 移除 / 动态范围。"""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # pi-agent 夹具（JSONL）
+        cls.pi_dir = os.path.join(cls.tmp, "pi-fixture")
+        os.makedirs(cls.pi_dir)
+        cls.pi_sid = "019f0000-1111-7222-8333-444455556666"
+        cls.pi_file = os.path.join(cls.pi_dir, "2026-09-21T10-00-00-000Z_" + cls.pi_sid + ".jsonl")
+        lines = [
+            {"type": "session", "id": cls.pi_sid, "timestamp": "2026-09-21T10:00:00.000Z", "cwd": "/tmp/proj-pi"},
+            {"type": "message", "timestamp": "2026-09-21T10:00:01.000Z",
+             "message": {"role": "user", "content": [{"type": "text", "text": "查一下构建产物大小"}]}},
+            {"type": "message", "timestamp": "2026-09-21T10:00:02.000Z",
+             "message": {"role": "assistant",
+                         "content": [{"type": "text", "text": "产物约 10 MB。"},
+                                     {"type": "toolCall", "name": "bash",
+                                      "arguments": {"cmd": "du -sh dist"}}]}},
+            {"type": "message", "timestamp": "2026-09-21T10:00:03.000Z",
+             "message": {"role": "toolResult", "toolName": "bash",
+                         "content": [{"type": "text", "text": "10M dist"}]}},
+        ]
+        with open(cls.pi_file, "w") as f:
+            for o in lines:
+                f.write(json.dumps(o, ensure_ascii=False) + "\n")
+        # cursor 夹具（伪 state.vscdb：cursorDiskKV）
+        cls.cursor_db = os.path.join(cls.tmp, "cursor-state.vscdb")
+        cls.cursor_cid = "cccccccc-1111-4222-8333-444455556666"
+        conn = sqlite3.connect(cls.cursor_db)
+        conn.execute("CREATE TABLE cursorDiskKV(key TEXT PRIMARY KEY, value TEXT)")
+        composer = {"composerId": cls.cursor_cid, "name": "Cursor 夹具会话",
+                    "createdAt": 1758400000000, "lastUpdatedAt": 1758400600000,
+                    "fullConversationHeadersOnly": [{"bubbleId": "b1", "type": 1},
+                                                    {"bubbleId": "b2", "type": 2}]}
+        conn.execute("INSERT INTO cursorDiskKV VALUES(?,?)",
+                     ("composerData:" + cls.cursor_cid, json.dumps(composer)))
+        conn.execute("INSERT INTO cursorDiskKV VALUES(?,?)",
+                     ("bubbleId:%s:b1" % cls.cursor_cid,
+                      json.dumps({"type": 1, "text": "帮我修 ESLint 报错"})))
+        rt = json.dumps({"root": {"children": [{"type": "text", "text": "已在保存时自动修复。"}]}})
+        conn.execute("INSERT INTO cursorDiskKV VALUES(?,?)",
+                     ("bubbleId:%s:b2" % cls.cursor_cid,
+                      json.dumps({"type": 2, "text": "", "richText": rt})))
+        conn.commit()
+        conn.close()
+
+    def test_t01_list_defaults(self):
+        s, d = req("GET", "/api/tools")
+        self.assertEqual(s, 200)
+        self.assertEqual([t["id"] for t in d["tools"]][:3], ["claude", "codex", "opencode"])
+        self.assertTrue(all(t["builtin"] for t in d["tools"][:3]))
+        self.assertEqual(len(d["adapters"]), 5)
+
+    def test_t02_add_and_scan_pi(self):
+        s, d = req("POST", "/api/tools", {"name": "Pi Fixture", "adapter": "pi", "root": self.pi_dir})
+        self.assertEqual(s, 200)
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["tool"]["id"], "pi-fixture")
+        s, d = req("POST", "/api/refresh", {"tool": "pi-fixture"})
+        self.assertEqual(s, 200)
+        r0 = d["results"][0]
+        self.assertEqual(r0["new_messages"], 3)
+        s, d = req("GET", "/api/state")
+        sess = [x for x in d["sessions"] if x["sid"] == self.pi_sid][0]
+        self.assertEqual(sess["tool"], "pi-fixture")
+        self.assertEqual(sess["title"], "查一下构建产物大小")
+        self.assertEqual(sess["msg_count"], 3)
+        s, d = req("GET", "/api/session?id=" + self.pi_sid)
+        roles = [m["role"] for m in d["messages"]]
+        self.assertEqual(roles, ["user", "assistant", "tool"])
+        self.assertIn("[tool_call] bash", d["messages"][1]["content"])
+        self.assertIn("[tool_result:bash]", d["messages"][2]["content"])
+
+    def test_t03_rescan_idempotent(self):
+        s, d = req("POST", "/api/refresh", {"tool": "pi-fixture"})
+        self.assertEqual(d["results"][0]["new_messages"], 0)
+
+    def test_t04_cursor_fixture(self):
+        s, d = req("POST", "/api/tools", {"name": "Cursor Fixture", "adapter": "cursor",
+                                          "root": self.cursor_db})
+        self.assertEqual(s, 200)
+        s, d = req("POST", "/api/refresh", {"tool": "cursor-fixture"})
+        r0 = d["results"][0]
+        self.assertEqual(r0["new_messages"], 2, r0)
+        s, d = req("GET", "/api/session?id=" + self.cursor_cid)
+        self.assertEqual(d["title"], "Cursor 夹具会话")
+        self.assertEqual([m["role"] for m in d["messages"]], ["user", "assistant"])
+        self.assertIn("ESLint", d["messages"][0]["content"])
+        self.assertIn("自动修复", d["messages"][1]["content"])  # richText 展平
+
+    def test_t05_validation_and_missing_path(self):
+        s, d = req("POST", "/api/tools", {"name": "", "adapter": "pi", "root": self.pi_dir})
+        self.assertEqual(s, 400)
+        s, d = req("POST", "/api/tools", {"name": "X1", "adapter": "nope", "root": self.pi_dir})
+        self.assertEqual(s, 400)
+        s, d = req("POST", "/api/tools", {"name": "X2", "adapter": "pi", "root": "  "})
+        self.assertEqual(s, 400)
+        s, d = req("POST", "/api/tools", {"name": "Pi Fixture", "adapter": "pi", "root": self.pi_dir})
+        self.assertEqual(s, 400)
+        s, d = req("POST", "/api/tools", {"name": "Ghost Tool", "adapter": "pi",
+                                          "root": os.path.join(self.tmp, "nope-dir")})
+        self.assertEqual(s, 200)
+        self.assertTrue(d["warning"])
+        s, d = req("POST", "/api/refresh", {"tool": "ghost-tool"})
+        self.assertEqual(s, 200)
+        self.assertEqual(d["results"][0]["files"], 0)
+
+    def test_t06_patch_disable_enable(self):
+        s, d = req("PATCH", "/api/tools/pi-fixture", {"name": "Pi Renamed"})
+        self.assertEqual(s, 200)
+        self.assertEqual(d["tool"]["name"], "Pi Renamed")
+        s, d = req("PATCH", "/api/tools/pi-fixture", {"enabled": False})
+        self.assertEqual(s, 200)
+        self.assertFalse(d["tool"]["enabled"])
+        s, d = req("POST", "/api/refresh", {"tool": "pi-fixture"})
+        self.assertEqual(s, 400)
+        s, d = req("PATCH", "/api/tools/pi-fixture", {"enabled": True})
+        self.assertEqual(s, 200)
+        s, d = req("POST", "/api/refresh", {"tool": "pi-fixture"})
+        self.assertEqual(s, 200)
+
+    def test_t07_delete_protections_and_retention(self):
+        s, d = req("DELETE", "/api/tools/claude")
+        self.assertEqual(s, 400)
+        s, d = req("DELETE", "/api/tools/never-existed")
+        self.assertEqual(s, 404)
+        s, d = req("PATCH", "/api/tools/never-existed", {"enabled": True})
+        self.assertEqual(s, 404)
+        s, d = req("POST", "/api/schedule", {"tool": "pi-fixture", "enabled": True, "interval_min": 10})
+        self.assertEqual(s, 200)
+        s, d = req("GET", "/api/schedule")
+        self.assertIn("pi-fixture", d)
+        s, d = req("DELETE", "/api/tools/pi-fixture")
+        self.assertEqual(s, 200)
+        s, d = req("GET", "/api/schedule")
+        self.assertNotIn("pi-fixture", d)
+        s, d = req("GET", "/api/state")
+        self.assertTrue(any(x["sid"] == self.pi_sid for x in d["sessions"]),
+                        "移除工具后会话数据必须保留")
+
+    def test_t08_schedule_scope_validation(self):
+        s, d = req("POST", "/api/schedule", {"tool": "cursor-fixture", "enabled": True})
+        self.assertEqual(s, 200)
+        s, d = req("POST", "/api/schedule", {"tool": "no-such-scope", "enabled": True})
+        self.assertEqual(s, 400)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

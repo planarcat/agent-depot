@@ -39,6 +39,7 @@
     <aside class="rail">
       <div class="rail__h">已接入工具</div>
       <div id="tool-cards" data-testid="tool-cards"></div>
+      <button class="hub-btn rail__add" id="tool-add" data-testid="tool-add">＋ 添加工具</button>
     </aside>
 
     <!-- center list -->
@@ -157,6 +158,38 @@
     <div class="sched__foot">
       <button class="hub-btn" id="sched-cancel" onclick="closeSchedule()">取消</button>
       <button class="hub-btn hub-btn--primary" data-testid="sched-save" id="sched-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== tool modal ===== -->
+<div class="sched-overlay" id="tool-overlay" data-testid="tool-overlay">
+  <div class="sched">
+    <div class="sched__head">
+      <span class="sched__title" id="tool-modal-title">添加工具</span>
+      <button class="hub-btn btn-sm" data-testid="tool-close" id="tool-close">关闭</button>
+    </div>
+    <div class="sched__body">
+      <div class="sched__hint" id="tool-modal-hint">登记一个新工具后，它会被纳入采集、筛选与定时刷新。</div>
+      <div class="tool-form">
+        <label><span>名称</span>
+          <input class="hub-input" id="tool-name" data-testid="tool-name" placeholder="例如 Cursor / 我的 Pi 工具"></label>
+        <label><span>会话格式</span>
+          <select id="tool-adapter" data-testid="tool-adapter"></select></label>
+        <label><span>路径</span>
+          <input class="hub-input" id="tool-root" data-testid="tool-root" placeholder="绝对路径（可用 ~）"></label>
+        <div class="tool-hint" id="tool-root-hint"></div>
+        <label class="tool-enable-row" id="tool-enable-row" style="display:none">
+          <span>启用</span>
+          <span class="switch" id="tool-enabled" data-testid="tool-enabled"><span class="switch__track"></span></span>
+        </label>
+      </div>
+    </div>
+    <div class="sched__foot">
+      <button class="hub-btn" id="tool-delete" data-testid="tool-delete" style="display:none">移除工具</button>
+      <span class="tool-foot-spacer"></span>
+      <button class="hub-btn" data-testid="tool-cancel" id="tool-cancel">取消</button>
+      <button class="hub-btn hub-btn--primary" data-testid="tool-save" id="tool-save">保存</button>
     </div>
   </div>
 </div>

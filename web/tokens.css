@@ -37,6 +37,9 @@
   --c-tool-claude:  #d97757;
   --c-tool-codex:   #171d1f;
   --c-tool-opencode:#7c5cff;
+  --c-tool-p4:     #4a7d8c;  /* 自定义工具 4 · 钢蓝 */
+  --c-tool-p5:     #9a6b3f;  /* 自定义工具 5 · 赭石 */
+  --c-tool-p6:     #6f8a4f;  /* 自定义工具 6 · 橄榄 */
 
   /* ---- 字号阶梯（1.25 模数，px，仅此 7 档） ---- */
   --fs-xs:   10px;   /* 微标注：状态栏、时间戳 */
