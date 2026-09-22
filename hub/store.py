@@ -1,4 +1,4 @@
-"""SQLite-backed store for Agent Session Hub.
+"""SQLite-backed store for Agent Depot.
 
 Database location: ~/.agent/hub/hub.db
 Tables: sessions, messages, cursor (per-source incremental state),

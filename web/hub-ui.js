@@ -1,5 +1,5 @@
 /* ====================================================================
-   Agent Session Hub · UI 组件库（原生 JS，零依赖）
+   Agent Depot · UI 组件库（原生 JS，零依赖）
    统一反馈规范落地：
    - HubToast.success / .error / .info / .warn —— 全局唯一提示样式
    - HubConfirm / HubPrompt —— 模态确认/输入（替代原生 confirm/prompt）

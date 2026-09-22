@@ -3,38 +3,38 @@
   "smoke": false,
   "base": "http://127.0.0.1:8317",
   "chrome": "Chrome/153.0.8010.53",
-  "startedAt": "2026-09-22T01:20:33.962Z",
+  "startedAt": "2026-09-22T01:29:20.597Z",
   "passed": 16,
   "failed": 0,
   "results": [
     {
       "name": "page-load",
       "ok": true,
-      "ms": 50,
+      "ms": 36,
       "detail": "8 行会话 · 引擎 casr · 已连接"
     },
     {
       "name": "screenshot-desktop",
       "ok": true,
-      "ms": 91,
+      "ms": 73,
       "detail": "desktop-main.png"
     },
     {
       "name": "filter-codex",
       "ok": true,
-      "ms": 509,
+      "ms": 517,
       "detail": "codex 4 行 · 恢复全部 8 行"
     },
     {
       "name": "selection",
       "ok": true,
-      "ms": 4,
+      "ms": 3,
       "detail": "选中 2 → 取消 1 → 清空 → 0"
     },
     {
       "name": "preview-modal",
       "ok": true,
-      "ms": 193,
+      "ms": 199,
       "detail": "链=OpenCode · ses_072837a66ffeS3nUuWJgzINIr9 · [hub:lx-0004] ·  · 2 条消息"
     },
     {
@@ -46,31 +46,31 @@
     {
       "name": "schedule-flow",
       "ok": true,
-      "ms": 422,
+      "ms": 415,
       "detail": "启用→保存→重开校验→恢复，均通过"
     },
     {
       "name": "memory-flow",
       "ok": true,
-      "ms": 545,
+      "ms": 526,
       "detail": "记忆 3 → 增 → 删 → 3"
     },
     {
       "name": "memory-validation-error",
       "ok": true,
-      "ms": 3,
+      "ms": 1,
       "detail": "空内容被拦截，错误反馈正确"
     },
     {
       "name": "duplicate-migration-guard",
       "ok": true,
-      "ms": 1266,
+      "ms": 1279,
       "detail": "重复迁移被拦截，无新会话产生（计数 3,4,1）"
     },
     {
       "name": "content-search-flow",
       "ok": true,
-      "ms": 462,
+      "ms": 466,
       "detail": "2 条消息命中 → 点击打开对应会话"
     },
     {
@@ -82,13 +82,13 @@
     {
       "name": "module-nav-views",
       "ok": true,
-      "ms": 467,
-      "detail": "五视图切换 OK · skills 2 / mcp 2 / ops 47 条"
+      "ms": 473,
+      "detail": "五视图切换 OK · skills 2 / mcp 2 / ops 51 条"
     },
     {
       "name": "skills-pull-and-wizard",
       "ok": true,
-      "ms": 462,
+      "ms": 459,
       "detail": "UI 拉取 OK · 分发向导展示 6 个目标（未执行写入）"
     },
     {

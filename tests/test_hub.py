@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Integration tests for Agent Session Hub (sandboxed).
+"""Integration tests for Agent Depot (sandboxed).
 
 Runs a real server subprocess against synthetic tool data in a temp
 directory — no real user sessions are touched. Verifies:

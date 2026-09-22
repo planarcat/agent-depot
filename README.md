@@ -1,6 +1,8 @@
-# Agent Session Hub
+# Agent Depot
 
-本地优先的 AI 编码会话枢纽：把 Claude Code / Codex / OpenCode 等工具的会话统一到一个公共目录（`~/.agent/hub/`），提供浏览、增量采集、定时刷新、跨工具迁移与 lineage 勾连。
+> v0.5.0 起更名：**Agent Depot**（原 Agent Session Hub）—— 已不止是会话记录工具。
+
+本地优先的 AI Agent 资产枢纽：**会话 · 记忆 · Skills · MCP · 台账** 五个一级模块一站管理。统一采集 Claude Code / Codex / OpenCode 等工具的会话（浏览、增量、定时刷新、跨工具迁移、lineage 勾连）到 `~/.agent/hub/`；Skills 与 MCP 支持从远程 Git 源拉取、版本管理与分发到各工具与项目仓库。
 
 **零第三方依赖**：Python 3.9+ 标准库运行。迁移引擎调用 [casr](https://github.com/Dicklesworthstone/cross_agent_session_resumer)（未安装时优雅降级为只读浏览）。
 
@@ -10,7 +12,7 @@
 ./run.sh          # 后台启动（pid + 日志在仓库内）
 ./run.sh --open   # 启动并打开控制台
 ./stop.sh         # 停止
-# 或双击 ~/Applications/AgentSessionHub.app（脚本：scripts/make-app.sh 重建）
+# 或双击 ~/Applications/AgentDepot.app（脚本：scripts/make-app.sh 重建）
 ```
 
 控制台：<http://127.0.0.1:8317>
@@ -59,7 +61,7 @@ node tests/e2e.mjs           # E2E：CDP 驱动真实 Chrome（零依赖），--
 ## 架构
 
 ```
-agent-session-hub/
+agent-depot/
 ├── server.py           # HTTP 服务 + API + 调度器
 ├── hub/
 │   ├── store.py        # SQLite：会话/消息/lineage/迁移/记忆/台账/游标/配置

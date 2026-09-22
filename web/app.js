@@ -1,5 +1,5 @@
 /* ====================================================================
-   Agent Session Hub · app logic
+   Agent Depot · app logic
    UI 规范：所有反馈走 HubUI（toast/confirm/prompt）；所有按钮 loading 走 is-loading。
    ==================================================================== */
 'use strict';

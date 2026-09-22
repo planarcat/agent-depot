@@ -1,5 +1,5 @@
 #!/bin/bash
-# Agent Session Hub launcher
+# Agent Depot launcher
 #   ./run.sh          start in background (pid file + log)
 #   ./run.sh --fg     run in foreground (Ctrl-C to stop)
 #   ./run.sh --open   start (if needed) and open browser window

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Agent Session Hub · 全量测试编排
+# Agent Depot · 全量测试编排
 #   1) 样式规范 lint   2) API 集成测试（沙箱）   3) E2E 无头（真实 Chrome/CDP）   4) E2E 有头（GUI 冒烟）
 set -uo pipefail
 cd "$(dirname "$0")/.."

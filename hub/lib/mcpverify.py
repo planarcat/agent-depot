@@ -11,7 +11,7 @@ import time
 PROTOCOL_VERSION = "2024-11-05"
 INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
-                   "clientInfo": {"name": "agent-session-hub", "version": "0.4"}}}
+                   "clientInfo": {"name": "agent-depot", "version": "0.5"}}}
 INITED = {"jsonrpc": "2.0", "method": "notifications/initialized"}
 TOOLS = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
 

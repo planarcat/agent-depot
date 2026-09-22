@@ -1,32 +1,32 @@
 {
   "mode": "sandbox",
   "chrome": "Chrome/153.0.8010.53",
-  "base": "http://127.0.0.1:8568",
+  "base": "http://127.0.0.1:8404",
   "passed": 7,
   "failed": 0,
   "results": [
     {
       "name": "empty-then-refresh",
       "ok": true,
-      "ms": 6,
+      "ms": 8,
       "detail": "100 行直接渲染（db 预置）"
     },
     {
       "name": "render-performance-100-rows",
       "ok": true,
-      "ms": 70,
-      "detail": "100 行 loadState+渲染 70ms"
+      "ms": 47,
+      "detail": "100 行 loadState+渲染 47ms"
     },
     {
       "name": "casr-missing-error-feedback",
       "ok": true,
-      "ms": 265,
+      "ms": 185,
       "detail": "引擎缺失 → 明确错误 toast: ✕1 条失败：casr 未安装（brew/pip 安装后自动启用）"
     },
     {
       "name": "validation-empty-memory",
       "ok": true,
-      "ms": 2,
+      "ms": 1,
       "detail": "空记忆内容被拦截"
     },
     {
@@ -38,7 +38,7 @@
     {
       "name": "screenshot-mobile-sandbox",
       "ok": true,
-      "ms": 429,
+      "ms": 380,
       "detail": "沙箱移动端 390px 无溢出"
     },
     {
@@ -48,5 +48,5 @@
     }
   ],
   "consoleErrors": [],
-  "at": "2026-09-22T01:20:37.318Z"
+  "at": "2026-09-22T01:29:23.707Z"
 }

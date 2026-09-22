@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Agent Session Hub — local console server.
+"""Agent Depot — local console server.
 
 Zero-dependency (stdlib only). Serves the web UI and a JSON API:
   GET  /api/state                 -> tools + sessions + ledger + engine status
@@ -89,7 +89,7 @@ def ensure_store():
         mod_skills.seed_defaults(STORE)
         mod_mcp.seed_defaults(STORE)
         ops = core_ops
-        ops.log_op(STORE, "system", "boot", "ok", detail={"version": "0.4.0"})
+        ops.log_op(STORE, "system", "boot", "ok", detail={"version": "0.5.0"})
         SCHED = Scheduler(STORE)
         SCHED.start()
     return STORE
@@ -162,7 +162,7 @@ def registry_autopull(store, last_run, now=None):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AgentSessionHub/0.4"
+    server_version = "AgentDepot/0.5"
 
     def _dispatch_modules(self, method, path, query, body):
         """四模块路由分发。未命中返回 None；模块禁用返回 503。"""
@@ -581,7 +581,7 @@ def main():
     ensure_store()
     addr = ("127.0.0.1", PORT)
     httpd = ThreadingHTTPServer(addr, Handler)
-    print("Agent Session Hub -> http://127.0.0.1:%d  (Ctrl-C to stop)" % PORT)
+    print("Agent Depot -> http://127.0.0.1:%d  (Ctrl-C to stop)" % PORT)
     print("hub dir: %s" % STORE.db.db if False else "hub db:  ~/.agent/hub/hub.db")
     try:
         httpd.serve_forever()

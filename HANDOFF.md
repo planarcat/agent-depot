@@ -1,12 +1,14 @@
-# Agent Session Hub · 交接说明
+# Agent Depot · 交接说明
+
+> 2026-09-22 · v0.5.0 更名：Agent Depot（原 Agent Session Hub）；仓库目录 `agent-depot`；数据目录 `~/.agent/hub/` 保持不变。
 
 > 2026-09-21 · v0.2.0 · 本文件是你回来后的第一落点：**怎么跑、干了什么、怎么验收、什么没干及为什么**。
 
 ## 30 秒验收
 
 ```bash
-cd ~/Documents/Projects/@planarcat/agent-session-hub
-./run.sh --open          # 启动服务并打开控制台（或双击 ~/Applications/AgentSessionHub.app）
+cd ~/Documents/Projects/@planarcat/agent-depot
+./run.sh --open          # 启动服务并打开控制台（或双击 ~/Applications/AgentDepot.app）
 bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E 有头冒烟
 ```
 
@@ -46,7 +48,7 @@ bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E �
 | 8 | **迁移去重守卫** | 重复迁移拦截 + 自上次迁移后新增 N 条的**同步更新**（修订副本） | E2E duplicate-migration-guard |
 | 9 | **记忆区** | hub.db + `~/.agent/hub/memory/` 每日 Markdown 日志双写；增删查 | E2E memory-flow |
 | 10 | 台账 | 每次刷新/迁移/配置变更入 ledger，可审计 | 数据核验 |
-| 11 | 桌面壳 | `~/Applications/AgentSessionHub.app` 双击即开独立窗口 | 启动器实测 |
+| 11 | 桌面壳 | `~/Applications/AgentDepot.app` 双击即开独立窗口 | 启动器实测 |
 | 12 | 设计系统 | tokens + HubUI 组件 + STYLE_GUIDE + lint 强制 | lint + 视觉走查 |
 
 ## 延后项落实情况（本次全部处理）
@@ -91,7 +93,7 @@ bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E �
 
 | 服务 | 状态 | 管理 |
 |---|---|---|
-| Agent Session Hub | 运行中 · http://127.0.0.1:8317 | `./stop.sh` / `./run.sh` |
+| Agent Depot | 运行中 · http://127.0.0.1:8317 | `./stop.sh` / `./run.sh` |
 | agentmemory | 运行中 · REST :3111 · Viewer :3113 | `agentmemory stop` / `agentmemory`（重启） |
 
 ## agentmemory 使用提示

@@ -1,4 +1,4 @@
-# Agent Session Hub · 样式规范（Style Guide）
+# Agent Depot · 样式规范（Style Guide）
 
 > 设计方向：**Müller-Brockmann 网格功能主义**（数学网格 · 严格对齐 · 双色方案 · 功能至上）。
 > 所有样式必须来自 `web/tokens.css` 的变量；**界面文件（html/app.css/hub-ui.css）中不允许出现游离的十六进制颜色或 px 字号** —— 由 `tests/lint_styles.py` 强制检查。
