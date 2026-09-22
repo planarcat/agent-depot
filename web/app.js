@@ -397,13 +397,30 @@ async function submitTool(btn) {
   }
 }
 async function deleteTool() {
-  HubUI.confirm('移除工具',
-    '将断开该工具的登记（不再采集）。<br>已采集的会话与台账<b>不会删除</b>，可随时重新添加。',
+  const t = TOOL_LIST.find(x => x.id === toolModalId) || {};
+  const info = (state.tools || {})[toolModalId] || { count: 0 };
+  HubUI.confirm('删除工具',
+    `将删除「${esc(t.name || toolModalId)}」的登记（不再采集）。当前已采集 <b>${info.count}</b> 个会话。<br><br>` +
+    `<label class="tool-purge-opt"><input type="checkbox" id="tool-purge-opt" data-testid="tool-purge-opt"> ` +
+    `同时清除已采集的会话与消息（不可恢复；删除前自动备份为 zip）</label>` +
+    `<div class="tool-hint">默认只断开登记、数据保留；内置工具不可删除（可停用）。</div>`,
     async () => {
-      const r = await api('/api/tools/' + encodeURIComponent(toolModalId), { method: 'DELETE' });
-      if (r.data.ok) { HubUI.toast('已移除工具', 'success'); closeToolModal(); await loadState(); }
-      else HubUI.toast('移除失败：' + (r.data.error || ''), 'error');
-    }, { confirmText: '移除', danger: true });
+      const purge = !!document.querySelector('#tool-purge-opt:checked');
+      const r = await api('/api/tools/' + encodeURIComponent(toolModalId) + (purge ? '?purge=1' : ''),
+                          { method: 'DELETE' });
+      if (r.data.ok) {
+        const pd = r.data.purge || {};
+        let msg = '已删除工具（数据保留）';
+        if (pd.purged) {
+          msg = `已彻底删除：清除 ${pd.sessions} 个会话 / ${pd.messages} 条消息`;
+          if (pd.backup) msg += `；备份 ${String(pd.backup).split('/').pop()}`;
+        }
+        HubUI.toast(msg, 'success', 6000);
+        if (state.filter === toolModalId) setFilter('all');
+        closeToolModal();
+        await loadState();
+      } else HubUI.toast('删除失败：' + (r.data.error || ''), 'error');
+    }, { confirmText: '删除', danger: true });
 }
 
 /* ---------- memory ---------- */

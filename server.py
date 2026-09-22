@@ -217,15 +217,19 @@ class Handler(BaseHTTPRequestHandler):
                 return 200, {"ok": True, "tool": {"id": t["id"], "name": t["name"],
                                                   "enabled": bool(t.get("enabled", True)),
                                                   "root": t.get("root")}}
+            pq = query.get("purge")
+            pq = (pq[0] if isinstance(pq, list) else pq) or ""
+            purge = str(pq).lower() in ("1", "true", "yes")
             try:
-                t = tools_registry.remove_tool(STORE, tid)
+                t, pstats = tools_registry.remove_tool(STORE, tid, purge=purge)
             except KeyError:
                 return 404, {"ok": False, "error": "工具不存在：%s" % tid}
             except ValueError as e:
                 return 400, {"ok": False, "error": str(e)}
-            core_ops.log_op(STORE, "tools", "remove", "ok", item_name=t["name"])
-            STORE.log("config", {"tools": "remove:" + tid})
-            return 200, {"ok": True, "removed": tid}
+            core_ops.log_op(STORE, "tools", "purge" if pstats.get("purged") else "remove",
+                            "ok", item_name=t["name"], detail=pstats)
+            STORE.log("config", {"tools": ("purge:" if pstats.get("purged") else "remove:") + tid})
+            return 200, {"ok": True, "removed": tid, "purge": pstats}
         if path == "/api/ops" and method == "GET":
             def g(k, d=None):
                 v = query.get(k)

@@ -110,11 +110,11 @@ bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E �
 
 ## v0.5.1 工具注册表（2026-09-22）
 
-- 采集工具从写死三只 → **注册表驱动**：`/api/tools` CRUD；左侧「＋ 添加工具」；五种格式模板（Claude / Codex / OpenCode / Pi-Agent / Cursor）+ 自定义路径；可改名 / 停用 / 移除（移除仅断开登记、数据保留；内置三只可停用不可删）。
+- 采集工具从写死三只 → **注册表驱动**：`/api/tools` CRUD；左侧「＋ 添加工具」；五种格式模板（Claude / Codex / OpenCode / Pi-Agent / Cursor）+ 自定义路径；可改名 / 停用 / 删除（默认断开登记留数据；勾选可彻底清除已采集数据，删除前自动备份 zip；内置三只可停用不可删）。
 - 全链路动态化：面板卡片 / 筛选 / 定时范围 / 刷新 / 计数 / 来源标签随注册表；未知定时范围 → 400（原为静默忽略）。
 - 新适配器：**Pi-Agent**（`~/.pi/agent/sessions/*.jsonl`，字节增量 tail）与 **Cursor**（`globalStorage/state.vscdb` 的 `composerData:` + `bubbleId:` 只读解析，richText 展平）。
 - 实机接入：Pi-Agent 38 会话 / 4989 消息；Cursor 9 composer / 637 消息。
-- 测试：全量 **102 项 + lint 全绿**（API 43 · 模块 30 · E2E 无头 16 · 有头 3 · 沙箱 10）。
+- 测试：全量 **104 项 + lint 全绿**（API 44 · 模块 30 · E2E 无头 16 · 有头 3 · 沙箱 11）。
 
 ## 决策记录（执行期间无反馈，按保守默认推进）
 

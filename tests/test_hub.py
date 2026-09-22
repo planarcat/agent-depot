@@ -776,6 +776,30 @@ class ToolsTest(HubSandbox, unittest.TestCase):
         s, d = req("POST", "/api/schedule", {"tool": "no-such-scope", "enabled": True})
         self.assertEqual(s, 400)
 
+    def test_t09_purge_delete_with_backup(self):
+        """彻底删除：先备份再清数据；内置保护；未知范围 404。"""
+        s, d = req("DELETE", "/api/tools/claude?purge=1")
+        self.assertEqual(s, 400)
+        s, d = req("DELETE", "/api/tools/never-existed?purge=1")
+        self.assertEqual(s, 404)
+        s, d = req("GET", "/api/state")
+        before = [x for x in d["sessions"] if x["tool"] == "cursor-fixture"]
+        self.assertEqual(len(before), 1)
+        s, d = req("DELETE", "/api/tools/cursor-fixture?purge=1")
+        self.assertEqual(s, 200)
+        pd = d["purge"]
+        self.assertTrue(pd["purged"])
+        self.assertEqual(pd["sessions"], 1)
+        self.assertEqual(pd["messages"], 2)
+        self.assertTrue(pd["backup"])
+        self.assertTrue(os.path.exists(pd["backup"]), "备份 zip 必须存在")
+        s, d = req("GET", "/api/state")
+        self.assertFalse([x for x in d["sessions"] if x["tool"] == "cursor-fixture"])
+        s, d = req("GET", "/api/session?id=" + self.cursor_cid)
+        self.assertEqual(s, 404, "数据应已清除")
+        s, d = req("GET", "/api/schedule")
+        self.assertNotIn("cursor-fixture", d, "定时配置应随删除清理")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

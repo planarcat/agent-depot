@@ -344,3 +344,5 @@ body {
 .tool-enable-row { display: flex; align-items: center; gap: var(--sp-3); }
 .tool-enable-row .switch { margin-left: auto; }
 .tool-foot-spacer { flex: 1; }
+.tool-purge-opt { display: flex; gap: 6px; align-items: flex-start; font-size: var(--fs-s); color: var(--c-ink-2); line-height: 1.6; }
+.tool-purge-opt input { margin-top: 3px; }

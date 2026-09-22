@@ -170,14 +170,40 @@ def update_tool(store, tid, patch):
     return tool_by_id(store, tid)
 
 
-def remove_tool(store, tid):
-    """移除自定义工具：断开登记 + 清理其定时配置；数据与台账不动。"""
+def remove_tool(store, tid, purge=False):
+    """移除自定义工具 → (tool, stats)。
+
+    purge=False：仅断开登记（已采集数据保留）。
+    purge=True ：另清除该工具已采集的会话/消息/游标（删除前自动导出备份 zip）。
+    台账与迁移历史保持不动（审计）。
+    """
     tools = load_tools(store)
     cur = next((t for t in tools if t["id"] == tid), None)
     if cur is None:
         raise KeyError(tid)
     if cur.get("builtin"):
         raise ValueError("内置工具不可移除（可停用）")
+    stats = {"purged": False, "sessions": 0, "messages": 0, "backup": None}
+    if purge:
+        from .store import export_batch
+        sids = [x["sid"] for x in store.list_sessions(tool=tid)]
+        with store.lock:
+            n_msg = store.db.execute("SELECT COUNT(*) FROM messages WHERE tool=?",
+                                     (tid,)).fetchone()[0]
+        stats["sessions"] = len(sids)
+        stats["messages"] = int(n_msg)
+        if sids:
+            try:
+                res = export_batch(store, sids=sids, limit=10000)
+                stats["backup"] = res.get("path")
+            except Exception:
+                stats["backup"] = None
+        with store.lock:
+            store.db.execute("DELETE FROM messages WHERE tool=?", (tid,))
+            store.db.execute("DELETE FROM sessions WHERE tool=?", (tid,))
+            store.db.execute("DELETE FROM cursor WHERE source_key LIKE ?", (tid + ":%",))
+            store.db.commit()
+        stats["purged"] = True
     entries = [s for s in _saved_entries(store) if s["id"] != tid]
     save_tools(store, entries)
     try:
@@ -188,7 +214,7 @@ def remove_tool(store, tid):
             store.set_config("schedule", json.dumps(sched))
     except Exception:
         pass
-    return cur
+    return cur, stats
 
 
 def public_list(store, counts=None):
