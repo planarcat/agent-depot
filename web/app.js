@@ -14,6 +14,8 @@ window.addEventListener('error', e => window.__hubErrors.push(String(e.message))
 const TOOL_NAMES = { claude: 'Claude Code', codex: 'Codex CLI', opencode: 'OpenCode' };
 let TOOL_LIST = [];
 let ADAPTER_LIST = [];
+let PRESET_LIST = [];
+let toolMcpFormat = null;
 function syncToolMap() { for (const t of TOOL_LIST) TOOL_NAMES[t.id] = t.name; }
 
 /* ---------- fetch helpers ---------- */
@@ -330,6 +332,7 @@ async function ensureAdapters() {
   try {
     const ar = await api('/api/tools');
     if (ar.data && Array.isArray(ar.data.adapters)) ADAPTER_LIST = ar.data.adapters;
+    if (ar.data && Array.isArray(ar.data.presets)) PRESET_LIST = ar.data.presets;
   } catch (e) { /* 降级：仍可用默认空列表 */ }
 }
 function adapterDef(id) { return ADAPTER_LIST.find(a => a.id === id) || {}; }
@@ -347,8 +350,8 @@ async function openToolModal(toolId) {
   const t = toolId ? TOOL_LIST.find(x => x.id === toolId) : null;
   document.getElementById('tool-modal-title').textContent = t ? '工具设置 · ' + t.name : '添加工具';
   document.getElementById('tool-modal-hint').textContent = t
-    ? '可改名 / 停用；移除仅断开登记，已采集数据保留。'
-    : '登记一个新工具后，它会被纳入采集、筛选与定时刷新。';
+    ? '可改名 / 停用 / 删除；Skills / MCP / 记忆集成都可在此调整。'
+    : '登记后进入采集与筛选；填了 Skills / MCP 路径还会同步到对应模块的目标列表。';
   const nameEl = document.getElementById('tool-name');
   const adEl = document.getElementById('tool-adapter');
   const rootEl = document.getElementById('tool-root');
@@ -357,12 +360,32 @@ async function openToolModal(toolId) {
   nameEl.value = t ? t.name : '';
   adEl.value = t ? t.adapter : (ADAPTER_LIST[0] ? ADAPTER_LIST[0].id : 'claude');
   rootEl.value = (t && t.root) ? t.root : '';
+  document.getElementById('tool-skills').value = (t && t.skills_dir) ? t.skills_dir : '';
+  document.getElementById('tool-mcp').value = (t && t.mcp_config) ? t.mcp_config : '';
+  toolMcpFormat = null;
+  const presetRow = document.getElementById('tool-preset-row');
+  const presetEl = document.getElementById('tool-preset');
+  presetEl.innerHTML = '<option value="">自定义…</option>' +
+    PRESET_LIST.map(pp => `<option value="${esc(pp.key)}">${esc(pp.name)}</option>`).join('');
+  presetEl.value = '';
+  presetRow.style.display = t ? 'none' : '';
   const isBuiltin = !!(t && t.builtin);
   adEl.disabled = !!t;
   rootEl.disabled = isBuiltin;
   document.getElementById('tool-enable-row').style.display = t ? '' : 'none';
   document.getElementById('tool-enabled').classList.toggle('is-on', t ? !!t.enabled : true);
   document.getElementById('tool-delete').style.display = (t && !t.builtin) ? '' : 'none';
+  const memRow = document.getElementById('tool-mem-row');
+  const memStatus = document.getElementById('tool-mem-status');
+  const wireBtn = document.getElementById('tool-wire');
+  if (t && t.mcp_config) {
+    memRow.style.display = '';
+    if (t.memory_wired === true) { memStatus.textContent = '已接入（agentmemory）'; wireBtn.style.display = 'none'; }
+    else if (t.memory_wired === false) { memStatus.textContent = '未接入'; wireBtn.style.display = ''; }
+    else { memStatus.textContent = '无法判断（文件不可读）'; wireBtn.style.display = 'none'; }
+  } else {
+    memRow.style.display = 'none';
+  }
   updRootHint();
   document.getElementById('tool-overlay').classList.add('is-open');
 }
@@ -372,15 +395,21 @@ async function submitTool(btn) {
   const adapter = document.getElementById('tool-adapter').value;
   const rootEl = document.getElementById('tool-root');
   const root = rootEl.value.trim();
+  const skills = document.getElementById('tool-skills').value.trim();
+  const mcp = document.getElementById('tool-mcp').value.trim();
   if (!name) { HubUI.toast('名称不能为空', 'error'); return; }
   if (!rootEl.disabled && !root) { HubUI.toast('路径不能为空', 'error'); return; }
   btn.classList.add('is-loading');
   let r;
   if (toolModalMode === 'add') {
-    r = await post('/api/tools', { name, adapter, root });
+    const body = { name, adapter, root, skills_dir: skills, mcp_config: mcp };
+    if (toolMcpFormat) body.mcp_format = toolMcpFormat;
+    r = await post('/api/tools', body);
   } else {
-    const patch = { name, enabled: document.getElementById('tool-enabled').classList.contains('is-on') };
+    const patch = { name, enabled: document.getElementById('tool-enabled').classList.contains('is-on'),
+                    skills_dir: skills, mcp_config: mcp };
     if (!rootEl.disabled) patch.root = root;
+    if (toolMcpFormat) patch.mcp_format = toolMcpFormat;
     r = await api('/api/tools/' + encodeURIComponent(toolModalId), {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -389,6 +418,8 @@ async function submitTool(btn) {
   btn.classList.remove('is-loading');
   if (r.data.ok) {
     HubUI.toast(toolModalMode === 'add' ? '工具已添加' : '工具已更新', 'success');
+    const tc = (r.data.targets_created || []).length;
+    if (tc) HubUI.toast(`已同步 ${tc} 个分发目标（Skills / MCP）`, 'success', 4600);
     if (r.data.warning) HubUI.toast(r.data.warning, 'warn', 5600);
     closeToolModal();
     await loadState();
@@ -715,8 +746,17 @@ function memItemsHTML(list) {
 function renderMemoryView(root) {
   const list = (state.memories || []);
   const hits = (q) => (q || []);
+  const busTools = TOOL_LIST.filter(t => t.mcp_config);
+  const busHtml = busTools.length
+    ? busTools.map(t => {
+        const mark = t.memory_wired === true ? '✓' : (t.memory_wired === false ? '✗' : '—');
+        return `<span class="mem-bus__item" data-testid="mem-bus-item">${esc(t.name)} ${mark}</span>`;
+      }).join('')
+    : '<span class="tool-hint">暂无登记 MCP 配置的工具</span>';
   root.innerHTML = `
     <div class="mem-view">
+      <div class="rail__h">记忆总线接入 <span class="mono-xs">（✓ 已接入 / ✗ 未接入；可在工具「设置」里一键接入）</span></div>
+      <div class="mem-bus" data-testid="mem-bus">${busHtml}</div>
       <div class="rail__h">新增记忆</div>
       <div class="mem-form">
         <input class="hub-input" id="mv-title" placeholder="标题（可选）">
@@ -778,6 +818,29 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('tool-save').onclick = e => submitTool(e.currentTarget);
   document.getElementById('tool-delete').onclick = () => deleteTool();
   document.getElementById('tool-adapter').onchange = updRootHint;
+  document.getElementById('tool-preset').onchange = e => {
+    const pp = PRESET_LIST.find(x => x.key === e.target.value);
+    if (!pp) return;
+    const setV = (id, v) => { document.getElementById(id).value = v || ''; };
+    setV('tool-name', pp.name); setV('tool-adapter', pp.adapter); setV('tool-root', pp.root);
+    setV('tool-skills', pp.skills_dir); setV('tool-mcp', pp.mcp_config);
+    toolMcpFormat = pp.mcp_format || null;
+    updRootHint();
+  };
+  document.getElementById('tool-wire').onclick = async () => {
+    const t = TOOL_LIST.find(x => x.id === toolModalId) || {};
+    HubUI.confirm('接入记忆总线',
+      `将把 <b>agentmemory</b> 写入 <code>${esc(t.mcp_config || '')}</code>（先自动备份原文件）。`,
+      async () => {
+        const r = await post('/api/tools/' + encodeURIComponent(toolModalId) + '/wire-memory', {});
+        if (r.data.ok) {
+          HubUI.toast(r.data.already ? '记忆总线已接入' : '已接入记忆总线（原文件已备份）', 'success', 5200);
+          closeToolModal();
+          await loadState();
+          openToolModal(toolModalId);
+        } else HubUI.toast('接入失败：' + (r.data.error || ''), 'error', 5600);
+      }, { confirmText: '接入' });
+  };
   document.getElementById('tool-enabled').onclick = e =>
     e.currentTarget.classList.toggle('is-on');
   document.getElementById('tool-overlay').addEventListener('click', e => {

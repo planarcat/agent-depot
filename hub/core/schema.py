@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS targets (
   format_key TEXT,                  -- mcp_json: mcpServers | mcp
   writable INTEGER DEFAULT 1,
   enabled INTEGER DEFAULT 1,
+  origin TEXT,                      -- 来源：tool:<id>（由工具注册表同步；手动创建的为 NULL）
   created_at TEXT NOT NULL,
   UNIQUE(kind, path)
 );
@@ -105,4 +106,7 @@ def ensure(store):
         cols = [r[1] for r in store.db.execute("PRAGMA table_info(registry_items)").fetchall()]
         if "source_hash_at" not in cols:
             store.db.execute("ALTER TABLE registry_items ADD COLUMN source_hash_at TEXT")
+        tcols = [r[1] for r in store.db.execute("PRAGMA table_info(targets)").fetchall()]
+        if "origin" not in tcols:
+            store.db.execute("ALTER TABLE targets ADD COLUMN origin TEXT")
         store.db.commit()

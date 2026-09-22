@@ -14,6 +14,7 @@ Scheduler runs in-thread; every due tool refresh is recorded to the ledger.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -163,6 +164,138 @@ def registry_autopull(store, last_run, now=None):
     return ran
 
 
+# ============================================================ 工具 ↔ 模块联动（v0.5.2）
+
+def _tool_target_specs(tool):
+    """工具条目 → 需要同步到 Skills / MCP 的目标规格。"""
+    specs = []
+    if tool.get("skills_dir"):
+        specs.append({"kind": "skills_dir", "path": tool["skills_dir"],
+                      "name": "%s Skills (全局)" % tool["name"], "format_key": None})
+    if tool.get("mcp_config"):
+        is_toml = str(tool["mcp_config"]).endswith(".toml")
+        specs.append({"kind": "mcp_toml" if is_toml else "mcp_json", "path": tool["mcp_config"],
+                      "name": "%s (全局)" % tool["name"],
+                      "format_key": None if is_toml else (tool.get("mcp_format") or "mcpServers")})
+    return specs
+
+
+def _sync_tool_targets(tool):
+    """把工具的 Skills / MCP 集成点同步为分发目标（幂等；origin 溯源）。"""
+    tid = tool["id"]
+    origin = "tool:" + tid
+    specs = _tool_target_specs(tool)
+    want = {(x["kind"], os.path.expanduser(x["path"])) for x in specs}
+    created, removed, kept = [], [], []
+    with STORE.lock:
+        rows = [dict(r) for r in STORE.db.execute(
+            "SELECT * FROM targets WHERE origin=?", (origin,)).fetchall()]
+    for r in rows:
+        if (r["kind"], os.path.expanduser(r["path"])) not in want:
+            mod = mod_skills if r["kind"] == "skills_dir" else mod_mcp
+            res = mod.delete_target(STORE, r["id"], force=False)
+            if res.get("ok"):
+                removed.append(r["name"])
+            else:
+                kept.append(r["name"])
+    for x in specs:
+        mod = mod_skills if x["kind"] == "skills_dir" else mod_mcp
+        res = mod.add_target(STORE, x["name"], x["kind"], tid, x["path"], x.get("format_key"))
+        if res.get("ok"):
+            with STORE.lock:
+                STORE.db.execute("UPDATE targets SET origin=? WHERE id=?",
+                                 (origin, res.get("id")))
+                STORE.db.commit()
+            created.append(x["name"])
+        # 同路径已有目标（非本工具创建）→ 保持原样
+    return {"created": created, "removed": removed, "kept": kept}
+
+
+def _prune_tool_targets(tid):
+    """删除工具后：移除此前由它同步出的目标（有部署记录的保留）。"""
+    origin = "tool:" + tid
+    removed, kept = [], []
+    with STORE.lock:
+        rows = [dict(r) for r in STORE.db.execute(
+            "SELECT * FROM targets WHERE origin=?", (origin,)).fetchall()]
+    for r in rows:
+        mod = mod_skills if r["kind"] == "skills_dir" else mod_mcp
+        res = mod.delete_target(STORE, r["id"], force=False)
+        if res.get("ok"):
+            removed.append(r["name"])
+        else:
+            kept.append(r["name"])
+    return {"removed": removed, "kept": kept}
+
+
+def _memory_wired(cfg_path):
+    """工具 MCP 配置里是否已接入 agentmemory（None = 无法判断）。"""
+    try:
+        path = os.path.expanduser(str(cfg_path))
+        if not os.path.exists(path):
+            return False
+        if path.endswith(".toml"):
+            return "agentmemory" in open(path, encoding="utf-8", errors="ignore").read()
+        d = json.load(open(path, encoding="utf-8"))
+        for key in ("mcpServers", "mcp"):
+            if isinstance(d.get(key), dict) and "agentmemory" in d[key]:
+                return True
+        return False
+    except Exception:
+        return None
+
+
+def _memory_entry_clone():
+    """从已接线的工具配置里复制 agentmemory 服务器条目（只读）。"""
+    src = os.environ.get("HUB_AGENTMEMORY_SRC") or os.path.expanduser("~/.claude.json")
+    try:
+        d = json.load(open(src, encoding="utf-8"))
+        for key in ("mcpServers", "mcp"):
+            e = (d.get(key) or {}).get("agentmemory")
+            if e:
+                return e
+    except Exception:
+        pass
+    return None
+
+
+def _wire_memory(tool):
+    """把记忆总线（agentmemory）接入工具的 MCP 配置（JSON；先备份）。"""
+    cfg = tool.get("mcp_config")
+    if not cfg:
+        return {"ok": False, "error": "该工具没有登记 MCP 配置，无法接入记忆总线"}
+    path = os.path.expanduser(str(cfg))
+    if path.endswith(".toml"):
+        return {"ok": False, "error": "仅支持 JSON 格式的 MCP 配置（.toml 暂不支持）"}
+    if not os.path.exists(path):
+        return {"ok": False, "error": "配置文件不存在：%s" % path}
+    if _memory_wired(path) is True:
+        return {"ok": True, "already": True, "path": path}
+    entry = _memory_entry_clone()
+    if not entry:
+        return {"ok": False, "error": "未找到可复制的 agentmemory 配置（来源：已接线的工具配置）"}
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        if not isinstance(d, dict):
+            return {"ok": False, "error": "配置文件不是 JSON 对象"}
+        key = "mcp" if ("mcp" in d and "mcpServers" not in d) else "mcpServers"
+        if not isinstance(d.get(key), dict):
+            d[key] = {}
+        if "agentmemory" in d[key]:
+            return {"ok": True, "already": True, "path": path}
+        d[key]["agentmemory"] = entry
+        backup = "%s.bak-%s" % (path, time.strftime("%Y%m%d-%H%M%S"))
+        shutil.copy2(path, backup)
+        tmp = path + ".tmp-%d" % os.getpid()
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except Exception as e:
+        return {"ok": False, "error": "写入失败：%s" % str(e)[:160]}
+    return {"ok": True, "path": path, "backup": backup, "key": key}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "AgentDepot/0.5"
 
@@ -190,17 +323,35 @@ class Handler(BaseHTTPRequestHandler):
             counts = STORE.counts_by_tool()
             return 200, {"ok": True,
                          "tools": tools_registry.public_list(STORE, counts),
+                         "presets": tools_registry.presets(),
                          "adapters": [dict(id=k, **v) for k, v in tools_registry.ADAPTERS.items()]}
         if path == "/api/tools" and method == "POST":
             try:
                 entry, warning = tools_registry.add_tool(
-                    STORE, body.get("name"), body.get("adapter"), body.get("root"))
+                    STORE, body.get("name"), body.get("adapter"), body.get("root"),
+                    skills_dir=body.get("skills_dir"), mcp_config=body.get("mcp_config"),
+                    mcp_format=body.get("mcp_format"))
             except ValueError as e:
                 return 400, {"ok": False, "error": str(e)}
+            linked = _sync_tool_targets(entry)
             core_ops.log_op(STORE, "tools", "add", "ok", item_name=entry["name"],
-                            detail={"adapter": entry["adapter"], "root": entry["root"]})
+                            detail={"adapter": entry["adapter"], "root": entry["root"],
+                                    "targets_created": linked.get("created")})
             STORE.log("config", {"tools": "add:" + entry["id"]})
-            return 200, {"ok": True, "tool": entry, "warning": warning}
+            return 200, {"ok": True, "tool": entry, "warning": warning,
+                         "targets_created": linked.get("created") or []}
+        if (path.startswith("/api/tools/") and path.endswith("/wire-memory")
+                and method == "POST"):
+            tid = path[len("/api/tools/"):-len("/wire-memory")]
+            tool = tools_registry.tool_by_id(STORE, tid)
+            if not tool:
+                return 404, {"ok": False, "error": "工具不存在：%s" % tid}
+            r = _wire_memory(tool)
+            if r.get("ok"):
+                core_ops.log_op(STORE, "tools", "wire-memory", "ok", item_name=tool["name"],
+                                detail={"path": r.get("path"), "backup": r.get("backup")})
+                STORE.log("config", {"tools": "wire-memory:" + tid})
+            return (200 if r.get("ok") else 400), r
         if path.startswith("/api/tools/") and method in ("PATCH", "DELETE"):
             tid = path[len("/api/tools/"):]
             if method == "PATCH":
@@ -210,13 +361,19 @@ class Handler(BaseHTTPRequestHandler):
                     return 404, {"ok": False, "error": "工具不存在：%s" % tid}
                 except ValueError as e:
                     return 400, {"ok": False, "error": str(e)}
-                keys = [k for k in ("name", "enabled", "root")
+                keys = [k for k in ("name", "enabled", "root", "skills_dir", "mcp_config")
                         if isinstance(body, dict) and k in body]
+                linked = _sync_tool_targets(t)
                 core_ops.log_op(STORE, "tools", "update", "ok", item_name=t["name"],
-                                detail={"id": tid, "keys": keys})
+                                detail={"id": tid, "keys": keys,
+                                        "targets_created": linked.get("created")})
                 return 200, {"ok": True, "tool": {"id": t["id"], "name": t["name"],
                                                   "enabled": bool(t.get("enabled", True)),
-                                                  "root": t.get("root")}}
+                                                  "root": t.get("root"),
+                                                  "skills_dir": t.get("skills_dir"),
+                                                  "mcp_config": t.get("mcp_config")},
+                             "targets_created": linked.get("created") or [],
+                             "targets_removed": linked.get("removed") or []}
             pq = query.get("purge")
             pq = (pq[0] if isinstance(pq, list) else pq) or ""
             purge = str(pq).lower() in ("1", "true", "yes")
@@ -226,10 +383,15 @@ class Handler(BaseHTTPRequestHandler):
                 return 404, {"ok": False, "error": "工具不存在：%s" % tid}
             except ValueError as e:
                 return 400, {"ok": False, "error": str(e)}
+            pruned = _prune_tool_targets(tid)
             core_ops.log_op(STORE, "tools", "purge" if pstats.get("purged") else "remove",
-                            "ok", item_name=t["name"], detail=pstats)
+                            "ok", item_name=t["name"],
+                            detail=dict(pstats, targets_removed=pruned.get("removed"),
+                                        targets_kept=pruned.get("kept")))
             STORE.log("config", {"tools": ("purge:" if pstats.get("purged") else "remove:") + tid})
-            return 200, {"ok": True, "removed": tid, "purge": pstats}
+            return 200, {"ok": True, "removed": tid, "purge": pstats,
+                         "targets_removed": pruned.get("removed") or [],
+                         "targets_kept": pruned.get("kept") or []}
         if path == "/api/ops" and method == "GET":
             def g(k, d=None):
                 v = query.get(k)
@@ -400,6 +562,10 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/state":
             raw = STORE.get_config("schedule")
             counts = STORE.counts_by_tool()
+            tool_list = tools_registry.public_list(STORE, counts)
+            for _t in tool_list:
+                _t["memory_wired"] = (_memory_wired(_t["mcp_config"])
+                                      if _t.get("mcp_config") else None)
             sessions = STORE.list_sessions()
             for s in sessions:
                 lin = lineage_info(STORE, s["tool"], s["sid"])
@@ -408,7 +574,7 @@ class Handler(BaseHTTPRequestHandler):
                     s["migrations"] = lin["migrations"]
             return self._json({
                 "tools": counts,
-                "tool_list": tools_registry.public_list(STORE, counts),
+                "tool_list": tool_list,
                 "sessions": sessions,
                 "ledger": STORE.ledger_recent(20),
                 "migrations": migration_history(STORE, limit=20),

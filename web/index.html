@@ -172,17 +172,29 @@
     <div class="sched__body">
       <div class="sched__hint" id="tool-modal-hint">登记一个新工具后，它会被纳入采集、筛选与定时刷新。</div>
       <div class="tool-form">
+        <label id="tool-preset-row"><span>预设（快速填入）</span>
+          <select id="tool-preset" data-testid="tool-preset"></select></label>
         <label><span>名称</span>
           <input class="hub-input" id="tool-name" data-testid="tool-name" placeholder="例如 Cursor / 我的 Pi 工具"></label>
         <label><span>会话格式</span>
           <select id="tool-adapter" data-testid="tool-adapter"></select></label>
-        <label><span>路径</span>
+        <label><span>会话路径</span>
           <input class="hub-input" id="tool-root" data-testid="tool-root" placeholder="绝对路径（可用 ~）"></label>
         <div class="tool-hint" id="tool-root-hint"></div>
+        <label><span>Skills 目录（可选）</span>
+          <input class="hub-input" id="tool-skills" data-testid="tool-skills" placeholder="例如 ~/.cursor/skills"></label>
+        <label><span>MCP 配置（可选）</span>
+          <input class="hub-input" id="tool-mcp" data-testid="tool-mcp" placeholder="例如 ~/.cursor/mcp.json"></label>
+        <div class="tool-hint">填了 Skills / MCP 路径后，会自动出现在对应模块的「目标」列表里。</div>
         <label class="tool-enable-row" id="tool-enable-row" style="display:none">
           <span>启用</span>
           <span class="switch" id="tool-enabled" data-testid="tool-enabled"><span class="switch__track"></span></span>
         </label>
+      </div>
+      <div class="tool-mem-row" id="tool-mem-row" style="display:none">
+        <span class="tool-mem-label">记忆总线</span>
+        <span class="tool-hint" id="tool-mem-status">—</span>
+        <button class="hub-btn btn-sm" id="tool-wire" data-testid="tool-wire" style="display:none">接入记忆总线</button>
       </div>
     </div>
     <div class="sched__foot">

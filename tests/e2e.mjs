@@ -129,6 +129,19 @@ async function scenario(name, fn) {
 const scenarios = [];
 const S = (name, fn, smoke = false) => scenarios.push({ name, fn, smoke });
 
+async function skillsRowsOrDump() {
+  try {
+    await waitFor(`document.querySelectorAll('[data-testid="skills-row"]').length >= 2`, 10000, 'skills 目录行');
+  } catch (e) {
+    const dump = await evaluate(`JSON.stringify({
+      center: ((document.querySelector('.sb-center') || {}).innerHTML || 'NO CENTER').replace(/\s+/g, ' ').slice(0, 220),
+      toasts: [...document.querySelectorAll('.hub-toast')].map(t => t.textContent.trim()).slice(0, 3),
+      skillsView: typeof window.SkillsView,
+      active: document.getElementById('view-skills').classList.contains('is-active') })`);
+    throw new Error(e.message + ' | dump=' + dump);
+  }
+}
+
 S('page-load', async () => {
   await waitFor(`document.readyState === 'complete'`, 10000, 'readyState');
   await waitFor(`document.querySelectorAll('[data-testid="row"]').length >= 5`, 10000, '会话行渲染');
@@ -344,7 +357,7 @@ S('preview-actions', async () => {
 S('module-nav-views', async () => {
   await click('[data-testid="nav-skills"]');
   await waitFor(`document.getElementById('view-skills').classList.contains('is-active')`, 6000, 'skills 视图');
-  await waitFor(`document.querySelectorAll('[data-testid="skills-row"]').length >= 2`, 10000, 'skills 目录行');
+  await skillsRowsOrDump();
   const sRows = await evaluate(`document.querySelectorAll('[data-testid="skills-row"]').length`);
   await click('[data-testid="nav-mcp"]');
   await waitFor(`document.querySelectorAll('[data-testid="mcp-row"]').length >= 2`, 10000, 'mcp 行');
@@ -361,7 +374,7 @@ S('module-nav-views', async () => {
 
 S('skills-pull-and-wizard', async () => {
   await click('[data-testid="nav-skills"]');
-  await waitFor(`document.querySelectorAll('[data-testid="skills-row"]').length >= 2`, 10000, 'skills 行');
+  await skillsRowsOrDump();
   // pull from first source via UI
   await evaluate(`document.querySelector('[data-testid^="skills-pull-"]').click()`);
   await waitFor(`!!document.querySelector('.hub-toast--success, .hub-toast--info')`, 12000, '拉取反馈');

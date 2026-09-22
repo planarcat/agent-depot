@@ -2,7 +2,7 @@
 /* ====================================================================
    失败场景 / 边界 E2E —— 在沙箱服务器上运行，不触碰真实数据。
    覆盖：空态 · casr 缺失 · casr 报错 · 空内容校验 · 100 行渲染性能 · 长标题
-        · 工具注册表（添加 / 校验 / 停用 / 删除 / 彻底删除）
+        · 工具注册表（添加 / 校验 / 停用 / 删除 / 彻底删除 / 预设 / 目标同步）
    ==================================================================== */
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -126,6 +126,8 @@ const failures = () => results.filter(r => !r.ok);
   ];
   writeFileSync(join(piFixture2Dir, '2026-09-21T11-00-00-000Z_019f0000-2222-7333-8444-555566667777.jsonl'),
     piLines2.map(o => JSON.stringify(o)).join('\n') + '\n');
+  mkdirSync(join(sbxTmp, 'st-skills'), { recursive: true });
+  writeFileSync(join(sbxTmp, 'st-mcp.json'), '{}');
 
   /* launch chrome headless */
   const profile = join(tmpdirOverride(), 'hub-sbx-profile');
@@ -300,6 +302,54 @@ const failures = () => results.filter(r => !r.ok);
     const gone = await evaluate(`!window.hubApp.state.sessions.some(s => s.tool === 'purge-me')`);
     if (!gone) throw new Error('彻底删除后数据应清除');
     return '勾选彻底清除 → 数据清除 → 卡片消失';
+  });
+
+  S('tools-preset-fill', async () => {
+    await click('[data-testid="tool-add"]');
+    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '工具弹窗');
+    const nOpt = await evaluate(`document.querySelectorAll('#tool-preset option').length`);
+    if (nOpt < 6) throw new Error('预设选项应 ≥6，实际 ' + nOpt);
+    await evaluate(`(() => { const s = document.getElementById('tool-preset'); s.value = 'cursor'; s.dispatchEvent(new Event('change')); })()`);
+    const f = await evaluate(`(() => ({
+      name: document.getElementById('tool-name').value,
+      root: document.getElementById('tool-root').value,
+      skills: document.getElementById('tool-skills').value,
+      mcp: document.getElementById('tool-mcp').value }))()`);
+    if (f.name !== 'Cursor') throw new Error('预设未填名称: ' + JSON.stringify(f));
+    if (!f.root.includes('state.vscdb') || !f.skills.includes('.cursor/skills') || !f.mcp.includes('mcp.json'))
+      throw new Error('预设未填路径: ' + JSON.stringify(f));
+    await click('[data-testid="tool-close"]');
+    return `预设快填 OK（Cursor → ${f.skills}）`;
+  });
+
+  S('tools-sync-targets', async () => {
+    await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
+    await click('[data-testid="tool-add"]');
+    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '工具弹窗');
+    await evaluate(`(() => {
+      const set = (id, v) => { const el = document.getElementById(id); el.value = v;
+        el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); };
+      set('tool-name', 'Sync Test');
+      set('tool-adapter', 'pi');
+      set('tool-root', ${JSON.stringify(join(sbxTmp, 'pi-fixture'))});
+      set('tool-skills', ${JSON.stringify(join(sbxTmp, 'st-skills'))});
+      set('tool-mcp', ${JSON.stringify(join(sbxTmp, 'st-mcp.json'))});
+    })()`);
+    await click('[data-testid="tool-save"]');
+    await waitFor(`[...document.querySelectorAll('.hub-toast--success')].some(t => t.textContent.includes('已同步'))`, 8000, '目标同步 toast');
+    const okSkills = await evaluate(`fetch('/api/skills/targets').then(r=>r.json()).then(d=>d.targets.some(t=>t.path.includes('st-skills')))`);
+    const okMcp = await evaluate(`fetch('/api/mcp/targets').then(r=>r.json()).then(d=>d.targets.some(t=>t.path.includes('st-mcp')))`);
+    if (!okSkills || !okMcp) throw new Error(`目标未同步: skills=${okSkills} mcp=${okMcp}`);
+    await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
+    await click('[data-testid="manage-sync-test"]');
+    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '设置弹窗');
+    await click('[data-testid="tool-delete"]');
+    await waitFor(`!!document.querySelector('.hub-modal__ok')`, 4000, '删除确认');
+    await click('.hub-modal__ok');
+    await waitFor(`!!document.querySelector('.hub-toast--success')`, 8000, '删除 toast');
+    const gone = await evaluate(`fetch('/api/skills/targets').then(r=>r.json()).then(d=>!d.targets.some(t=>t.path.includes('st-skills')))`);
+    if (!gone) throw new Error('删除后目标未清理');
+    return '添加同步（Skills+MCP）→ 删除自动清理';
   });
 
   for (const s of scenarios) await scenario(s.name, s.fn);

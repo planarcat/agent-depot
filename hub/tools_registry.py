@@ -19,10 +19,38 @@ ADAPTERS = {
 }
 
 BUILTIN_TOOLS = [
-    {"id": "claude",   "name": "Claude Code", "adapter": "claude",   "builtin": True, "color": 1},
-    {"id": "codex",    "name": "Codex CLI",   "adapter": "codex",    "builtin": True, "color": 2},
-    {"id": "opencode", "name": "OpenCode",    "adapter": "opencode", "builtin": True, "color": 3},
+    {"id": "claude", "name": "Claude Code", "adapter": "claude", "builtin": True, "color": 1,
+     "skills_dir": "~/.claude/skills", "mcp_config": "~/.claude.json", "mcp_format": "mcpServers"},
+    {"id": "codex", "name": "Codex CLI", "adapter": "codex", "builtin": True, "color": 2,
+     "skills_dir": "~/.codex/skills", "mcp_config": "~/.codex/config.toml", "mcp_format": None},
+    {"id": "opencode", "name": "OpenCode", "adapter": "opencode", "builtin": True, "color": 3,
+     "skills_dir": "~/.config/opencode/skills", "mcp_config": "~/.config/opencode/opencode.json",
+     "mcp_format": "mcp"},
 ]
+
+# 已知工具预设：一键填满「会话采集 + Skills 目录 + MCP 配置」三件套
+TOOL_PRESETS = [
+    {"key": "claude-code", "name": "Claude Code", "adapter": "claude",
+     "root": "~/.claude/projects", "skills_dir": "~/.claude/skills",
+     "mcp_config": "~/.claude.json", "mcp_format": "mcpServers"},
+    {"key": "codex", "name": "Codex CLI", "adapter": "codex",
+     "root": "~/.codex", "skills_dir": "~/.codex/skills",
+     "mcp_config": "~/.codex/config.toml", "mcp_format": None},
+    {"key": "opencode", "name": "OpenCode", "adapter": "opencode",
+     "root": "~/.local/share/opencode/opencode.db", "skills_dir": "~/.config/opencode/skills",
+     "mcp_config": "~/.config/opencode/opencode.json", "mcp_format": "mcp"},
+    {"key": "cursor", "name": "Cursor", "adapter": "cursor",
+     "root": "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+     "skills_dir": "~/.cursor/skills", "mcp_config": "~/.cursor/mcp.json", "mcp_format": "mcpServers"},
+    {"key": "pi-agent", "name": "Pi-Agent", "adapter": "pi",
+     "root": "~/.pi/agent/sessions", "skills_dir": "~/.pi/agent/skills",
+     "mcp_config": None, "mcp_format": None},
+]
+
+
+def presets():
+    """给前端的已知工具预设（一键填表）。"""
+    return [dict(p) for p in TOOL_PRESETS]
 
 PALETTE = 6                      # 颜色槽位：tool-dot--p1 .. p6
 BUILTIN_IDS = {t["id"] for t in BUILTIN_TOOLS}
@@ -61,6 +89,9 @@ def load_tools(store):
                 t["enabled"] = bool(s.get("enabled", True))
             if s.get("name"):
                 t["name"] = str(s["name"])[:60]
+            for k in ("skills_dir", "mcp_config", "mcp_format"):
+                if k in s:
+                    t[k] = s.get(k)
         tools.append(t)
     for t in saved:
         if t["id"] in BUILTIN_IDS:
@@ -106,7 +137,13 @@ def _pick_color(tools):
     return 4 + (len(used) % (PALETTE - 3))
 
 
-def add_tool(store, name, adapter, root=None):
+def _norm_path_opt(v):
+    v = str(v or "").strip()
+    return _norm_path(v) if v else None
+
+
+def add_tool(store, name, adapter, root=None, skills_dir=None, mcp_config=None,
+             mcp_format=None):
     """新增自定义工具 → (entry, warning)；校验失败抛 ValueError。"""
     name = (name or "").strip()
     if not name:
@@ -124,7 +161,9 @@ def add_tool(store, name, adapter, root=None):
             raise ValueError("名称已存在：%s" % name)
     tid = _free_id({t["id"] for t in tools}, _slug(name))
     entry = {"id": tid, "name": name, "adapter": adapter, "root": root,
-             "enabled": True, "builtin": False, "color": _pick_color(tools)}
+             "enabled": True, "builtin": False, "color": _pick_color(tools),
+             "skills_dir": _norm_path_opt(skills_dir), "mcp_config": _norm_path_opt(mcp_config),
+             "mcp_format": (mcp_format or None)}
     entries = _saved_entries(store)
     entries.append(entry)
     save_tools(store, entries)
@@ -153,6 +192,9 @@ def update_tool(store, tid, patch):
         if not str(patch["root"]).strip():
             raise ValueError("路径不能为空")
         patch["root"] = _norm_path(patch["root"])
+    for k in ("skills_dir", "mcp_config"):
+        if k in patch:
+            patch[k] = _norm_path_opt(patch.get(k))
     entries = _saved_entries(store)
     ent = next((s for s in entries if s["id"] == tid), None)
     if cur.get("builtin"):
@@ -163,9 +205,11 @@ def update_tool(store, tid, patch):
             entries.append(ent)
     if ent is None:
         raise KeyError(tid)
-    for k in ("name", "enabled", "root"):
+    for k in ("name", "enabled", "root", "skills_dir", "mcp_config", "mcp_format"):
         if k in patch and patch[k] is not None:
             ent[k] = patch[k]
+        elif k in ("skills_dir", "mcp_config") and k in patch and patch[k] is None:
+            ent.pop(k, None)
     save_tools(store, entries)
     return tool_by_id(store, tid)
 
@@ -226,6 +270,8 @@ def public_list(store, counts=None):
         root = t.get("root")
         out.append({
             "id": t["id"], "name": t["name"], "adapter": t["adapter"],
+            "skills_dir": t.get("skills_dir"), "mcp_config": t.get("mcp_config"),
+            "mcp_format": t.get("mcp_format"),
             "builtin": bool(t.get("builtin")),
             "enabled": bool(t.get("enabled", True)),
             "color": int(t.get("color") or 0),

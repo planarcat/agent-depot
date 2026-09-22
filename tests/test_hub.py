@@ -105,9 +105,15 @@ class HubSandbox:
                      (json.dumps({"type": "text", "text": "回归已通过"}),))
         conn.commit(); conn.close()
 
+        # 记忆总线克隆源夹具（wire-memory 测试用）
+        cls.mem_src = os.path.join(cls.tmp, "mem-src.json")
+        with open(cls.mem_src, "w") as f:
+            f.write(json.dumps({"mcpServers": {"agentmemory": {"command": "agentmemory-mcp",
+                                                               "args": ["serve"]}}}))
         env = dict(os.environ)
         env.update({
             "AGENT_HUB_DIR": os.path.join(cls.tmp, "hub"),
+            "HUB_AGENTMEMORY_SRC": cls.mem_src,
             "HUB_CLAUDE_PROJECTS": os.path.join(cls.tmp, "claude"),
             "CODEX_HOME": cls.codex_home,
             "HUB_OPENCODE_DB": cls.opencode_db,
@@ -775,6 +781,58 @@ class ToolsTest(HubSandbox, unittest.TestCase):
         self.assertEqual(s, 200)
         s, d = req("POST", "/api/schedule", {"tool": "no-such-scope", "enabled": True})
         self.assertEqual(s, 400)
+
+    def test_t10_targets_sync(self):
+        """集成字段 → 自动同步/回收 Skills 与 MCP 目标（origin 溯源）。"""
+        sdir = os.path.join(self.tmp, "sync-skills")
+        os.makedirs(sdir, exist_ok=True)
+        mcfg = os.path.join(self.tmp, "sync-mcp.json")
+        with open(mcfg, "w") as f:
+            f.write("{}")
+        s, d = req("POST", "/api/tools", {"name": "Sync Test", "adapter": "pi",
+                                          "root": self.pi_dir,
+                                          "skills_dir": sdir, "mcp_config": mcfg})
+        self.assertEqual(s, 200)
+        self.assertTrue(d["ok"])
+        self.assertEqual(len(d.get("targets_created") or []), 2)
+        s, d = req("GET", "/api/skills/targets")
+        self.assertTrue(any(os.path.expanduser(t["path"]) == sdir for t in d["targets"]))
+        s, d = req("GET", "/api/mcp/targets")
+        self.assertTrue(any(os.path.expanduser(t["path"]) == mcfg for t in d["targets"]))
+        s, d = req("PATCH", "/api/tools/sync-test", {"skills_dir": ""})
+        self.assertEqual(s, 200)
+        self.assertIn("Sync Test Skills (全局)", d.get("targets_removed") or [])
+        s, d = req("GET", "/api/skills/targets")
+        self.assertFalse(any(os.path.expanduser(t["path"]) == sdir for t in d["targets"]))
+        s, d = req("DELETE", "/api/tools/sync-test")
+        self.assertEqual(s, 200)
+        self.assertIn("Sync Test (全局)", d.get("targets_removed") or [])
+        s, d = req("GET", "/api/mcp/targets")
+        self.assertFalse(any(os.path.expanduser(t["path"]) == mcfg for t in d["targets"]))
+
+    def test_t11_wire_memory(self):
+        """记忆总线一键接入：克隆现有配置写入 + 备份 + 状态可视。"""
+        cfg = os.path.join(self.tmp, "wire-mcp.json")
+        with open(cfg, "w") as f:
+            f.write('{"mcpServers": {}}')
+        s, d = req("POST", "/api/tools", {"name": "Wire Test", "adapter": "pi",
+                                          "root": self.pi_dir, "mcp_config": cfg})
+        self.assertEqual(s, 200)
+        s, d = req("POST", "/api/tools/wire-test/wire-memory", {})
+        self.assertEqual(s, 200)
+        self.assertTrue(d["ok"])
+        with open(cfg) as f:
+            w = json.load(f)
+        self.assertEqual(w["mcpServers"]["agentmemory"]["command"], "agentmemory-mcp")
+        import glob as _glob
+        self.assertTrue(_glob.glob(cfg + ".bak-*"), "备份文件必须存在")
+        s, d = req("GET", "/api/state")
+        tool = [t for t in d["tool_list"] if t["id"] == "wire-test"][0]
+        self.assertTrue(tool["memory_wired"])
+        s, d = req("POST", "/api/tools/wire-test/wire-memory", {})
+        self.assertTrue(d.get("already"), "重复接入应幂等")
+        s, d = req("POST", "/api/tools/ghost-tool/wire-memory", {})
+        self.assertEqual(s, 400, "无 MCP 配置的工具应拒绝")
 
     def test_t09_purge_delete_with_backup(self):
         """彻底删除：先备份再清数据；内置保护；未知范围 404。"""

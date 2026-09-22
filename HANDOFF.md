@@ -114,7 +114,8 @@ bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E �
 - 全链路动态化：面板卡片 / 筛选 / 定时范围 / 刷新 / 计数 / 来源标签随注册表；未知定时范围 → 400（原为静默忽略）。
 - 新适配器：**Pi-Agent**（`~/.pi/agent/sessions/*.jsonl`，字节增量 tail）与 **Cursor**（`globalStorage/state.vscdb` 的 `composerData:` + `bubbleId:` 只读解析，richText 展平）。
 - 实机接入：Pi-Agent 38 会话 / 4989 消息；Cursor 9 composer / 637 消息。
-- 测试：全量 **104 项 + lint 全绿**（API 44 · 模块 30 · E2E 无头 16 · 有头 3 · 沙箱 11）。
+- 工具顶层化（v0.5.2）：集成字段（skills_dir / mcp_config）+ 5 个已知工具预设；保存时自动同步 Skills / MCP 分发目标（origin 溯源、删除工具自动回收）；`POST /api/tools/<id>/wire-memory` 一键接入记忆总线（先备份、幂等）；记忆视图显示各工具总线状态。
+- 测试：全量 **108 项 + lint 全绿**（API 46 · 模块 30 · E2E 无头 16 · 有头 3 · 沙箱 13）。
 
 ## 决策记录（执行期间无反馈，按保守默认推进）
 

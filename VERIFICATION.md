@@ -1,13 +1,14 @@
 # 测试记录 · Verification
 
-> 最新更新：2026-09-22（v0.5.1 工具注册表 · **104 项测试全绿**）。原始报告在 `tests/evidence/`。
+> 最新更新：2026-09-22（v0.5.2 工具顶层化联动 · **108 项测试全绿**）。原始报告在 `tests/evidence/`。
 
 ## v0.5.1 工具注册表（2026-09-22）
 
 - 范围：`/api/tools` CRUD（添加 / 改名 / 停用 / 删除 / 彻底删除）+ 五种格式模板 + 动态面板/筛选/定时；新适配器 Pi-Agent 与 Cursor。
-- 结果：`ALL SUITES PASSED ✓` —— lint + API 44 + Skills 13 + MCP 9 + Extras 8 + E2E 无头 16 + 有头 3 + 沙箱 11 = **104 项 + lint**。
+- 结果：`ALL SUITES PASSED ✓` —— lint + API 46 + Skills 13 + MCP 9 + Extras 8 + E2E 无头 16 + 有头 3 + 沙箱 13 = **108 项 + lint**。
 - 实机数据：Pi-Agent 38 会话 / 4989 消息、Cursor 9 composer / 637 消息 均已入库（55 会话总量）。
 - 边界覆盖：空名称 / 未知格式 / 空路径 / 重名 / 路径不存在（警告不阻断）/ 内置不可删 / 移除后数据保留 / 彻底删除先备份后清除（备份 zip 落盘断言，`?purge=1`）/ 未知定时范围 400 / 停用不参与扫描。
+- 顶层联动（v0.5.2）：工具集成字段自动同步 Skills / MCP 目标（origin 溯源 + 删除回收断言）；`wire-memory` 克隆 + 备份 + 幂等；预设快填与目标同步均有沙箱 E2E 覆盖。
 
 ## 测试体系（4 层 + 演练）
 
@@ -99,5 +100,5 @@ curl -s http://127.0.0.1:3111/agentmemory/health | head -c 120
 5. 会话页「统计」按钮 → 面板 + 「批量导出全部（zip）」；
 6. 记忆页搜索关键词 → 命中片段；「导出 MD/JSON」直接下载；
 7. `python3 scripts/drill_v04.py` 一键复现完整闭环（8/8）；
-8. `bash tests/run_all.sh` → 六套件全绿（104 项）。
+8. `bash tests/run_all.sh` → 六套件全绿（108 项）。
 9. 工具注册表：会话页「＋ 添加工具」→ 选模板（如 Pi-Agent / Cursor）→ 刷新即采集；卡片「设置」中可停用/移除（已采集数据保留）。

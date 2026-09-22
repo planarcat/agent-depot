@@ -346,3 +346,7 @@ body {
 .tool-foot-spacer { flex: 1; }
 .tool-purge-opt { display: flex; gap: 6px; align-items: flex-start; font-size: var(--fs-s); color: var(--c-ink-2); line-height: 1.6; }
 .tool-purge-opt input { margin-top: 3px; }
+.tool-mem-row { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-1); }
+.tool-mem-label { font-size: var(--fs-s); color: var(--c-ink-4); }
+.mem-bus { display: flex; flex-wrap: wrap; gap: var(--sp-2); padding: var(--sp-1) 0 var(--sp-3); }
+.mem-bus__item { font-size: var(--fs-s); color: var(--c-ink-2); border: 1px solid var(--c-line); border-radius: var(--r-s); padding: 2px var(--sp-2); }
