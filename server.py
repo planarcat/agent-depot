@@ -801,11 +801,20 @@ def _agentmemory_health():
         return False
 
 
+class HubServer(ThreadingHTTPServer):
+    """并发加固：默认 listen backlog=5，页面加载的连接突发会溢出排队导致连接被 RST。
+
+    抬高排队上限后，突发连接进入队列等待 accept，不再丢请求。"""
+    daemon_threads = True
+    allow_reuse_address = True
+    request_queue_size = 128
+
+
 def main():
     global STORE
     ensure_store()
     addr = ("127.0.0.1", PORT)
-    httpd = ThreadingHTTPServer(addr, Handler)
+    httpd = HubServer(addr, Handler)
     print("Agent Depot -> http://127.0.0.1:%d  (Ctrl-C to stop)" % PORT)
     print("hub dir: %s" % STORE.db.db if False else "hub db:  ~/.agent/hub/hub.db")
     try:

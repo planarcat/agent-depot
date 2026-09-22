@@ -90,6 +90,10 @@ async function newPage(url) {
 /* ---------- test harness ---------- */
 const results = [];
 const consoleErrors = [];
+const navEvents = [];
+const netInflight = new Map();
+const netFails = [];
+let currentScenario = '';
 let cdp;
 
 async function evaluate(expr) {
@@ -115,6 +119,7 @@ async function shot(name) {
 }
 async function scenario(name, fn) {
   const t0 = Date.now();
+  currentScenario = name;
   try {
     const detail = await fn();
     results.push({ name, ok: true, ms: Date.now() - t0, detail: detail || null });
@@ -136,9 +141,16 @@ async function skillsRowsOrDump() {
     const dump = await evaluate(`JSON.stringify({
       center: ((document.querySelector('.sb-center') || {}).innerHTML || 'NO CENTER').replace(/\s+/g, ' ').slice(0, 220),
       toasts: [...document.querySelectorAll('.hub-toast')].map(t => t.textContent.trim()).slice(0, 3),
-      skillsView: typeof window.SkillsView,
-      active: document.getElementById('view-skills').classList.contains('is-active') })`);
-    throw new Error(e.message + ' | dump=' + dump);
+      skillsView: typeof window.SkillsView, mcpView: typeof window.McpView, opsView: typeof window.OpsView,
+      active: document.getElementById('view-skills').classList.contains('is-active'),
+      readyState: document.readyState, href: location.href,
+      pageAgeMs: Math.round(Date.now() - performance.timeOrigin),
+      navCount: performance.getEntriesByType('navigation').length,
+      navType: (performance.getEntriesByType('navigation')[0] || {}).type,
+      vkLen: (document.getElementById('view-skills').innerHTML || '').length,
+      viewRows: document.querySelectorAll('[data-testid="row"]').length,
+      scripts: performance.getEntriesByType('resource').filter(e => e.name.includes('/views/')).map(e => e.name.split('/').pop() + ':' + e.transferSize + ':' + Math.round(e.startTime)) })`);
+    throw new Error(e.message + ' | dump=' + dump + ' | nav=' + JSON.stringify(navEvents.slice(-4)) + ' | inflight=' + JSON.stringify([...netInflight.values()].map(r => ({ u: r.url, ms: Date.now() - r.t })).slice(0, 8)) + ' | netFails=' + JSON.stringify(netFails.slice(-6)));
   }
 }
 
@@ -148,7 +160,17 @@ S('page-load', async () => {
   const badge = await evaluate(`document.querySelector('[data-testid="engine-badge"]').textContent`);
   if (!badge.includes('已连接')) throw new Error('引擎徽章异常: ' + badge);
   const n = await evaluate(`document.querySelectorAll('[data-testid="row"]').length`);
-  return `${n} 行会话 · ${badge}`;
+  const sc = await evaluate(`(() => {
+    const r = document.getElementById('session-rows');
+    const sh = r.scrollHeight, ch = r.clientHeight;
+    r.scrollTop = 120; const moved = r.scrollTop > 0; r.scrollTop = 0;
+    return { sh, ch, moved };
+  })()`);
+  if (n > 14) {
+    if (!(sc.sh > sc.ch)) throw new Error(`列表高度链断裂回归：列表超一屏但不可滚动 (${sc.sh}/${sc.ch})`);
+    if (!sc.moved) throw new Error('列表 scrollTop 卡死（高度链回归）');
+  }
+  return `${n} 行会话 · ${badge} · ${n > 14 ? '列表可滚动' : '行数少跳过滚动检查'}`;
 }, true);
 
 S('screenshot-desktop', async () => {
@@ -414,9 +436,26 @@ S('screenshot-mobile', async () => {
   const { proc, profile, version } = await launchChrome();
   console.log(`Chrome: ${version} | 模式: ${HEADED ? '有头' : '无头'} | 目标: ${BASE}`);
 
-  const target = await newPage(BASE + '/');
+  const target = await newPage('about:blank');
   cdp = await CDP.connect(target.webSocketDebuggerUrl);
   cdp.on(msg => {
+    if (msg.method === 'Network.requestWillBeSent') {
+      netInflight.set(msg.params.requestId, { url: msg.params.request.url, t: Date.now() });
+    }
+    if (msg.method === 'Network.loadingFinished') {
+      netInflight.delete(msg.params.requestId);
+    }
+    if (msg.method === 'Network.loadingFailed') {
+      const rec = netInflight.get(msg.params.requestId);
+      netFails.push({ url: rec ? rec.url : '?', err: msg.params.errorText, ageMs: rec ? Date.now() - rec.t : -1 });
+      netInflight.delete(msg.params.requestId);
+    }
+    if (msg.method === 'Page.frameNavigated' && !msg.params.frame.parentId) {
+      navEvents.push({ t: Date.now(), url: msg.params.frame.url, scenario: currentScenario });
+    }
+    if (msg.method === 'Page.frameStartedLoading') {
+      navEvents.push({ t: Date.now(), loading: true, scenario: currentScenario });
+    }
     if (msg.method === 'Runtime.exceptionThrown') {
       const d = msg.params.exceptionDetails;
       consoleErrors.push('exception: ' + (d.exception?.description || d.text));
@@ -427,6 +466,9 @@ S('screenshot-mobile', async () => {
   });
   await cdp.send('Runtime.enable');
   await cdp.send('Page.enable');
+  await cdp.send('Network.enable');
+  // 先接上 CDP 再导航：初始页面加载的全部网络事件都可被捕获（此前是盲区）
+  await cdp.send('Page.navigate', { url: BASE + '/' });
 
   const list = SMOKE ? scenarios.filter(s => s.smoke) : scenarios;
   for (const s of list) await scenario(s.name, s.fn);
@@ -440,9 +482,12 @@ S('screenshot-mobile', async () => {
     mode: HEADED ? 'headed' : 'headless', smoke: SMOKE, base: BASE,
     chrome: version, startedAt: new Date().toISOString(),
     passed: results.filter(r => r.ok).length, failed: results.filter(r => !r.ok).length,
-    results, consoleErrors: realErrors,
+    results, consoleErrors: realErrors, navEvents,
+    netSummary: { fails: netFails.slice(-10), inflightAtEnd: [...netInflight.values()].slice(0, 10) },
   };
   writeFileSync(join(EVIDENCE, `e2e-report-${HEADED ? 'headed' : 'headless'}.json`), JSON.stringify(report, null, 2));
+  if (navEvents.length) console.log('nav-log: ' + JSON.stringify(navEvents.slice(0, 10)));
+  if (netFails.length) console.log('net-fails: ' + JSON.stringify(netFails.slice(-10)));
   console.log(`\n=== E2E ${report.mode}${SMOKE ? ' (smoke)' : ''}: ${report.passed} passed / ${report.failed} failed ===`);
 
   proc.kill();

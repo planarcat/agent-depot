@@ -23,7 +23,7 @@ body {
 .topbar__spacer { flex: 1; }
 
 /* ---------- main 3-column ---------- */
-.main { display: grid; grid-template-columns: 252px minmax(0,1fr) 312px; min-height: 0; }
+.main { display: grid; grid-template-columns: 252px minmax(0,1fr) 312px; grid-template-rows: minmax(0, 1fr); min-height: 0; height: 100%; }
 
 /* left rail */
 .rail { background: var(--c-surface); border-right: 1px solid var(--c-line); padding: var(--sp-4); overflow-y: auto; }
@@ -256,7 +256,7 @@ body {
 .view { display: none; min-height: 0; overflow: hidden; }
 .view.is-active { display: block; }
 
-.sb-layout { display: grid; grid-template-columns: 300px minmax(0,1fr) 340px; min-height: 0; }
+.sb-layout { display: grid; grid-template-columns: 300px minmax(0,1fr) 340px; grid-template-rows: minmax(0, 1fr); min-height: 0; height: 100%; }
 .sb-layout > .rail, .sb-layout > .center { max-height: none; }
 .sb-center { display: flex; flex-direction: column; min-width: 0; }
 .sb-spacer { flex: 1; }
@@ -303,7 +303,7 @@ body {
 #view-ops .sb-row { grid-template-columns: 110px minmax(0,1fr); }
 
 /* memory view */
-.mem-view { padding: var(--sp-6) var(--sp-7); max-width: 860px; margin: 0 auto; }
+.mem-view { padding: var(--sp-6) var(--sp-7); max-width: 860px; margin: 0 auto; height: 100%; overflow-y: auto; }
 .mem-view .mem-form { margin-bottom: var(--sp-6); }
 .mem-search { margin: var(--sp-4) 0; }
 
