@@ -20,7 +20,7 @@ import re as _re
 
 _NOISE_TITLE = _re.compile(
     r"^\s*(@/|<(environment_context|app-context|user_instructions|system|turn_context|"
-    "environment|context|turn_aborted|image\b|/image>)|# Files mentioned)",
+    "environment|context|turn_aborted|image\b|/image>|system-reminder)|# Files mentioned)",
     _re.IGNORECASE)
 _FILES_MENTIONED = "# Files mentioned by the user"
 
@@ -94,10 +94,16 @@ def _classify_claude_line(o):
     return None
 
 
+def _expand_root(p):
+    """统一展开 ~：扫描器用 glob / os.path.exists，不展开 ~ 会静默采不到任何文件。
+    （2026-10-14 生产 bug：内置工具的 root 存的是 ~/... ，build_scanners 原样传入 → 全部采不到）"""
+    return os.path.expanduser(str(p)) if p else p
+
+
 class ClaudeScanner:
     def __init__(self, tool_id=None, root=None):
         self.tool = tool_id or "claude"
-        self.root = root
+        self.root = _expand_root(root)
 
     def sources(self):
         base = (self.root or os.environ.get("HUB_CLAUDE_PROJECTS")
@@ -237,7 +243,7 @@ def _codex_event_text(payload):
 class CodexScanner:
     def __init__(self, tool_id=None, root=None):
         self.tool = tool_id or "codex"
-        self.root = root
+        self.root = _expand_root(root)
 
     def sources(self):
         home = (self.root or os.environ.get("CODEX_HOME")
@@ -335,7 +341,7 @@ class OpenCodeScanner:
 
     def __init__(self, tool_id=None, root=None):
         self.tool = tool_id or "opencode"
-        self.root = root or os.environ.get("HUB_OPENCODE_DB")
+        self.root = _expand_root(root) or os.environ.get("HUB_OPENCODE_DB")
 
     def _candidates(self):
         return [self.root] if self.root else self.DB_CANDIDATES
@@ -495,7 +501,7 @@ class PiScanner:
 
     def __init__(self, tool_id=None, root=None):
         self.tool = tool_id or "pi"
-        self.root = root
+        self.root = _expand_root(root)
 
     def sources(self):
         base = self.root or os.path.expanduser("~/.pi/agent/sessions")
@@ -643,7 +649,7 @@ class CursorScanner:
 
     def __init__(self, tool_id=None, root=None):
         self.tool = tool_id or "cursor"
-        self.root = root
+        self.root = _expand_root(root)
 
     def sources(self):
         p = self.root or os.path.expanduser(
@@ -732,12 +738,352 @@ class CursorScanner:
         return stats
 
 
+# ============================================================ WorkBuddy
+def _wb_ts(v):
+    """WorkBuddy 的时间戳是毫秒整数（1786675947929）；少数行给 ISO 字符串。"""
+    if isinstance(v, (int, float)) and v:
+        v = float(v)
+        return time.strftime("%Y-%m-%dT%H:%M:%S",
+                             time.localtime(v / 1000 if v > 1e11 else v))
+    if isinstance(v, str) and v.strip():
+        return v
+    return None
+
+
+def _text_from_wb_content(content):
+    """WorkBuddy message.content：str 或 [{"type":"input_text"|"output_text","text":...}]。"""
+    if isinstance(content, str):
+        return content
+    parts = []
+    if isinstance(content, list):
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            t = b.get("type")
+            if t in ("input_text", "output_text", "text"):
+                parts.append(b.get("text") or "")
+            elif t in ("input_image", "image"):
+                parts.append("[image]")
+    return "\n".join(p for p in parts if p)
+
+
+def _classify_wb_line(o):
+    """WorkBuddy 会话行 → (role, content, ctype) 或 None。
+
+    {"type":"message","role":"user"|"assistant","content":[...],"timestamp":<ms>}
+    工具调用是独立的 function_call / function_call_result 行，不混在 message 里。
+    """
+    if o.get("type") != "message":
+        return None
+    role = o.get("role")
+    if role not in ("user", "assistant"):
+        return None
+    txt = _text_from_wb_content(o.get("content"))
+    if not txt:
+        return None
+    return (role, txt, "text")
+
+
+class WorkBuddyScanner:
+    """WorkBuddy 会话：<root>/<project>/<uuid>.jsonl（自有 JSONL 格式，追加式）。
+
+    标题行 {"type":"ai-title","aiTitle":...,"sessionId":...} 优先作为会话标题。
+    """
+
+    def __init__(self, tool_id=None, root=None):
+        self.tool = tool_id or "workbuddy"
+        self.root = _expand_root(root)
+
+    def sources(self):
+        base = (self.root or os.environ.get("HUB_WORKBUDDY_PROJECTS")
+                or os.path.expanduser("~/.workbuddy/projects"))
+        return sorted(glob.glob(os.path.join(base, "*", "*.jsonl")))
+
+    def scan(self, store: Store):
+        stats = {"tool": self.tool, "files": 0, "new_messages": 0, "new_sessions": 0}
+        for path in self.sources():
+            stats["files"] += 1
+            key = "%s:%s" % (self.tool, path)
+            cur = store.get_cursor(key) or {"offset_bytes": 0, "msg_seq": 0}
+            try:
+                size = os.path.getsize(path)
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            if size < cur["offset_bytes"]:
+                cur = {"offset_bytes": 0, "msg_seq": 0}
+
+            sid = os.path.splitext(os.path.basename(path))[0]
+            proj = os.path.basename(os.path.dirname(path))
+            with open(path, "rb") as f:
+                f.seek(cur["offset_bytes"])
+                chunk = f.read()
+            consumed = cur["offset_bytes"] + len(chunk)
+            if chunk.endswith(b"\n"):
+                lines = chunk.split(b"\n")[:-1]
+            else:
+                parts = chunk.split(b"\n")
+                lines = parts[:-1]
+                consumed -= len(parts[-1])
+
+            session_touched = False
+            user_candidates = []
+            seq = cur["msg_seq"]
+            started_at = updated_at = None
+            custom_title = None
+            last_ts = None
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except Exception:
+                    seq += 1
+                    continue
+                ts = _wb_ts(o.get("timestamp"))
+                if ts:
+                    last_ts = ts
+                    if started_at is None:
+                        started_at = ts
+                typ = o.get("type")
+                if typ == "ai-title":
+                    custom_title = o.get("aiTitle") or o.get("title") or custom_title
+                if o.get("cwd"):
+                    proj = o["cwd"]
+                cls = _classify_wb_line(o)
+                if cls is None:
+                    continue
+                role, content, ctype = cls
+                if role == "user" and ctype == "text":
+                    user_candidates.append(content[:200])
+                seq += 1
+                r = store.add_message(sid, self.tool, seq, ts, role, content, ctype, raw=None)
+                if r == "new":
+                    stats["new_messages"] += 1
+                    session_touched = True
+
+            if session_touched or cur["offset_bytes"] == 0:
+                title = (custom_title or _pick_title(user_candidates)
+                         or "(%s) %s" % (self.tool, _clean_title(proj)))
+                if started_at is None:
+                    started_at = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mtime))
+                store.upsert_session(sid, self.tool, (title or "")[:200], proj, path,
+                                     started_at, last_ts or now_iso(),
+                                     "ai-title" if custom_title else "first-user")
+                stats["new_sessions"] += 1
+                store.bump_msg_count(sid)
+            store.set_cursor(key, consumed, seq, mtime, size)
+        store.commit()
+        return stats
+
+
+# ============================================================ ZCode
+class ZCodeScanner(OpenCodeScanner):
+    """ZCode 会话库与 OpenCode 同构（session / message / part 三表），复用其读取逻辑。
+
+    库：~/.zcode/cli/db/db.sqlite；message.data 带 role，part.data 带 type/text。
+    """
+
+    DB_CANDIDATES = [
+        os.path.expanduser("~/.zcode/cli/db/db.sqlite"),
+    ]
+
+    def __init__(self, tool_id=None, root=None):
+        self.tool = tool_id or "zcode"
+        self.root = _expand_root(root) or os.environ.get("HUB_ZCODE_DB")
+
+
+# ============================================================ AutoClaw
+_OC_MARKER_RE = _re.compile(r"<<<AUTOCLAW_[A-Z_]+>>>")
+
+
+def _strip_oc_markers(txt):
+    """剥离 AutoClaw 包装标记 <<<AUTOCLAW_XXX_START>>> / _END>>>，只留正文。"""
+    return _OC_MARKER_RE.sub("", txt or "").strip()
+
+
+def _oc_is_policy_noise(content):
+    """AutoClaw 每轮会注入大段策略提醒（13000+ 字符，几乎全是 system-reminder），
+    这类消息不是用户对话，整条跳过，避免污染会话与标题。"""
+    if not content:
+        return True
+    return ("AUTOCLAW_STABLE_POLICY_REMINDER" in content
+            or "AUTOCLAW_OUTPUT_PROTOCOL" in content)
+
+
+def _oc_title_candidate(content):
+    """AutoClaw 的 user 消息是长任务文本 / IM 批次，没有天然标题：
+    逐行扫描，跳过空行、[方括号] 与 <标签> 标记行，取首个有意义的行截断 60 字。
+    """
+    if not content:
+        return None
+    for raw in content.split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        line = line.lstrip("#>-* \t").strip()
+        if not line or line.startswith("[") or line.startswith("<"):
+            continue
+        if _NOISE_TITLE.match(line):
+            continue
+        return line[:60]
+    return None
+
+
+class AutoClawScanner:
+    """AutoClaw 会话：<root>/agents/<agent>/sessions/<uuid>.jsonl（追加式 JSONL）。
+
+    行：{"type":"message","message":{"role":"user"|"assistant","content":...}}
+    另有 session（带 cwd）/ model_change / compaction 等行；执行轨迹 .trajectory.jsonl 不采。
+    """
+
+    def __init__(self, tool_id=None, root=None):
+        self.tool = tool_id or "autoclaw"
+        self.root = _expand_root(root)
+
+    def sources(self):
+        # root 既可能是 <...>/.openclaw-autoclaw（适配器默认），也可能是它下面的 agents/
+        # （内置工具登记的就是这一层）→ 两种都认，避免多拼一层 agents 导致采不到
+        base = _expand_root(self.root or os.environ.get("HUB_AUTOCLAW_DIR")
+                            or os.path.expanduser("~/.openclaw-autoclaw"))
+        pats = [os.path.join(base, "*", "sessions", "*.jsonl")]
+        if os.path.basename(base.rstrip("/")) != "agents":
+            pats.append(os.path.join(base, "agents", "*", "sessions", "*.jsonl"))
+        found = []
+        for pat in pats:
+            found += glob.glob(pat)
+        return sorted(p for p in set(found) if not p.endswith(".trajectory.jsonl"))
+
+    def scan(self, store: Store):
+        stats = {"tool": self.tool, "files": 0, "new_messages": 0, "new_sessions": 0}
+        for path in self.sources():
+            stats["files"] += 1
+            key = "%s:%s" % (self.tool, path)
+            cur = store.get_cursor(key) or {"offset_bytes": 0, "msg_seq": 0}
+            try:
+                size = os.path.getsize(path)
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            if size < cur["offset_bytes"]:
+                cur = {"offset_bytes": 0, "msg_seq": 0}
+
+            sid = os.path.splitext(os.path.basename(path))[0]
+            proj = os.path.basename(os.path.dirname(os.path.dirname(path)))
+            with open(path, "rb") as f:
+                f.seek(cur["offset_bytes"])
+                chunk = f.read()
+            consumed = cur["offset_bytes"] + len(chunk)
+            if chunk.endswith(b"\n"):
+                lines = chunk.split(b"\n")[:-1]
+            else:
+                parts = chunk.split(b"\n")
+                lines = parts[:-1]
+                consumed -= len(parts[-1])
+
+            session_touched = False
+            user_candidates = []
+            seq = cur["msg_seq"]
+            started_at = None
+            custom_title = None
+            last_ts = None
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except Exception:
+                    seq += 1
+                    continue
+                ts = o.get("timestamp")
+                if ts:
+                    last_ts = ts
+                    if started_at is None:
+                        started_at = ts
+                typ = o.get("type")
+                if o.get("cwd"):
+                    proj = o["cwd"]
+                if typ == "compaction":
+                    summary = o.get("summary")
+                    if summary:
+                        seq += 1
+                        if store.add_message(sid, self.tool, seq, ts, "system",
+                                             "summary: %s" % summary, "system") == "new":
+                            stats["new_messages"] += 1
+                            session_touched = True
+                    continue
+                if typ != "message":
+                    continue
+                msg = o.get("message") or {}
+                role = msg.get("role")
+                if role not in ("user", "assistant"):
+                    continue
+                content = _strip_oc_markers(_text_from_claude_content(msg.get("content")))
+                if not content:
+                    continue
+                if _oc_is_policy_noise(content):
+                    continue          # 策略注入消息，不入库也不参与标题
+                if role == "user":
+                    cand = _oc_title_candidate(content)
+                    if cand:
+                        user_candidates.append(cand)
+                seq += 1
+                r = store.add_message(sid, self.tool, seq, ts, role, content, "text", raw=None)
+                if r == "new":
+                    stats["new_messages"] += 1
+                    session_touched = True
+
+            if session_touched or cur["offset_bytes"] == 0:
+                title = (custom_title or _pick_title(user_candidates)
+                         or "(%s) %s" % (self.tool, _clean_title(proj)))
+                if started_at is None:
+                    started_at = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mtime))
+                store.upsert_session(sid, self.tool, (title or "")[:200], proj, path,
+                                     started_at, last_ts or now_iso(), "first-user")
+                stats["new_sessions"] += 1
+                store.bump_msg_count(sid)
+            store.set_cursor(key, consumed, seq, mtime, size)
+        store.commit()
+        return stats
+
+
+# ============================================================ Trae CN
+class TraeScanner:
+    """Trae CN：会话正文存在加密库，现阶段不采集。
+
+    实测（2026-10-09）：会话正文在
+      ~/Library/Application Support/Trae CN/ModularData/ai-chat/database.db
+    该文件是 SQLCipher 加密库（文件头非 "SQLite format 3"），不解密读不出；
+    工作区 state.vscdb 里的 ChatStore / chat.ChatSessionStore.index 只存界面状态
+    （面板高度、标签栏），不含对话内容。故 sources() 返回空 —— 工具照常登记
+    （Skills / MCP 仍可管理），会话侧留 0 条。若 Trae 后续开放明文导出，
+    在此补 sources() / scan() 即可。
+    """
+
+    def __init__(self, tool_id=None, root=None):
+        self.tool = tool_id or "trae-cn"
+        self.root = _expand_root(root)
+
+    def sources(self):
+        return []
+
+    def scan(self, store: Store):
+        return {"tool": self.tool, "files": 0, "new_messages": 0, "new_sessions": 0,
+                "note": "Trae CN 会话库为加密存储（SQLCipher），暂不支持采集"}
+
+
 ADAPTER_CLASSES = {
     "claude": ClaudeScanner,
     "codex": CodexScanner,
     "opencode": OpenCodeScanner,
     "pi": PiScanner,
     "cursor": CursorScanner,
+    "workbuddy": WorkBuddyScanner,
+    "zcode": ZCodeScanner,
+    "autoclaw": AutoClawScanner,
+    "trae-cn": TraeScanner,
 }
 
 
@@ -750,7 +1096,8 @@ def build_scanners(store):
         cls = ADAPTER_CLASSES.get(t.get("adapter"))
         if cls is None:
             continue
-        out.append(cls(tool_id=t["id"], root=t.get("root")))
+        # 展开 ~ 后再交给扫描器（扫描器内部也会展开一次；这里是防回归的关键点）
+        out.append(cls(tool_id=t["id"], root=_expand_root(t.get("root"))))
     return out
 
 
@@ -764,3 +1111,234 @@ def scan_all(store: Store, tools=None):
         except Exception as e:  # one broken source must not kill the refresh
             results.append({"tool": sc.tool, "error": str(e)})
     return results
+
+# ============================================================ 只读试读（工具路径探测）
+# 用途：登记/编辑工具时当场回答两件事——「按这个格式在这个路径下能读到东西吗」、
+# 「这个路径看起来更像哪个已知格式」。避免用户选错格式后静默 0 条。
+# 与真实采集共用同一套 sources() 规则，但绝不写库、不写 cursor、不动源文件。
+PROBE_LAYOUT = {
+    "claude": "<root>/*/*.jsonl",
+    "codex": "<root>/sessions/**/*.jsonl",
+    "opencode": "<root>（SQLite 数据库文件）",
+    "pi": "<root>/**/*.jsonl",
+    "cursor": "<root>（state.vscdb 数据库）",
+    "workbuddy": "<root>/*/*.jsonl",
+    "zcode": "<root>（SQLite 数据库文件）",
+    "autoclaw": "<root>/agents/*/sessions/*.jsonl",
+    "trae-cn": "会话库为 SQLCipher 加密（暂不采集）",
+    "agents": "无会话采集（仅登记 Skills / MCP）",
+}
+PROBE_BUDGET_S = 2.0
+PROBE_LIMIT = 200
+
+
+def _walk_jsonl(base, deadline, limit=PROBE_LIMIT):
+    """带预算的递归 *.jsonl 收集（仅 pi 用 <root>/**/*.jsonl，避免大目录卡死）。"""
+    hits = []
+    for dirpath, _dirnames, filenames in os.walk(base):
+        if time.monotonic() > deadline:
+            return hits, True
+        for fn in filenames:
+            if fn.endswith(".jsonl"):
+                hits.append(os.path.join(dirpath, fn))
+                if len(hits) >= limit:
+                    return hits, True
+    return hits, False
+
+
+def probe_source(adapter, root):
+    """只读试读：该格式在该路径下能匹配到几个候选文件/库（含样例名与失败原因）。"""
+    out = {"adapter": adapter or "", "layout": PROBE_LAYOUT.get(adapter or "", ""),
+           "files": 0, "sample": [], "readable": False, "note": "", "reason": ""}
+    if not adapter:
+        out["note"], out["reason"] = "未选择会话格式", "no-adapter"
+        return out
+    if adapter not in ADAPTER_CLASSES:
+        out["note"], out["reason"] = "该格式没有采集器（只能登记 Skills / MCP）", "no-collector"
+        return out
+    if not str(root or "").strip():
+        out["note"], out["reason"] = "未填会话路径", "no-root"
+        return out
+    p = os.path.expanduser(str(root).strip())
+    if not os.path.exists(p):
+        out["note"], out["reason"] = "路径不存在", "missing-path"
+        return out
+    if adapter == "trae-cn":
+        out["note"], out["reason"] = "Trae CN 会话库为 SQLCipher 加密，登记后仍读不到正文", "encrypted"
+        return out
+    deadline = time.monotonic() + PROBE_BUDGET_S
+    if adapter == "pi":
+        files, truncated = _walk_jsonl(p, deadline)
+    else:
+        try:
+            files = ADAPTER_CLASSES[adapter](tool_id="__probe__", root=p).sources()
+        except Exception as e:
+            out["note"], out["reason"] = "探测失败：%s" % str(e)[:120], "error"
+            return out
+        truncated = len(files) > PROBE_LIMIT
+        files = files[:PROBE_LIMIT]
+    # 只算真实文件：opencode / zcode / cursor 这类「给文件路径」的格式，
+    # sources() 只判断 os.path.exists，若传目录也会“命中”，这里统一过滤掉
+    files = [f for f in files if os.path.isfile(f)]
+    out["files"] = len(files)
+    out["sample"] = [os.path.basename(f) for f in files[:3]]
+    out["readable"] = bool(files)
+    out["reason"] = "ok" if files else "no-match"
+    if truncated:
+        out["note"] = "目录较大，仅统计前 %d 个" % PROBE_LIMIT
+    return out
+
+
+# ============================================================ 格式识别（内容嗅探）
+# 目的：用户不该替 hub 回答「这是什么会话格式」。给一条路径，hub 自己认：
+#   1) 路径形状（弱信号，用于区分同构格式）
+#   2) 内容特征（强信号：JSONL 首几行的键 / SQLite 表名 / 加密库文件头）
+FORMAT_SNIFF_BYTES = 256 * 1024
+
+
+def _sniff_jsonl(path, max_lines=6):
+    """读 JSONL 头部几行，收集出现过的键与 type 值（只读，不解析语义）。"""
+    keys, types = set(), set()
+    try:
+        with open(path, "rb") as f:
+            head = f.read(FORMAT_SNIFF_BYTES).decode("utf-8", "ignore")
+    except OSError:
+        return keys, types
+    if "<<<AUTOCLAW_" in head:      # AutoClaw 在正文里注入自有标记
+        types.add("autoclaw-marker")
+    n = 0
+    for line in head.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            o = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(o, dict):
+            continue
+        keys.update(o.keys())
+        t = o.get("type")
+        if isinstance(t, str):
+            types.add(t)
+        n += 1
+        if n >= max_lines:
+            break
+    return keys, types
+
+
+def _sniff_sqlite_tables(path):
+    """SQLite 表名（只读）；非 SQLite 文件（如 SQLCipher）返回 None。"""
+    try:
+        with open(path, "rb") as f:
+            if not f.read(16).startswith(b"SQLite format 3"):
+                return None
+    except OSError:
+        return None
+    try:
+        conn = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
+        try:
+            return {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+
+
+def _jsonl_candidates(root, limit=20, max_depth=4):
+    """目录下的 jsonl 候选（含根目录一级；限定层数与数量，跳过点目录）。"""
+    out = []
+    base = root.rstrip("/").count(os.sep)
+    for dirpath, dirnames, filenames in os.walk(root):
+        if dirpath.count(os.sep) - base >= max_depth:
+            dirnames[:] = []
+        else:
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for fn in filenames:
+            if fn.endswith(".jsonl"):
+                out.append(os.path.join(dirpath, fn))
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+def _classify_jsonl(keys, types):
+    """单个 JSONL 文件的格式判定 → (adapter, evidence) 或 (None, None)。"""
+    if "autoclaw-marker" in types:
+        return "autoclaw", "JSONL 正文含 <<<AUTOCLAW_*>>> 标记（AutoClaw）"
+    if "session_meta" in types or "response_item" in types or "turn_context" in types:
+        return "codex", "JSONL 含 session_meta / response_item（Codex）"
+    if "aiTitle" in keys or "ai-title" in types:
+        return "workbuddy", "JSONL 含 ai-title / aiTitle（WorkBuddy）"
+    if "parentUuid" in keys or "sessionId" in keys:
+        return "claude", "JSONL 含 sessionId / parentUuid（Claude Code）"
+    if "session" in types and "message" in keys:
+        return "pi", "JSONL 首行 type=session + message（Pi-Agent）"
+    if "compaction" in types or "compacted" in types:
+        return "autoclaw", "JSONL 含 compaction 行（AutoClaw）"
+    return None, None
+
+
+def detect_format(root):
+    """识别一个路径是什么会话格式（内容优先，路径形状兜底）。
+
+    返回 {adapter, confidence(high|medium|low), evidence, family, reason}；
+    认不出时 adapter=None, reason="unknown"。
+    """
+    out = {"adapter": None, "confidence": "", "evidence": "", "family": "", "reason": ""}
+    if not str(root or "").strip():
+        out["reason"] = "no-root"
+        return out
+    p = os.path.expanduser(str(root).strip())
+    if not os.path.exists(p):
+        out["reason"] = "missing-path"
+        return out
+    low = p.lower()
+
+    # ---- 单文件：数据库类 ----
+    if os.path.isfile(p):
+        tables = _sniff_sqlite_tables(p)
+        if tables is None:
+            out["reason"] = "encrypted-or-not-sqlite"
+            out["evidence"] = "文件头不是 SQLite（可能是 SQLCipher 加密库或非会话库）"
+            if "trae" in low:
+                out["adapter"], out["confidence"] = "trae-cn", "medium"
+            return out
+        if "cursorDiskKV" in tables:
+            out.update(adapter="cursor", confidence="high", family="sqlite",
+                       evidence="SQLite 表 cursorDiskKV（Cursor composer 库）")
+            return out
+        if "session" in tables and "message" in tables:
+            # opencode 与 zcode 库同构，只能靠路径区分
+            ad = "zcode" if ".zcode" in low else "opencode"
+            out.update(adapter=ad, confidence="medium", family="opencode-sqlite",
+                       evidence="SQLite 表 session + message（OpenCode / ZCode 同构，按路径判定）")
+            return out
+        out["reason"] = "unknown-sqlite"
+        out["evidence"] = "SQLite 表：%s" % ", ".join(sorted(tables)[:6])
+        return out
+
+    # ---- 目录：按文件内容嗅探 ----
+    files = _jsonl_candidates(p)
+    if not files:
+        out["reason"] = "no-files"
+        return out
+    # 逐文件分类投票：根目录可能混着非会话 jsonl（如 codex 的 history.jsonl）
+    votes, evidence, keys_union = {}, {}, set()
+    for f in files[:8]:
+        k, t = _sniff_jsonl(f)
+        keys_union |= k
+        a, ev = _classify_jsonl(k, t)
+        if a:
+            votes[a] = votes.get(a, 0) + 1
+            evidence.setdefault(a, ev)
+    if not votes:
+        out["reason"] = "unknown-jsonl"
+        out["evidence"] = "识别不出已知会话格式（键：%s）" % ", ".join(sorted(keys_union)[:8])
+        return out
+    best = max(votes, key=lambda a: votes[a])
+    out.update(adapter=best, family="jsonl",
+               confidence="high" if votes[best] > 1 else "medium",
+               evidence=evidence[best])
+    return out

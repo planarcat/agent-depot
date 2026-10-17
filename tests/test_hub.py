@@ -55,6 +55,35 @@ def claude_line(typ, role=None, text=None, ts=None):
 
 class HubSandbox:
     @classmethod
+    def _sandbox_env(cls):
+        """沙箱环境：必须把**每个**内置工具的默认根都改道到临时目录。
+
+        只改 claude/codex/opencode 的 env 变量是不够的：workbuddy / zcode / autoclaw 的
+        BUILTIN_TOOLS **自带 `root: ~/...`**，scanner 走 `self.root or env`，env 根本用不上；
+        漏掉就会读到真实会话（内容搜索被真实数据挤出 top 40、套件慢一个量级）。
+
+        所以兜底手段是改 `HOME`：所有 `~/...` 的 root / 记忆 / 技能路径都落到临时目录，
+        以后新增内置工具（再带 `~` 根）也自动隔离，不用逐个补 env。
+        """
+        env = dict(os.environ)
+        home = os.path.join(cls.tmp, "home")
+        os.makedirs(home, exist_ok=True)
+        env.update({
+            "HOME": home,
+            "AGENT_HUB_DIR": os.path.join(cls.tmp, "hub"),
+            "HUB_AGENTMEMORY_SRC": cls.mem_src,
+            "HUB_CLAUDE_PROJECTS": os.path.join(cls.tmp, "claude"),
+            "CODEX_HOME": cls.codex_home,
+            "HUB_OPENCODE_DB": cls.opencode_db,
+            "HUB_WORKBUDDY_PROJECTS": os.path.join(cls.tmp, "workbuddy"),
+            "HUB_ZCODE_DB": os.path.join(cls.tmp, "zcode.db"),
+            "HUB_AUTOCLAW_DIR": os.path.join(cls.tmp, "autoclaw"),
+            "HUB_PORT": str(PORT),
+            "PATH": env.get("PATH", "") + os.pathsep + os.path.expanduser("~/.local/bin"),
+        })
+        return env
+
+    @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp(prefix="hub-test-")
         cls.claude_dir = os.path.join(cls.tmp, "claude", "proj-x")
@@ -110,16 +139,7 @@ class HubSandbox:
         with open(cls.mem_src, "w") as f:
             f.write(json.dumps({"mcpServers": {"agentmemory": {"command": "agentmemory-mcp",
                                                                "args": ["serve"]}}}))
-        env = dict(os.environ)
-        env.update({
-            "AGENT_HUB_DIR": os.path.join(cls.tmp, "hub"),
-            "HUB_AGENTMEMORY_SRC": cls.mem_src,
-            "HUB_CLAUDE_PROJECTS": os.path.join(cls.tmp, "claude"),
-            "CODEX_HOME": cls.codex_home,
-            "HUB_OPENCODE_DB": cls.opencode_db,
-            "HUB_PORT": str(PORT),
-            "PATH": env.get("PATH", "") + os.pathsep + os.path.expanduser("~/.local/bin"),
-        })
+        env = cls._sandbox_env()
         cls.server_log = open(os.path.join(cls.tmp, "server.err"), "w")
         cls.proc = subprocess.Popen([sys.executable, os.path.join(ROOT, "server.py")],
                                     env=env, stdout=subprocess.DEVNULL, stderr=cls.server_log)
@@ -471,15 +491,7 @@ class EdgeTest(HubSandbox, unittest.TestCase):
         # restart the server subprocess with same env
         self.__class__.proc.terminate()
         self.__class__.proc.wait(timeout=5)
-        env = dict(os.environ)
-        env.update({
-            "AGENT_HUB_DIR": os.path.join(self.tmp, "hub"),
-            "HUB_CLAUDE_PROJECTS": os.path.join(self.tmp, "claude"),
-            "CODEX_HOME": self.codex_home,
-            "HUB_OPENCODE_DB": self.opencode_db,
-            "HUB_PORT": str(PORT),
-            "PATH": env.get("PATH", "") + os.pathsep + os.path.expanduser("~/.local/bin"),
-        })
+        env = self._sandbox_env()
         self.__class__.proc = subprocess.Popen(
             [sys.executable, os.path.join(ROOT, "server.py")],
             env=env, stdout=subprocess.DEVNULL, stderr=self.__class__.server_log)
@@ -685,9 +697,13 @@ class ToolsTest(HubSandbox, unittest.TestCase):
     def test_t01_list_defaults(self):
         s, d = req("GET", "/api/tools")
         self.assertEqual(s, 200)
-        self.assertEqual([t["id"] for t in d["tools"]][:3], ["claude", "codex", "opencode"])
-        self.assertTrue(all(t["builtin"] for t in d["tools"][:3]))
-        self.assertEqual(len(d["adapters"]), 5)
+        ids = [t["id"] for t in d["tools"]]
+        self.assertEqual(ids[:7], ["claude", "codex", "opencode",
+                                   "workbuddy", "zcode", "autoclaw", "trae-cn"])
+        self.assertTrue(all(t["builtin"] for t in d["tools"][:7]))
+        # 口径：adapter 表新增「共享技能目录」agents（仅 Skills 分发，无会话采集）→ 9 变 10
+        self.assertEqual(len(d["adapters"]), 10)
+        self.assertIn("agents", [a["id"] for a in d["adapters"]])
 
     def test_t02_add_and_scan_pi(self):
         s, d = req("POST", "/api/tools", {"name": "Pi Fixture", "adapter": "pi", "root": self.pi_dir})
@@ -727,14 +743,20 @@ class ToolsTest(HubSandbox, unittest.TestCase):
         self.assertIn("自动修复", d["messages"][1]["content"])  # richText 展平
 
     def test_t05_validation_and_missing_path(self):
+        # 口径（2026-10 起）：名称不要求用户填——留空按格式产品名自动命名；
+        # adapter 留空/未知时按路径内容识别。必填只剩「路径」。
         s, d = req("POST", "/api/tools", {"name": "", "adapter": "pi", "root": self.pi_dir})
-        self.assertEqual(s, 400)
+        self.assertEqual(s, 200, d)
+        self.assertTrue(d["tool"]["name"], "空名称应自动命名")
+        names = [t["name"] for t in req("GET", "/api/tools")[1]["tools"]]
+        self.assertEqual(len(names), len({n.lower() for n in names}), "自动命名不得重名：%s" % names)
         s, d = req("POST", "/api/tools", {"name": "X1", "adapter": "nope", "root": self.pi_dir})
-        self.assertEqual(s, 400)
+        self.assertEqual(s, 200, "未知 adapter 应按路径内容识别，不应报错：%s" % d)
+        self.assertIn(d["tool"]["adapter"], (None, "pi"))
         s, d = req("POST", "/api/tools", {"name": "X2", "adapter": "pi", "root": "  "})
-        self.assertEqual(s, 400)
+        self.assertEqual(s, 400, "空路径必填")
         s, d = req("POST", "/api/tools", {"name": "Pi Fixture", "adapter": "pi", "root": self.pi_dir})
-        self.assertEqual(s, 400)
+        self.assertEqual(s, 400, "重名应拒绝")
         s, d = req("POST", "/api/tools", {"name": "Ghost Tool", "adapter": "pi",
                                           "root": os.path.join(self.tmp, "nope-dir")})
         self.assertEqual(s, 200)

@@ -8,6 +8,8 @@
 """
 import json
 import os
+import re
+import shutil
 import time
 
 from hub.core import fsutil, ops
@@ -58,7 +60,8 @@ def list_sources(store):
     with store.lock:
         rows = store.db.execute(
             "SELECT s.*, (SELECT COUNT(*) FROM items i WHERE i.source_id=s.id) AS item_count, "
-            "(SELECT COUNT(*) FROM snapshots sn WHERE sn.source_id=s.id) AS snapshot_count "
+            "(SELECT COUNT(*) FROM snapshots sn WHERE sn.source_id=s.id) AS snapshot_count, "
+            "(SELECT COUNT(*) FROM registry_items r WHERE r.kind='" + KIND + "' AND r.source_id=s.id) AS registry_count "
             "FROM sources s WHERE s.kind=? ORDER BY s.id", (KIND,)).fetchall()
     return [dict(r) for r in rows]
 
@@ -81,19 +84,61 @@ def update_source(store, source_id, fields):
     return {"ok": True}
 
 
-def delete_source(store, source_id):
+def delete_source(store, source_id, removed_action=None):
+    """移除源：删 items/snapshots/源记录 + git 缓存目录；registry 与已部署内容默认不动。
+
+    removed_action：
+    - None / "keep" → 本地库副本保留但转为手动条目（脱离源，避免孤儿引用）——移除源的默认语义；
+    - "delete" → 本地库副本一并清除（备份到 .versions；已分发文件保留）。"""
     with store.lock:
+        src = store.db.execute("SELECT name FROM sources WHERE id=? AND kind=?",
+                               (source_id, KIND)).fetchone()
+        items = [dict(r) for r in store.db.execute(
+            "SELECT * FROM items WHERE source_id=?", (source_id,)).fetchall()]
         store.db.execute("DELETE FROM items WHERE source_id=?", (source_id,))
         store.db.execute("DELETE FROM snapshots WHERE source_id=?", (source_id,))
         store.db.execute("DELETE FROM sources WHERE id=? AND kind=?", (source_id, KIND))
         store.db.commit()
-    ops.log_op(store, MODULE, "source:delete", "ok", source_id=source_id)
-    return {"ok": True}
+    if src:
+        import shutil as _sh
+        cache = os.path.join(sources_root(), "skills-%d" % source_id)
+        if os.path.isdir(cache):
+            _sh.rmtree(cache, ignore_errors=True)
+    localized, purged = [], []
+    for it in items:
+        with store.lock:
+            reg = store.db.execute("SELECT 1 FROM registry_items WHERE kind=? AND name=?",
+                                   (KIND, it["name"])).fetchone()
+        if not reg:
+            continue
+        if removed_action == "delete":
+            _purge_registry_item_locked(store, it["name"])
+            purged.append(it["name"])
+        else:
+            with store.lock:
+                store.db.execute(
+                    "UPDATE registry_items SET source_id=NULL, source_hash_at=NULL "
+                    "WHERE kind=? AND name=?", (KIND, it["name"]))
+                store.db.commit()
+            localized.append(it["name"])
+    ops.log_op(store, MODULE, "source:delete", "ok", source_id=source_id,
+               item_name=src["name"] if src else None,
+               detail={"localized": localized, "purged": purged,
+                       "removed_action": removed_action or "keep"})
+    return {"ok": True, "localized": localized, "purged": purged}
 
 
 # ============================================================ pull
-def pull_source(store, source_id, force=False):
-    """fetch + 解析 + 快照 + 条目差分。返回 {ok, commit, added, changed, removed, error}。"""
+def pull_source(store, source_id, force=False, removed_action=None):
+    """fetch + 解析 + 快照 + 条目差分。返回 {ok, commit, added, changed, removed, error}。
+
+    远程删除了条目（removed 非空）时的语义：
+    - removed_action 为 None → 不应用本次同步（目录/快照/last_commit 保持旧态），
+      返回 needs_action 交由 UI 询问用户（同步删除 / 转为本地 / 取消）；
+    - "delete" → 条目从目录移除；本地库副本一并清除（内容备份到 .versions；
+      已分发到工具的文件保留不动）；
+    - "localize" → 已拉取过本地的副本脱离该源（source_id 置空，成为手动条目）；
+      仅存在于目录的条目从上一个快照 commit 物化内容为手动条目。"""
     with store.lock:
         src = store.db.execute("SELECT * FROM sources WHERE id=? AND kind=?",
                                (source_id, KIND)).fetchone()
@@ -133,6 +178,26 @@ def pull_source(store, source_id, force=False):
                 added.append(it["name"])
             elif prev["source_hash"] != it["source_hash"]:
                 changed.append(it["name"])
+        removed = [nm for nm in old if nm not in new_names]
+        if removed and not removed_action:
+            # 不应用：保持旧目录/快照/last_commit，交由用户决定处置方式
+            detail = []
+            for nm in removed:
+                reg = store.db.execute("SELECT 1 FROM registry_items WHERE kind=? AND name=?",
+                                       (KIND, nm)).fetchone()
+                dep = store.db.execute(
+                    "SELECT COUNT(*) c FROM deployments WHERE item_kind='skill' AND item_name=? AND status='ok'",
+                    (nm,)).fetchone()["c"]
+                detail.append({"name": nm, "in_registry": bool(reg), "deployed_count": dep})
+            store.db.commit()
+            return {"ok": True, "needs_action": True, "commit": commit,
+                    "added": added, "changed": changed, "removed": removed,
+                    "removed_detail": detail}
+        old_commit_row = store.db.execute(
+            "SELECT commit_hash FROM snapshots WHERE source_id=? ORDER BY id DESC LIMIT 1",
+            (source_id,)).fetchone()
+        old_commit = old_commit_row["commit_hash"] if old_commit_row else None
+        for it in items:
             store.db.execute(
                 "INSERT INTO items(source_id, kind, name, path, source_hash, version, meta) "
                 "VALUES(?,?,?,?,?,?,?) "
@@ -140,11 +205,20 @@ def pull_source(store, source_id, force=False):
                 "source_hash=excluded.source_hash, version=excluded.version, meta=excluded.meta",
                 (source_id, KIND, it["name"], it["path"], it["source_hash"], it["version"],
                  json.dumps(it["meta"], ensure_ascii=False)))
-        for nm in old:
-            if nm not in new_names:
-                removed.append(nm)
-                store.db.execute("DELETE FROM items WHERE source_id=? AND name=?",
-                                 (source_id, nm))
+        for nm in removed:
+            if removed_action == "localize":
+                reg = store.db.execute("SELECT 1 FROM registry_items WHERE kind=? AND name=?",
+                                       (KIND, nm)).fetchone()
+                if reg:
+                    store.db.execute(
+                        "UPDATE registry_items SET source_id=NULL, source_hash_at=NULL "
+                        "WHERE kind=? AND name=?", (KIND, nm))
+                else:
+                    _materialize_removed_manual(store, cache, old[nm], old_commit)
+            else:
+                _purge_registry_item_locked(store, nm)
+            store.db.execute("DELETE FROM items WHERE source_id=? AND name=?",
+                             (source_id, nm))
         store.db.execute(
             "INSERT INTO snapshots(source_id, commit_hash, taken_at, item_count, catalog_json) "
             "VALUES(?,?,?,?,?)",
@@ -157,8 +231,15 @@ def pull_source(store, source_id, force=False):
         store.db.commit()
     ops.log_op(store, MODULE, "pull", "ok", source_id=source_id, item_name=src["name"],
                item_version=commit,
-               detail={"added": added, "changed": changed, "removed": removed})
-    return {"ok": True, "commit": commit, "added": added, "changed": changed, "removed": removed}
+               detail={"added": added, "changed": changed, "removed": removed,
+                       "removed_action": removed_action})
+    # 拉取即落库：新增/变更条目自动物化进本地库（非 force，本地有改动则标记冲突不覆盖）
+    materialized = []
+    if added or changed:
+        materialized = update_registry(store, added + changed,
+                                       source_id=source_id, force=False)
+    return {"ok": True, "commit": commit, "added": added, "changed": changed, "removed": removed,
+            "removed_action": removed_action, "materialized": materialized}
 
 
 def _mark_error(store, source_id, msg):
@@ -167,7 +248,398 @@ def _mark_error(store, source_id, msg):
         store.db.commit()
 
 
+def _purge_registry_item_locked(store, name):
+    """同步删除：清 registry 行 + registry 目录（内容先备份到 .versions）；已分发文件保留。"""
+    dest = os.path.join(registry_root(), name)
+    if os.path.isdir(dest):
+        _backup_registry_dir(name)
+        fsutil.safe_rm(dest)
+    with store.lock:
+        store.db.execute("DELETE FROM registry_items WHERE kind=? AND name=?", (KIND, name))
+        store.db.commit()
+
+
+def _materialize_removed_manual(store, cache, item_row, old_commit):
+    """转本地：源已删但从未拉到本地 → 从上一个快照 commit 物化目录 + 登记为手动条目。"""
+    name = item_row["name"]
+    prefix = (item_row["path"] or "").rstrip("/")
+    prefix = prefix + "/" if prefix and prefix != "." else ""
+    if not old_commit:
+        return False
+    files = gitsrc.ls_tree(cache, old_commit)
+    member = {p: h for p, h in files.items() if p.startswith(prefix)}
+    if not member:
+        return False
+    dest = os.path.join(registry_root(), name)
+    if os.path.isdir(dest):
+        return True  # 本地目录还在，直接登记即可
+    tmp = dest + ".hub-tmp-%d" % os.getpid()
+    if os.path.isdir(tmp):
+        fsutil.safe_rm(tmp)
+    os.makedirs(tmp, exist_ok=True)
+    for rel in sorted(member):
+        data = gitsrc.show_bytes(cache, old_commit, rel)
+        if data is None:
+            continue
+        rel_short = rel[len(prefix):] if prefix else rel
+        fsutil.atomic_write_bytes(os.path.join(tmp, rel_short), data)
+    os.rename(tmp, dest)
+    _register_manual(store, name, len(member))
+    return True
+
+
+# ============================================================ manual items
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _safe_rel(rel):
+    """条目内相对路径白名单校验（防穿越/隐藏备份文件）。"""
+    if not rel or len(rel) > 200 or rel.startswith("/") or "\\" in rel:
+        return False
+    for seg in rel.split("/"):
+        if seg in ("", ".", "..") or seg.startswith(".hub"):
+            return False
+    return True
+
+
+def _name_conflict(store, name):
+    """与源条目 / registry / 磁盘目录重名 → 返回冲突描述，否则 None。"""
+    if not _NAME_RE.match(name or ""):
+        return "名称非法（字母数字开头，允许 . _ -，≤64 字符）"
+    with store.lock:
+        src_row = store.db.execute(
+            "SELECT s.name FROM items i JOIN sources s ON s.id=i.source_id "
+            "WHERE i.kind=? AND i.name=? LIMIT 1", (KIND, name)).fetchone()
+        reg = store.db.execute("SELECT source_id FROM registry_items WHERE kind=? AND name=?",
+                               (KIND, name)).fetchone()
+    if src_row:
+        return "已存在同名条目（来自源仓库 %s）；重名会被拦截" % src_row["name"]
+    if reg:
+        return "已存在同名条目（%s）" % ("本地" if reg["source_id"] is None else "远程")
+    if os.path.isdir(os.path.join(registry_root(), name)):
+        return "已存在同名目录（本地库）"
+    return None
+
+
+def _manual_reg(store, name):
+    with store.lock:
+        row = store.db.execute(
+            "SELECT * FROM registry_items WHERE kind=? AND name=? AND source_id IS NULL",
+            (KIND, name)).fetchone()
+    return dict(row) if row else None
+
+
+def _fm_description(name):
+    p = os.path.join(registry_root(), name, "SKILL.md")
+    if os.path.exists(p):
+        fm = catalog._parse_frontmatter(open(p, encoding="utf-8", errors="replace").read())
+        return fm.get("description", "")
+    return ""
+
+
+def _register_manual(store, name, files_count):
+    new_hash = fsutil.tree_hash(os.path.join(registry_root(), name))
+    with store.lock:
+        prev = store.db.execute("SELECT version, hash FROM registry_items WHERE kind=? AND name=?",
+                                (KIND, name)).fetchone()
+        store.db.execute(
+            "INSERT INTO registry_items(kind, name, source_id, version, hash, updated_at, "
+            "prev_version, prev_hash, source_hash_at) VALUES(?,?,NULL,?,?,?,?,?,NULL) "
+            "ON CONFLICT(kind, name) DO UPDATE SET version=excluded.version, hash=excluded.hash, "
+            "updated_at=excluded.updated_at, prev_version=excluded.prev_version, "
+            "prev_hash=excluded.prev_hash, source_hash_at=NULL",
+            (KIND, name, _fm_version(name), new_hash, ops.now_iso(),
+             prev["version"] if prev else None, prev["hash"] if prev else None))
+        store.db.commit()
+    return new_hash
+
+
+def _fm_version(name):
+    p = os.path.join(registry_root(), name, "SKILL.md")
+    if os.path.exists(p):
+        fm = catalog._parse_frontmatter(open(p, encoding="utf-8", errors="replace").read())
+        return fm.get("version") or None
+    return None
+
+
+def create_manual(store, name, description="", files=None):
+    files = files or {}
+    name = (name or "").strip()
+    if "SKILL.md" not in files:
+        return {"ok": False, "error": "缺少 SKILL.md（手动条目必须包含）"}
+    for rel, text in files.items():
+        if not _safe_rel(rel):
+            return {"ok": False, "error": "非法文件路径：%s" % rel[:60]}
+        if not isinstance(text, str):
+            return {"ok": False, "error": "文件内容必须是文本：%s" % rel[:60]}
+    err = _name_conflict(store, name)
+    if err:
+        return {"ok": False, "error": err}
+    if description:
+        files = dict(files)
+        files["SKILL.md"] = _with_fm_field(files["SKILL.md"], "description", description)
+    dest = os.path.join(registry_root(), name)
+    tmp = dest + ".hub-tmp-%d" % os.getpid()
+    if os.path.isdir(tmp):
+        fsutil.safe_rm(tmp)
+    os.makedirs(tmp, exist_ok=True)
+    for rel, text in sorted(files.items()):
+        fsutil.atomic_write_text(os.path.join(tmp, rel), text)
+    os.rename(tmp, dest)
+    new_hash = _register_manual(store, name, len(files))
+    ops.log_op(store, MODULE, "create", "ok", item_kind="skill", item_name=name,
+               detail={"files": len(files), "hash": new_hash[:12]})
+    return {"ok": True, "name": name, "files": len(files), "hash": new_hash[:12]}
+
+
+def _with_fm_field(text, key, value):
+    """frontmatter 里设置/替换一个字段；无 frontmatter 则生成。"""
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+        if end:
+            body = [l for l in lines[1:end] if not l.strip().startswith(key + ":")]
+            return "\n".join([lines[0]] + body + ["%s: %s" % (key, value)] + lines[end:])
+    fm = ["---", "name: %s" % (key == "name" and value or ""), "%s: %s" % (key, value), "---", ""]
+    return "\n".join(fm) + text
+
+
+def import_local(store, src_path, name=None, overwrite=False):
+    """把本地目录复制为手动条目（原目录只读）；已存在同名手动条目且 overwrite=True → 覆盖更新。"""
+    src_path = os.path.realpath(os.path.expanduser((src_path or "").strip()))
+    if not os.path.isdir(src_path):
+        return {"ok": False, "error": "目录不存在：%s" % (src_path or "（空）")}
+    hub_real = os.path.realpath(_hub_dir())
+    if src_path == hub_real or src_path.startswith(hub_real + os.sep):
+        return {"ok": False, "error": "不能从 hub 自身目录导入"}
+    name = (name or os.path.basename(src_path)).strip()
+    existing = _manual_reg(store, name)
+    if existing and not overwrite:
+        return {"ok": False, "error": "已存在同名手动条目 %s；可勾选覆盖更新" % name}
+    if not existing:
+        err = _name_conflict(store, name)
+        if err:
+            return {"ok": False, "error": err}
+    files = {}
+    for dirpath, dirnames, filenames in os.walk(src_path):
+        dirnames[:] = [d for d in sorted(dirnames)
+                       if d not in (".git", ".hub-backup", ".versions", "node_modules", "__pycache__")]
+        for fn in sorted(filenames):
+            if fn == ".DS_Store":
+                continue
+            full = os.path.join(dirpath, fn)
+            rel = os.path.relpath(full, src_path)
+            if not _safe_rel(rel):
+                continue
+            files[rel] = full
+    if "SKILL.md" not in files:
+        return {"ok": False, "error": "目录中未找到 SKILL.md（导入的条目必须包含）"}
+    if existing:
+        _backup_registry_dir(name)
+        for rel in list(fsutil.list_files(os.path.join(registry_root(), name))):
+            if rel not in files:
+                p = os.path.join(registry_root(), name, rel)
+                if os.path.exists(p):
+                    os.unlink(p)
+    dest = os.path.join(registry_root(), name)
+    tmp = dest + ".hub-tmp-%d" % os.getpid()
+    if os.path.isdir(tmp):
+        fsutil.safe_rm(tmp)
+    os.makedirs(tmp, exist_ok=True)
+    for rel, full in sorted(files.items()):
+        with open(full, "rb") as f:
+            fsutil.atomic_write_bytes(os.path.join(tmp, rel), f.read())
+    if not os.path.isdir(dest):
+        os.rename(tmp, dest)
+    else:
+        for rel, full in sorted(files.items()):
+            with open(full, "rb") as f:
+                fsutil.atomic_write_bytes(os.path.join(dest, rel), f.read())
+        fsutil.safe_rm(tmp)
+    new_hash = _register_manual(store, name, len(files))
+    ops.log_op(store, MODULE, "import", "ok", item_kind="skill", item_name=name,
+               detail={"files": len(files), "from": src_path, "overwrite": bool(existing),
+                       "hash": new_hash[:12]})
+    return {"ok": True, "name": name, "files": len(files), "hash": new_hash[:12],
+            "overwritten": bool(existing)}
+
+
+def update_manual(store, name, files=None):
+    """编辑手动条目：files={rel: text|None}，None 表示删除该文件；其余文件保留。"""
+    files = files or {}
+    if not _manual_reg(store, name):
+        return {"ok": False, "error": "只支持编辑本地手动条目（该条目来自远程源）"}
+    dest = os.path.join(registry_root(), name)
+    if not os.path.isdir(dest):
+        return {"ok": False, "error": "本地库目录缺失"}
+    for rel, text in files.items():
+        if not _safe_rel(rel):
+            return {"ok": False, "error": "非法文件路径：%s" % rel[:60]}
+        if text is not None and not isinstance(text, str):
+            return {"ok": False, "error": "文件内容必须是文本：%s" % rel[:60]}
+    _backup_registry_dir(name)
+    for rel, text in sorted(files.items()):
+        p = os.path.join(dest, rel)
+        if text is None:
+            if os.path.exists(p):
+                os.unlink(p)
+            continue
+        fsutil.atomic_write_text(p, text)
+    for dirpath, dirnames, _fn in os.walk(dest, topdown=False):
+        if dirpath != dest and not os.listdir(dirpath):
+            os.rmdir(dirpath)
+    new_hash = _register_manual(store, name, len(files))
+    ops.log_op(store, MODULE, "edit", "ok", item_kind="skill", item_name=name,
+               detail={"files": sorted(files.keys()), "hash": new_hash[:12]})
+    return {"ok": True, "name": name, "hash": new_hash[:12]}
+
+
+def _backup_registry_dir(name):
+    dest = os.path.join(registry_root(), name)
+    if not os.path.isdir(dest):
+        return None
+    vroot = versions_root(name)
+    os.makedirs(vroot, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = os.path.join(vroot, stamp)
+    n = 1
+    while os.path.exists(backup):
+        backup = os.path.join(vroot, "%s-%d" % (stamp, n)); n += 1
+    shutil.copytree(dest, backup)
+    return backup
+
+
+def delete_manual(store, name, force=False):
+    reg = _manual_reg(store, name)
+    if not reg:
+        with store.lock:
+            remote = store.db.execute("SELECT 1 FROM registry_items WHERE kind=? AND name=?",
+                                      (KIND, name)).fetchone()
+        return {"ok": False, "error": "远程条目不能在此删除（用「移除源」或「回退」）" if remote
+                else "条目不存在"}
+    with store.lock:
+        deps = [dict(r) for r in store.db.execute(
+            "SELECT * FROM deployments WHERE item_kind='skill' AND item_name=? AND status='ok'",
+            (name,)).fetchall()]
+    if deps and not force:
+        return {"ok": False, "error": "已部署到 %d 个目标；确认后连同目标内文件一起删除" % len(deps)}
+    removed_targets = []
+    for dep in deps:
+        t = store.db.execute("SELECT * FROM targets WHERE id=?", (dep["target_id"],)).fetchone()
+        if not t:
+            continue
+        t = dict(t)
+        dest = os.path.join(t["path"], name)
+        if os.path.isdir(dest):
+            managed = (json.loads(dep["detail"]) if dep["detail"] else {}).get("files", {})
+            for rel in managed:
+                p = os.path.join(dest, rel)
+                if os.path.exists(p):
+                    os.unlink(p)
+            backup_dir = os.path.join(dest, ".hub-backup")
+            if os.path.isdir(backup_dir):
+                import shutil as _sh
+                _sh.rmtree(backup_dir)
+            for dirpath, dirnames, _fn in os.walk(dest, topdown=False):
+                if dirpath != dest and not os.listdir(dirpath):
+                    os.rmdir(dirpath)
+            if os.path.isdir(dest) and not os.listdir(dest):
+                import shutil as _sh2
+                _sh2.rmtree(dest)  # 仅空目录（managed 文件已逐个删除）
+            removed_targets.append(t["name"])
+    if os.path.isdir(os.path.join(registry_root(), name)):
+        _backup_registry_dir(name)
+        fsutil.safe_rm(os.path.join(registry_root(), name))
+    with store.lock:
+        store.db.execute("DELETE FROM deployments WHERE item_kind='skill' AND item_name=?", (name,))
+        store.db.execute("DELETE FROM registry_items WHERE kind=? AND name=?", (KIND, name))
+        store.db.commit()
+    ops.log_op(store, MODULE, "delete", "ok", item_kind="skill", item_name=name,
+               detail={"removed_from_targets": removed_targets})
+    return {"ok": True, "name": name, "removed_from_targets": removed_targets}
+
+
 # ============================================================ registry
+# ============================================================ 工具来源（反向提取）
+def _skill_tools(store):
+    """启用了 skills_dir 的工具清单（工具来源的扫描范围）。"""
+    from hub import tools_registry
+    return [t for t in tools_registry.load_tools(store)
+            if t.get("enabled") and t.get("skills_dir")]
+
+
+def tool_items(store, tool_id=None):
+    """扫描工具 skills 目录并与本地库对齐，条目名做键分三态。
+
+    synced=与本地库内容一致 / diff=同名不同内容 / local_only=本地库没有。
+    tool_id 缺省时聚合全部工具：同一条目跨工具出现则按 name 聚合，
+    tools 列出出现它的工具，任一工具与本地库不一致即标 diff。
+    目录探不到的工具直接跳过（置灰语义由前端表达）。
+    """
+    tools = _skill_tools(store)
+    if tool_id:
+        tools = [t for t in tools if t["id"] == tool_id]
+    reg = {r["name"]: r["hash"] for r in store.db.execute(
+        "SELECT name, hash FROM registry_items WHERE kind=?", (KIND,)).fetchall()}
+    agg = {}
+    for t in tools:
+        root = os.path.expanduser(t["skills_dir"])
+        if not os.path.isdir(root):
+            continue
+        meta = {"id": t["id"], "name": t["name"]}
+        for entry in sorted(os.listdir(root)):
+            d = os.path.join(root, entry)
+            if not os.path.isdir(d) or entry.startswith("."):
+                continue
+            cur = agg.get(entry)
+            if cur is None:
+                cur = {"name": entry, "state": "synced" if entry in reg else "local_only",
+                       "tools": []}
+                agg[entry] = cur
+            if entry not in reg:
+                cur["state"] = "local_only"
+            elif reg[entry] != fsutil.tree_hash(d):
+                cur["state"] = "diff"
+            cur["tools"].append(meta)
+    return {"ok": True,
+            "items": sorted(agg.values(), key=lambda x: (-{"local_only": 0, "diff": 1, "synced": 2}[x["state"]], x["name"]))}
+
+
+def extract(store, tool_id, names):
+    """把工具 skills 目录中指定条目收编进本地库（manual，与源拉取同权）。
+
+    local_only 直接复制；diff 以工具内容为准覆盖本地库（旧内容先备份到
+    versions）；synced 跳过。工具内文件保留不动（视为已安装）。逐条返回
+    结果并记 ops 台账。
+    """
+    tools = [t for t in _skill_tools(store) if t["id"] == tool_id]
+    if not tools:
+        return {"ok": False, "error": "工具不存在、未启用或没有 skills 目录"}
+    root = os.path.expanduser(tools[0]["skills_dir"])
+    out = []
+    for raw in names or []:
+        name = str(raw).strip()
+        # 防穿越：只接受单段目录名
+        ok = bool(name) and name not in (".", "..") and os.path.basename(name) == name
+        src = os.path.join(root, name) if ok else None
+        if not src or not os.path.isdir(src):
+            out.append({"name": name, "ok": False, "error": "工具中不存在该条目"})
+            continue
+        dest = os.path.join(registry_root(), name)
+        existed = os.path.isdir(dest)
+        if existed:
+            if _registry_current_hash(name) == fsutil.tree_hash(src):
+                out.append({"name": name, "ok": True, "skipped": "已与本地库一致"})
+                continue
+            _backup_registry_dir(name)
+            fsutil.safe_rm(dest)
+        shutil.copytree(src, dest)
+        _register_manual(store, name, len(fsutil.list_files(dest)))
+        out.append({"name": name, "ok": True, "action": "覆盖本地库" if existed else "已收编"})
+    store.log("skills.extract", {"tool": tool_id, "names": names, "results": out})
+    return {"ok": True, "items": out}
+
+
 def _item_status(store, name, reg, src_item):
     """状态机：未安装 | 已安装 | 可更新 | 本地修改。"""
     if not reg:
@@ -324,9 +796,11 @@ def seed_defaults(store):
     home = os.path.expanduser("~")
     defaults = [
         ("Claude Skills (全局)", "skills_dir", "claude", os.path.join(home, ".claude", "skills"), None),
-        ("Codex Skills (全局)", "skills_dir", "codex", os.path.join(home, ".codex", "skills"), None),
-        ("OpenCode Skills (全局)", "skills_dir", "opencode", os.path.join(home, ".config", "opencode", "skills"), None),
-        ("Agents Skills (全局)", "skills_dir", "plain", os.path.join(home, ".agents", "skills"), None),
+        # Agents：共享技能目录（Codex CLI / OpenCode / Cursor 原生直读，它们的 skills_dir 置空）
+        ("Agents (全局)", "skills_dir", "agents", os.path.join(home, ".agents", "skills"), None),
+        ("WorkBuddy Skills (全局)", "skills_dir", "workbuddy", os.path.join(home, ".workbuddy", "skills"), None),
+        ("ZCode Skills (全局)", "skills_dir", "zcode", os.path.join(home, ".zcode", "skills"), None),
+        ("AutoClaw Skills (全局)", "skills_dir", "autoclaw", os.path.join(home, ".openclaw-autoclaw", "skills"), None),
     ]
     created = []
     with store.lock:
@@ -481,18 +955,31 @@ def _apply_skills_dir(store, name, target, plan):
             continue
         if not os.listdir(dirpath):
             os.rmdir(dirpath)
-    dep = _deployment(store, name, target["id"])
     with store.lock:
+        reg_row = store.db.execute("SELECT version FROM registry_items WHERE kind=? AND name=?",
+                                   (KIND, name)).fetchone()
+        dep_version = dict(reg_row)["version"] if reg_row else plan.get("version")
         store.db.execute(
             "INSERT INTO deployments(item_kind, item_name, item_version, target_id, "
             "deployed_hash, deployed_at, status, detail) VALUES('skill',?,?,?,?,?,?,?) "
             "ON CONFLICT(item_kind, item_name, target_id) DO UPDATE SET "
             "item_version=excluded.item_version, deployed_hash=excluded.deployed_hash, "
             "deployed_at=excluded.deployed_at, status=excluded.status, detail=excluded.detail",
-            (name, plan.get("version"), target["id"], plan["new_hash"], ops.now_iso(), "ok",
+            (name, dep_version, target["id"], plan["new_hash"], ops.now_iso(), "ok",
              json.dumps({"files": written, "removed": removed}, ensure_ascii=False)))
         store.db.commit()
     return {"written": len(written), "removed": removed}
+
+
+def _ensure_materialized(store, name):
+    """分发兜底：本地库缺该条目目录但源条目存在 → 自动物化后再分发（两道保险之二）。"""
+    if os.path.isdir(os.path.join(registry_root(), name)):
+        return
+    with store.lock:
+        has_src = store.db.execute(
+            "SELECT 1 FROM items WHERE kind=? AND name=? LIMIT 1", (KIND, name)).fetchone()
+    if has_src:
+        update_registry(store, [name], force=False)
 
 
 def distribute_skills(store, names, target_ids, dry_run=False, force=False):
@@ -500,6 +987,7 @@ def distribute_skills(store, names, target_ids, dry_run=False, force=False):
     results = []
     targets = [t for t in list_targets(store, kind="skills_dir") if t["id"] in target_ids]
     for name in names:
+        _ensure_materialized(store, name)
         for t in targets:
             plan = _plan_skills_dir(store, name, t, force=force)
             if plan["status"] != "ok":
@@ -535,27 +1023,48 @@ def distribute_skills(store, names, target_ids, dry_run=False, force=False):
 
 # ============================================================ queries for UI
 def catalog_view(store, source_id=None):
-    """源侧目录 + 本地状态合并视图。"""
+    """源侧目录 + 本地状态合并视图；手动条目（source_id IS NULL）一并返回。"""
     with store.lock:
+        items = []
+        if not source_id:
+            with store.lock:
+                for r in store.db.execute(
+                        "SELECT * FROM registry_items WHERE kind=? AND source_id IS NULL ORDER BY name",
+                        (KIND,)).fetchall():
+                    items.append({"name": r["name"], "version": r["version"], "path": None,
+                                  "source_hash": None, "meta": None, "source_name": "本地"})
         if source_id:
-            items = store.db.execute(
+            rows = store.db.execute(
                 "SELECT i.*, s.name AS source_name FROM items i JOIN sources s ON s.id=i.source_id "
                 "WHERE i.kind=? AND i.source_id=? ORDER BY i.name", (KIND, source_id)).fetchall()
         else:
-            items = store.db.execute(
+            rows = store.db.execute(
                 "SELECT i.*, s.name AS source_name FROM items i JOIN sources s ON s.id=i.source_id "
                 "WHERE i.kind=? ORDER BY i.name", (KIND,)).fetchall()
+            rows = list(rows)
         regs = {r["name"]: dict(r) for r in store.db.execute(
             "SELECT * FROM registry_items WHERE kind=?", (KIND,)).fetchall()}
+    for it in rows:
+        items.append(dict(it))
     out = []
     for it in items:
         it = dict(it)
+        manual = it.get("source_name") == "本地" or it.get("path") is None
         reg = regs.get(it["name"])
-        st = _item_status(store, it["name"], reg, it)
+        st = "installed" if manual and reg else _item_status(store, it["name"], reg, it)
+        if manual and not reg:
+            st = "not-installed"
+        desc = ""
+        if it.get("meta"):
+            desc = (json.loads(it["meta"]) if isinstance(it["meta"], str) else it["meta"]).get("description", "")
+        elif manual:
+            desc = _fm_description(it["name"])
         out.append({
             "name": it["name"], "version": it["version"],
-            "source_name": it["source_name"], "source_id": it["source_id"],
-            "description": (json.loads(it["meta"]) if it["meta"] else {}).get("description", ""),
+            "source_name": it.get("source_name") or ("本地" if manual else ""),
+            "source_id": None if manual else it.get("source_id"),
+            "manual": bool(manual),
+            "description": desc,
             "status": st,
             "local_version": reg["version"] if reg else None,
         })
@@ -580,6 +1089,7 @@ def registry_view(store):
         out.append({
             "name": r["name"], "version": r["version"], "hash": (r["hash"] or "")[:12],
             "updated_at": r["updated_at"],
+            "manual": r["source_id"] is None,
             "modified": bool(cur_hash and r["hash"] and cur_hash != r["hash"]),
             "deployments": dep_map.get(r["name"], []),
         })
@@ -587,9 +1097,22 @@ def registry_view(store):
 
 
 def item_detail(store, name):
+    """条目详情：优先本地库；本地库没有（远程条目尚未「更新到本地」）时，回落读源仓库缓存。"""
     reg_dir = os.path.join(registry_root(), name)
     if not os.path.isdir(reg_dir):
-        return None
+        with store.lock:
+            row = store.db.execute(
+                "SELECT source_id, path FROM items WHERE kind=? AND name=? ORDER BY id DESC LIMIT 1",
+                (KIND, name)).fetchone()
+        if not row or not row["path"]:
+            return None
+        src_dir = os.path.join(sources_root(), "skills-%d" % row["source_id"], row["path"])
+        if not os.path.isdir(src_dir):
+            return None
+        reg_dir = src_dir
+        from_source = True
+    else:
+        from_source = False
     files = fsutil.list_files(reg_dir)
     skill_md = None
     p = os.path.join(reg_dir, "SKILL.md")
@@ -599,7 +1122,9 @@ def item_detail(store, name):
         reg = store.db.execute("SELECT * FROM registry_items WHERE kind=? AND name=?",
                                (KIND, name)).fetchone()
     return {"name": name, "skill_md": skill_md, "files": sorted(files.keys()),
-            "version": dict(reg)["version"] if reg else None}
+            "version": dict(reg)["version"] if reg else None,
+            "manual": bool(reg and dict(reg)["source_id"] is None),
+            "from_source": from_source}
 
 
 def diff_registry_vs_source(store, name, source_id=None):
@@ -670,12 +1195,26 @@ def handle(store, method, path, query, body):
         if sid is None:
             return 400, {"ok": False, "error": "非法 source id"}
         if tail == "pull" and method == "POST":
-            return _r(pull_source(store, sid, force=bool(body.get("force"))))
+            return _r(pull_source(store, sid, force=bool(body.get("force")),
+                                  removed_action=body.get("removed_action")))
         if not tail and method == "PATCH":
             return _r(update_source(store, sid, body))
         if not tail and method == "DELETE":
-            return _r(delete_source(store, sid))
+            return _r(delete_source(store, sid, removed_action=body.get("removed_action")))
     # ---- catalog / registry ----
+    if path == PREFIX + "/items" and method == "GET":
+        def _q(k, d=None):
+            v = q.get(k, [d])
+            return v[0] if isinstance(v, list) else v
+        src = _q("source")
+        if src in (None, ""):            # 未传 = 不过滤
+            src = None
+        elif str(src).isdigit():         # 数字 = 远程源 id
+            src = int(src)
+        else:                            # "manual" = 本地手动条目
+            src = str(src)
+        return 200, items_view(store, source=src, q=_q("q") or None,
+                               page=_q("page", 1), per_page=_q("per_page", 20))
     if path == PREFIX + "/catalog" and method == "GET":
         return 200, {"ok": True, "items": catalog_view(store, need_sid(q.get("source_id", [None])[0]) if isinstance(q.get("source_id"), list) else None)}
     if path == PREFIX + "/registry" and method == "GET":
@@ -703,9 +1242,28 @@ def handle(store, method, path, query, body):
         if not name:
             return 400, {"ok": False, "error": "name 必填"}
         return _r(diff_registry_vs_source(store, name))
+    # ---- manual items ----
+    if path == PREFIX + "/registry/item" and method == "POST":
+        return _r(create_manual(store, body.get("name"), body.get("description", ""),
+                                body.get("files")))
+    if path == PREFIX + "/registry/import" and method == "POST":
+        return _r(import_local(store, body.get("path"), body.get("name"),
+                               overwrite=bool(body.get("overwrite"))))
+    if path.startswith(PREFIX + "/registry/item/") and method == "PUT":
+        return _r(update_manual(store, path[len(PREFIX + "/registry/item/"):],
+                                body.get("files")))
+    if path.startswith(PREFIX + "/registry/item/") and method == "DELETE":
+        return _r(delete_manual(store, path[len(PREFIX + "/registry/item/"):],
+                                force=bool(body.get("force"))))
     # ---- targets ----
     if path == PREFIX + "/targets" and method == "GET":
-        return 200, {"ok": True, "targets": list_targets(store, kind="skills_dir")}
+        # 展示口径与 items_view 一致：停用/路径为空的工具目标不返回；附带工具名
+        rows = [t for t in list_targets(store, kind="skills_dir")
+                if _target_visible(store, t.get("tool"), "skills_dir")]
+        tmap = _tool_names(store)
+        for r in rows:
+            r["tool_name"] = tmap.get(r.get("tool"))
+        return 200, {"ok": True, "targets": rows}
     if path == PREFIX + "/targets" and method == "POST":
         return _r(add_target(store, body.get("name"), body.get("kind"), body.get("tool"),
                              body.get("path"), body.get("format_key")))
@@ -716,6 +1274,11 @@ def handle(store, method, path, query, body):
         if tid is None:
             return 400, {"ok": False, "error": "非法 target id"}
         return _r(delete_target(store, tid, force=bool(body.get("force"))))
+    # ---- 工具来源（反向提取）----
+    if path == PREFIX + "/tool-items" and method == "GET":
+        return 200, tool_items(store, (q.get("tool") or [None])[0])
+    if path == PREFIX + "/extract" and method == "POST":
+        return 200, extract(store, body.get("tool"), body.get("names") or [])
     # ---- distribute ----
     if path == PREFIX + "/distribute" and method == "POST":
         names = body.get("names") or []
@@ -731,6 +1294,106 @@ def handle(store, method, path, query, body):
 def registry_enabled(store):
     from hub.core import registry as reg
     return reg.enabled(store, MODULE)
+
+
+def _tool_names(store):
+    """工具 id → 显示名映射（给分发目标卡片展示工具名用）。"""
+    from hub import tools_registry
+    return {t["id"]: t["name"] for t in tools_registry.load_tools(store)}
+
+
+def _target_visible(store, tool_id, path_key=None):
+    """分发目标是否应展示：绑定了工具的，工具停用或对应路径为空即隐藏；
+    无绑定（plain/手填）的始终展示。path_key 为目标依赖的工具路径字段
+    （Skills 目标用 skills_dir，MCP 目标用 mcp_config）——路径为空不在界面显示。"""
+    from hub import tools_registry
+    if not tool_id or tool_id == "plain":
+        return True
+    t = tools_registry.tool_by_id(store, tool_id)
+    if not t or not t.get("enabled", True):
+        return False
+    return not path_key or bool(t.get(path_key))
+
+
+def items_view(store, source=None, q=None, page=1, per_page=20):
+    """统一条目列表：来源过滤 + 关键词 + 分页 + 逐目标部署状态/版本差异（供新 UI 右栏联动）。
+
+    停用工具的分发目标不展示（与设置中心「禁用的工具在所有界面隐藏」一致）。
+    """
+    # source 可以是数字（远程源 id）或 "manual"（本地手动条目）；其它字符串按"不过滤"处理
+    if isinstance(source, str) and source.lower() in ("manual", "local"):
+        cat = [it for it in catalog_view(store) if it.get("manual")]
+    else:
+        cat = catalog_view(store, source_id=source if isinstance(source, int) else None)
+    if q:
+        cat = [it for it in cat if q.lower() in it["name"].lower()
+               or q.lower() in (it.get("description") or "").lower()]
+    total = len(cat)
+    page = max(1, int(page or 1))
+    per_page = min(100, max(5, int(per_page or 20)))
+    slice_ = cat[(page - 1) * per_page: page * per_page]
+    names = [it["name"] for it in slice_]
+    with store.lock:
+        trows = [dict(r) for r in store.db.execute(
+            "SELECT * FROM targets WHERE kind='skills_dir' ORDER BY id").fetchall()]
+        deps = [dict(r) for r in store.db.execute(
+            "SELECT d.*, t.name AS target_name FROM deployments d LEFT JOIN targets t ON t.id=d.target_id "
+            "WHERE d.item_kind='skill' AND d.status='ok'").fetchall()]
+    trows = [t for t in trows if _target_visible(store, t.get("tool"), "skills_dir")]
+    tmap = _tool_names(store)
+    visible_ids = {t["id"] for t in trows}
+    deps = [d for d in deps if d["target_id"] in visible_ids]
+    regs = {r["name"]: r for r in registry_view(store)}
+    with store.lock:
+        full_hash = {r["name"]: r["hash"] for r in store.db.execute(
+            "SELECT name, hash FROM registry_items WHERE kind=?", (KIND,)).fetchall()}
+    dep_by_item = {}
+    for d in deps:
+        dep_by_item.setdefault(d["item_name"], {})[d["target_id"]] = d
+    targets = []
+    for t in trows:
+        tj = {"id": t["id"], "name": t["name"], "tool_name": tmap.get(t.get("tool")),
+              "path": t["path"], "tool": t["tool"],
+              "items": {"latest": 0, "stale": 0, "missing": 0, "total": 0}, "stale_names": []}
+        for it in cat:  # 全量统计（含本页外），与工具聚合口径一致
+            dep = dep_by_item.get(it["name"], {}).get(t["id"])
+            reg = regs.get(it["name"])
+            if dep:
+                tj["items"]["total"] += 1
+                if reg and dep["deployed_hash"] and full_hash.get(it["name"]) and dep["deployed_hash"] != full_hash[it["name"]]:
+                    tj["items"]["stale"] += 1
+                    tj["stale_names"].append(it["name"])
+                else:
+                    tj["items"]["latest"] += 1
+            else:
+                tj["items"]["missing"] += 1
+        targets.append(tj)
+    rows = []
+    for it in slice_:
+        reg = regs.get(it["name"])
+        per_target = []
+        for t in trows:
+            dep = dep_by_item.get(it["name"], {}).get(t["id"])
+            if dep:
+                stale = bool(full_hash.get(it["name"]) and dep["deployed_hash"]
+                             and dep["deployed_hash"] != full_hash[it["name"]])
+                per_target.append({"target_id": t["id"], "target": t["name"], "state":
+                                   "stale" if stale else "latest",
+                                   "deployed_version": dep["item_version"],
+                                   "local_version": reg["version"] if reg else None,
+                                   "deployed_at": dep["deployed_at"]})
+            else:
+                per_target.append({"target_id": t["id"], "target": t["name"], "state": "missing",
+                                   "deployed_version": None, "local_version": reg["version"] if reg else None,
+                                   "deployed_at": None})
+        rows.append({**it, "hash": (reg or {}).get("hash", ""),
+                     "updated_at": (reg or {}).get("updated_at"),
+                     "modified": (reg or {}).get("modified", False),
+                     "deployments": (reg or {}).get("deployments", []),
+                     "per_target": per_target})
+    return {"ok": True, "items": rows, "total": total, "page": page,
+            "per_page": per_page, "pages": max(1, (total + per_page - 1) // per_page),
+            "targets": targets}
 
 
 def _r(res):

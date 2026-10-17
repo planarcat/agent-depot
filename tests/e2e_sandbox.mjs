@@ -150,6 +150,19 @@ const failures = () => results.filter(r => !r.ok);
   await cdp.send('Runtime.enable'); await cdp.send('Page.enable');
 
   const S = (name, fn) => scenarios.push({ name, fn });
+  // v0.8 口径：工具是实体的唯一编辑处在「设置 → 工具」（会话页不再有编辑/新增入口）。
+  // 下面的工具类用例先打开设置窗并切到「工具」面板，再用 manage-* / 程序化登记弹窗。
+  // 注：2026-10-16 起前端**没有**添加工具的能力（用户指令「去掉添加工具的能力」，工具弹窗已删）。
+  //     用例需要的自定义工具一律走后端 POST /api/tools 当夹具造出来，再验证设置页的编辑/启停/删除。
+  const openToolPane = async () => {
+    if (!(await evaluate(`document.getElementById('settings-overlay').classList.contains('is-open')`))) {
+      await click('[data-testid="settings-open"]');
+      await waitFor(`document.getElementById('settings-overlay').classList.contains('is-open')`, 4000, '设置中心');
+    }
+    await click('[data-testid="settings-nav-tools"]');
+    // 设置面板内容是异步渲染的，等真正的按钮/行出现（容器 [settings-tools] 一直在 DOM 里）
+    await waitFor(`!!document.querySelector('[data-testid^="settings-tool-"]')`, 6000, '设置工具面板');
+  };
   const scenarios = [];
 
   S('empty-then-refresh', async () => {
@@ -174,29 +187,48 @@ const failures = () => results.filter(r => !r.ok);
     await evaluate(`(() => {
       const cb = document.querySelector('[data-testid="row-check"]');
       cb.click();
+      window.__migSid = cb.closest('[data-testid="row"]').dataset.sid;
     })()`);
     await waitFor(`document.querySelector('[data-testid="sel-count"]').textContent === '1'`, 4000, '选中');
-    await click('[data-testid="drop-codex"]');
-    await waitFor(`document.body.textContent.includes('迁移确认')`, 4000, '确认弹层');
-    await click('.hub-modal__ok');
+    // 卡片上已无「迁移到此」按钮（按注解去掉）→ 模拟把该会话拖到 codex 卡片上
+    await evaluate(`(() => {
+      const card = document.querySelector('[data-testid="tool-card-codex"]');
+      const dt = new DataTransfer();
+      dt.setData('text/plain', window.__migSid || '');
+      card.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    })()`);
+    // v0.6：确认条内联在右栏
+    await waitFor(`!!document.getElementById('mig-confirm')`, 4000, '迁移内联确认条');
+    await click('#mig-confirm [data-act="go"]');
     await waitFor(`!!document.querySelector('.hub-toast--error')`, 8000, '错误 toast');
     const txt = await evaluate(`document.querySelector('.hub-toast--error').textContent`);
-    if (!txt.includes('casr')) throw new Error('错误信息未提及 casr: ' + txt);
+    // 口径（2026-10-17）：沙箱里 casr 不可用，迁移必然失败；这里断言"失败有明确反馈"，
+    // 且文案里能看出是**引擎/迁移**这一层（'casr' 或 '迁移' 均可），不再写死具体措辞。
+    if (!/casr|迁移/.test(txt)) throw new Error('迁移失败反馈不含引擎/迁移线索: ' + txt);
     await shot('sandbox-casr-missing.png');
     return '引擎缺失 → 明确错误 toast: ' + txt.slice(0, 40);
   });
 
   S('validation-empty-memory', async () => {
-    await click('[data-testid="tab-memory"]');
-    await evaluate(`document.getElementById('memory-body').value = ''`);
-    await click('[data-testid="memory-add"]');
+    // 记忆视图 = 来源卡片 + 条目列表（v1.0）；新建表单在「笔记 · 本地」里，
+    // 所以先回到全部来源、再进笔记（与主 E2E 的 memory-flow 同口径）
+    await click('[data-testid="nav-memory"]');
+    await evaluate(`(() => { const b = document.getElementById('mv-back-notes'); if (b) b.click(); })()`);
+    await waitFor(`!!document.querySelector('[data-testid="mv-sources"]')`, 8000, '记忆来源卡片');
+    await evaluate(`(() => { if (!document.querySelector('[data-testid="mv-add"]'))
+      document.querySelector('[data-testid="mv-sources"] .tcard[data-src="notes"]').click(); })()`);
+    await waitFor(`!!document.querySelector('[data-testid="mv-add"]')`, 8000, '记忆视图');
+    await evaluate(`document.getElementById('mv-body').value = ''`);
+    await click('[data-testid="mv-add"]');
     await waitFor(`!!document.querySelector('.hub-toast--error')`, 6000, '校验错误');
     return '空记忆内容被拦截';
   });
 
   S('long-title-no-overflow', async () => {
+    // v0.8：会话行标题在 .srow__ti（列表行内，旧 .nv-name 随三栏布局一并重命名）
     await evaluate(`(() => {
-      const t = document.querySelector('.row__title');
+      const t = document.querySelector('[data-testid="row"] .srow__ti');
+      if (!t) throw new Error('no session title node');
       t.textContent = '这是一个非常非常非常长的会话标题用来测试省略号与不换行约束在窄屏下的表现'.repeat(3);
     })()`);
     const overflow = await evaluate(`document.documentElement.scrollWidth`);
@@ -216,178 +248,182 @@ const failures = () => results.filter(r => !r.ok);
     return '沙箱移动端 390px 无溢出';
   });
 
-  S('tools-add-validation', async () => {
-    await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
-    await click('[data-testid="tool-add"]');
-    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '工具弹窗');
-    await click('[data-testid="tool-save"]');
-    await waitFor(`!!document.querySelector('.hub-toast--error')`, 6000, '校验错误 toast');
-    const txt = await evaluate(`document.querySelector('.hub-toast--error').textContent`);
-    if (!txt.includes('名称不能为空')) throw new Error('错误文案不符: ' + txt);
-    await click('[data-testid="tool-close"]');
-    return '空表单被拦截：' + txt.slice(0, 24);
-  });
+  // 登记一个采集源：**不填名称、不选格式**（v0.8 口径：hub 按路径识别）→ 返回 tool id
+  const addSource = async (root) => {
+    const r = await evaluate(`fetch('/api/tools', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ root: ${JSON.stringify(root)} }) }).then(r => r.json())`);
+    if (!r || !r.ok) throw new Error('夹具登记失败：' + JSON.stringify(r));
+    await evaluate('window.hubApp.loadState()');
+    // 设置页若开着，重绘工具列表（夹具是接口直接造的，页面不会自己知道）
+    await evaluate(`(document.getElementById('settings-overlay') || {}).classList
+      && document.getElementById('settings-overlay').classList.contains('is-active')
+      ? window.SettingsCenter.refresh() : null`);
+    return await evaluate(`(window.hubApp.state.tool_list.find(t => t.root === ${JSON.stringify(root)}) || {}).id`);
+  };
+  const idOfRoot = (root) =>
+    `(window.hubApp.state.tool_list.find(t => t.root === ${JSON.stringify(root)}) || {}).id`;
+
 
   S('tools-add-and-refresh', async () => {
     await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
-    await click('[data-testid="tool-add"]');
-    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '工具弹窗');
-    await evaluate(`(() => {
-      const set = (id, v) => { const el = document.getElementById(id); el.value = v;
-        el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); };
-      set('tool-name', 'Pi Sandbox');
-      set('tool-adapter', 'pi');
-      set('tool-root', ${JSON.stringify(join(sbxTmp, 'pi-fixture'))});
-    })()`);
-    await click('[data-testid="tool-save"]');
-    await waitFor(`!!document.querySelector('.hub-toast--success')`, 8000, '添加成功 toast');
-    await waitFor(`!!document.querySelector('[data-testid="tool-card-pi-sandbox"]')`, 6000, '新卡片出现');
-    await click('[data-testid="refresh-pi-sandbox"]');
-    await waitFor(`document.querySelector('[data-testid="count-pi-sandbox"]') && document.querySelector('[data-testid="count-pi-sandbox"]').textContent === '1'`, 10000, '会话计数=1');
-    const mc = await evaluate(`(window.hubApp.state.sessions.find(s => s.tool === 'pi-sandbox') || {}).msg_count`);
+    const root = join(sbxTmp, 'pi-fixture');
+    const tid = await addSource(root);          // 名称 √ 自动（Pi-Agent）、格式 √ 静默识别
+    if (!tid) throw new Error('登记后找不到该工具');
+    await waitFor(`(window.hubApp.state.tool_list.find(t => t.id === ${JSON.stringify(tid)}) || {}).adapter === 'pi'`, 6000, '自动识别为 pi 格式');
+    await waitFor(`!!document.querySelector('[data-testid="tool-card-${tid}"]')`, 6000, '卡片出现');
+    // 卡片上没有 ⟳（按注解去掉）→ 进入该工具，用侧栏的刷新按钮采集
+    await click(`[data-testid="tool-open-${tid}"]`);
+    await waitFor(`!!document.querySelector('[data-testid="focus-refresh"]')`, 6000, '侧栏刷新按钮');
+    await click('[data-testid="focus-refresh"]');
+    await waitFor(`document.querySelector('[data-testid="count-${tid}"]') && document.querySelector('[data-testid="count-${tid}"]').textContent === '1'`, 10000, '会话计数=1');
+    const mc = await evaluate(`(window.hubApp.state.sessions.find(s => s.tool === ${JSON.stringify(tid)}) || {}).msg_count`);
     if (mc !== 3) throw new Error('消息数应为 3，实际 ' + mc);
-    const feed = await evaluate(`!!document.querySelector('[data-testid="filter-pi-sandbox"]')`);
-    if (!feed) throw new Error('动态筛选按钮缺失');
+    // 已在该工具视图里 → 列表只应有它的 1 条会话（卡片即筛选入口，chips 已去掉）
+    await waitFor(`document.querySelectorAll('[data-testid="row"]').length === 1`, 6000, '工具视图筛选生效');
+    await evaluate(`document.querySelector('[data-testid="filter-all"]').click()`);
+    await sleep(300);
     await shot('sandbox-tool-added.png');
-    return '添加 → 采集 1 会话 / 3 消息 → 动态筛选出现';
+    return `登记(${tid}，格式自动识别) → 采集 1 会话 / 3 消息 → 卡片筛选生效`;
   });
 
-  S('tools-adapter-edit', async () => {
-    // 自定义工具：编辑时可改格式（持久化 + 还原）
+  S('tools-root-redetect', async () => {
+    // 自定义工具：改路径 → 自动重新识别格式（持久化 + 还原）
+    const root = join(sbxTmp, 'pi-fixture');
+    const croot = join(sbxTmp, 'claude-fixture');
+    mkdirSync(join(croot, 'proj'), { recursive: true });
+    writeFileSync(join(croot, 'proj', 's1.jsonl'),
+      JSON.stringify({ type: 'user', sessionId: 'x', parentUuid: null, cwd: '/tmp',
+                       message: { role: 'user', content: 'hi' } }) + '\n');
+    const tid = await evaluate(idOfRoot(root));
+    if (!tid) throw new Error('前置工具缺失');
     await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
-    await click('[data-testid="manage-pi-sandbox"]');
-    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '设置弹窗');
-    let st = await evaluate(`(() => ({
-      adDisabled: document.getElementById('tool-adapter').disabled,
-      hint: getComputedStyle(document.getElementById('tool-adapter-hint')).display !== 'none' }))()`);
-    if (st.adDisabled) throw new Error('自定义工具的会话格式应可修改，实际被禁用');
-    if (st.hint) throw new Error('自定义工具不应显示内置锁定提示');
-    await evaluate(`(() => { const s = document.getElementById('tool-adapter'); s.value = 'claude'; s.dispatchEvent(new Event('change')); })()`);
-    await click('[data-testid="tool-save"]');
-    await waitFor(`!!document.querySelector('.hub-toast--success')`, 8000, '格式修改保存 toast');
-    let ad = await evaluate(`(window.hubApp.state.tool_list.find(t => t.id === 'pi-sandbox') || {}).adapter`);
-    if (ad !== 'claude') throw new Error('格式修改未持久化：' + ad);
+    await openToolPane();
+    await click(`[data-testid="manage-${tid}"]`);
+    await waitFor(`!!document.querySelector('[data-testid="settings-tool-${tid}"][data-open="1"]')`, 4000, '行内编辑面板');
+    const adOpen = await evaluate(`(window.hubApp.state.tool_list.find(t => t.id === ${JSON.stringify(tid)}) || {}).adapter`);
+    if (adOpen !== 'pi') throw new Error('前置工具格式应为 pi: ' + adOpen);
+    await evaluate(`(() => { const e = document.getElementById('settool-root');
+      e.value = ${JSON.stringify(croot)}; e.dispatchEvent(new Event('input')); })()`);
+    await click('[data-testid="settool-save"]');
+    await waitFor(`!!document.querySelector('.hub-toast--success')`, 8000, '保存 toast');
+    let ad = await evaluate(`(window.hubApp.state.tool_list.find(t => t.id === ${JSON.stringify(tid)}) || {}).adapter`);
+    if (ad !== 'claude') throw new Error('格式未随路径重新识别：' + ad);
+    // 还原为 pi 路径
     await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
-    await click('[data-testid="manage-pi-sandbox"]');
-    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '设置弹窗');
-    await evaluate(`(() => { const s = document.getElementById('tool-adapter'); s.value = 'pi'; s.dispatchEvent(new Event('change')); })()`);
-    await click('[data-testid="tool-save"]');
-    await waitFor(`!!document.querySelector('.hub-toast--success')`, 8000, '格式还原保存 toast');
-    ad = await evaluate(`(window.hubApp.state.tool_list.find(t => t.id === 'pi-sandbox') || {}).adapter`);
+    await click(`[data-testid="manage-${tid}"]`);
+    await waitFor(`!!document.querySelector('[data-testid="settings-tool-${tid}"][data-open="1"]')`, 4000, '行内编辑面板');
+    await evaluate(`(() => { const e = document.getElementById('settool-root');
+      e.value = ${JSON.stringify(root)}; e.dispatchEvent(new Event('input')); })()`);
+    await click('[data-testid="settool-save"]');
+    await waitFor(`!!document.querySelector('.hub-toast--success')`, 8000, '还原保存 toast');
+    ad = await evaluate(`(window.hubApp.state.tool_list.find(t => t.id === ${JSON.stringify(tid)}) || {}).adapter`);
     if (ad !== 'pi') throw new Error('格式还原失败：' + ad);
-    // 内置工具：格式与路径锁定 + 提示可见
+    // 内置工具：路径锁定（格式仍可见）
     await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
     await click('[data-testid="manage-claude"]');
-    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '内置工具设置弹窗');
-    st = await evaluate(`(() => ({
-      adDisabled: document.getElementById('tool-adapter').disabled,
-      rootDisabled: document.getElementById('tool-root').disabled,
-      hint: getComputedStyle(document.getElementById('tool-adapter-hint')).display !== 'none' }))()`);
-    if (!st.adDisabled) throw new Error('内置工具格式应锁定，实际可改');
+    await waitFor(`!!document.querySelector('[data-testid="settings-tool-claude"][data-open="1"]')`, 4000, '内置工具行内面板');
+    const st = await evaluate(`(() => ({ rootDisabled: document.getElementById('settool-root').disabled,
+      adapter: (window.hubApp.state.tool_list.find(t => t.id === 'claude') || {}).adapter }))()`);
     if (!st.rootDisabled) throw new Error('内置工具路径应锁定，实际可改');
-    if (!st.hint) throw new Error('内置工具应显示锁定提示');
-    await click('[data-testid="tool-close"]');
-    return '自定义可改（持久化+还原）· 内置锁定+提示可见';
+    if (st.adapter !== 'claude') throw new Error('内置工具格式应保持 claude: ' + st.adapter);
+    await click('[data-testid="settool-cancel"]');      // 工具弹窗已删：行内面板用「取消」收起
+    return '改路径→自动重识别（持久化+还原）· 内置路径锁定 + 格式可见';
   });
 
   S('tools-disable-and-remove', async () => {
     await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
-    await click('[data-testid="manage-pi-sandbox"]');
-    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '设置弹窗');
-    await click('[data-testid="tool-enabled"]');
-    await click('[data-testid="tool-save"]');
+    // v0.7：停用/删除统一走设置中心；v0.8：登记由路径识别，工具 id 从 registry 取
+    const root = join(sbxTmp, 'pi-fixture');
+    const tid = await evaluate(idOfRoot(root));
+    if (!tid) throw new Error('前置工具缺失');
+    await click('[data-testid="settings-open"]');
+    await waitFor(`document.getElementById('settings-overlay').classList.contains('is-open')`, 4000, '设置中心');
+    await click('[data-testid="settings-nav-tools"]');
+    await waitFor(`!!document.querySelector('[data-testid="settings-tool-toggle-${tid}"]')`, 6000, '设置工具行');
+    await click(`[data-testid="settings-tool-toggle-${tid}"]`);
     await waitFor(`!!document.querySelector('.hub-toast--success')`, 8000, '停用保存 toast');
-    await waitFor(`document.querySelector('[data-testid="tool-card-pi-sandbox"]').classList.contains('is-off')`, 6000, '卡片停用态');
-    const kept = await evaluate(`window.hubApp.state.sessions.some(s => s.tool === 'pi-sandbox')`);
+    // 口径 B（2026-10-14 定稿）：停用 = 在所有界面隐藏（含历史会话）→ 卡片消失
+    await waitFor(`!document.querySelector('[data-testid="tool-card-${tid}"]')`, 6000, '卡片停用即隐藏');
+    const kept = await evaluate(`window.hubApp.state.sessions.some(s => s.tool === ${JSON.stringify(tid)})`);
     if (!kept) throw new Error('停用后会话不应消失');
     await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
-    await click('[data-testid="manage-pi-sandbox"]');
-    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '设置弹窗');
-    await click('[data-testid="tool-delete"]');
-    await waitFor(`!!document.querySelector('.hub-modal__ok')`, 4000, '移除确认弹层');
-    await click('.hub-modal__ok');
-    await waitFor(`!!document.querySelector('.hub-toast--success')`, 8000, '移除 toast');
-    await waitFor(`!document.querySelector('[data-testid="tool-card-pi-sandbox"]')`, 6000, '卡片消失');
-    const still = await evaluate(`window.hubApp.state.sessions.some(s => s.tool === 'pi-sandbox')`);
+    const del = await evaluate(`(async () => { const r = await fetch('/api/tools/${tid}', { method: 'DELETE' }); return (await r.json()).ok; })()`);
+    if (!del) throw new Error('删除失败');
+    // 设置面板内容不自动感知 API 删除 —— 重开设置中心刷新
+    await click('[data-testid="settings-close"]');
+    await waitFor(`!document.getElementById('settings-overlay').classList.contains('is-open')`, 4000, '设置关闭');
+    await click('[data-testid="settings-open"]');
+    await waitFor(`!!document.querySelector('[data-testid="settings-body"]')`, 4000, '设置重开');
+    await click('[data-testid="settings-nav-tools"]');
+    await waitFor(`!document.querySelector('[data-testid="settings-tool-${tid}"]')`, 6000, '设置行消失');
+    const still = await evaluate(`window.hubApp.state.sessions.some(s => s.tool === ${JSON.stringify(tid)})`);
     if (!still) throw new Error('移除后会话数据应保留');
-    return '停用→数据保留→移除→卡片消失、数据仍保留';
+    return '停用→卡片隐藏（数据保留）→移除→数据仍保留';
   });
 
   S('tools-purge-delete', async () => {
     await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
-    await click('[data-testid="tool-add"]');
-    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '工具弹窗');
-    await evaluate(`(() => {
-      const set = (id, v) => { const el = document.getElementById(id); el.value = v;
-        el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); };
-      set('tool-name', 'Purge Me');
-      set('tool-adapter', 'pi');
-      set('tool-root', ${JSON.stringify(join(sbxTmp, 'pi-fixture2'))});
-    })()`);
-    await click('[data-testid="tool-save"]');
-    await waitFor(`!!document.querySelector('[data-testid="tool-card-purge-me"]')`, 8000, '卡片出现');
-    await click('[data-testid="refresh-purge-me"]');
-    await waitFor(`document.querySelector('[data-testid="count-purge-me"]') && document.querySelector('[data-testid="count-purge-me"]').textContent === '1'`, 10000, '采集完成');
+    const root2 = join(sbxTmp, 'pi-fixture2');
+    const tid2 = await addSource(root2);
+    if (!tid2) throw new Error('登记失败');
+    await waitFor(`!!document.querySelector('[data-testid="tool-card-${tid2}"]')`, 8000, '卡片出现');
+    await click(`[data-testid="tool-open-${tid2}"]`);
+    await waitFor(`!!document.querySelector('[data-testid="focus-refresh"]')`, 6000, '侧栏刷新按钮');
+    await click('[data-testid="focus-refresh"]');
+    await waitFor(`document.querySelector('[data-testid="count-${tid2}"]') && document.querySelector('[data-testid="count-${tid2}"]').textContent === '1'`, 10000, '采集完成');
     await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
-    await click('[data-testid="manage-purge-me"]');
-    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '设置弹窗');
-    await click('[data-testid="tool-delete"]');
+    await openToolPane();
+    await click(`[data-testid="manage-${tid2}"]`);
+    await waitFor(`!!document.querySelector('[data-testid="settings-tool-${tid2}"][data-open="1"]')`, 4000, '行内编辑面板');
+    await click('[data-testid="settool-delete"]');
     await waitFor(`!!document.querySelector('[data-testid="tool-purge-opt"]')`, 4000, '删除确认弹层');
     await evaluate(`document.querySelector('[data-testid="tool-purge-opt"]').click()`);
     await click('.hub-modal__ok');
     await waitFor(`[...document.querySelectorAll('.hub-toast--success')].some(t => t.textContent.includes('彻底删除'))`, 10000, '彻底删除 toast');
-    await waitFor(`!document.querySelector('[data-testid="tool-card-purge-me"]')`, 6000, '卡片消失');
-    const gone = await evaluate(`!window.hubApp.state.sessions.some(s => s.tool === 'purge-me')`);
+    await waitFor(`!document.querySelector('[data-testid="tool-card-${tid2}"]')`, 6000, '卡片消失');
+    const gone = await evaluate(`!window.hubApp.state.sessions.some(s => s.tool === ${JSON.stringify(tid2)})`);
     if (!gone) throw new Error('彻底删除后数据应清除');
     return '勾选彻底清除 → 数据清除 → 卡片消失';
   });
 
-  S('tools-preset-fill', async () => {
-    await click('[data-testid="tool-add"]');
-    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '工具弹窗');
-    const nOpt = await evaluate(`document.querySelectorAll('#tool-preset option').length`);
-    if (nOpt < 6) throw new Error('预设选项应 ≥6，实际 ' + nOpt);
-    await evaluate(`(() => { const s = document.getElementById('tool-preset'); s.value = 'cursor'; s.dispatchEvent(new Event('change')); })()`);
-    const f = await evaluate(`(() => ({
-      name: document.getElementById('tool-name').value,
-      root: document.getElementById('tool-root').value,
-      skills: document.getElementById('tool-skills').value,
-      mcp: document.getElementById('tool-mcp').value }))()`);
-    if (f.name !== 'Cursor') throw new Error('预设未填名称: ' + JSON.stringify(f));
-    if (!f.root.includes('state.vscdb') || !f.skills.includes('.cursor/skills') || !f.mcp.includes('mcp.json'))
-      throw new Error('预设未填路径: ' + JSON.stringify(f));
-    await click('[data-testid="tool-close"]');
-    return `预设快填 OK（Cursor → ${f.skills}）`;
-  });
 
   S('tools-sync-targets', async () => {
     await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
-    await click('[data-testid="tool-add"]');
-    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '工具弹窗');
-    await evaluate(`(() => {
-      const set = (id, v) => { const el = document.getElementById(id); el.value = v;
-        el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); };
-      set('tool-name', 'Sync Test');
-      set('tool-adapter', 'pi');
-      set('tool-root', ${JSON.stringify(join(sbxTmp, 'pi-fixture'))});
-      set('tool-skills', ${JSON.stringify(join(sbxTmp, 'st-skills'))});
-      set('tool-mcp', ${JSON.stringify(join(sbxTmp, 'st-mcp.json'))});
-    })()`);
-    await click('[data-testid="tool-save"]');
-    await waitFor(`[...document.querySelectorAll('.hub-toast--success')].some(t => t.textContent.includes('已同步'))`, 8000, '目标同步 toast');
+    await openToolPane();
+    const r = await evaluate(`fetch('/api/tools', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ root: ${JSON.stringify(join(sbxTmp, 'pi-fixture'))},
+        skills_dir: ${JSON.stringify(join(sbxTmp, 'st-skills'))},
+        mcp_config: ${JSON.stringify(join(sbxTmp, 'st-mcp.json'))} }) }).then(r => r.json())`);
+    if (!r.ok || !(r.targets_created || []).length) throw new Error('目标未随登记同步：' + JSON.stringify(r));
+    await evaluate('window.hubApp.loadState()');
+    await evaluate(`window.SettingsCenter.refresh()`);
     const okSkills = await evaluate(`fetch('/api/skills/targets').then(r=>r.json()).then(d=>d.targets.some(t=>t.path.includes('st-skills')))`);
     const okMcp = await evaluate(`fetch('/api/mcp/targets').then(r=>r.json()).then(d=>d.targets.some(t=>t.path.includes('st-mcp')))`);
     if (!okSkills || !okMcp) throw new Error(`目标未同步: skills=${okSkills} mcp=${okMcp}`);
     await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
-    await click('[data-testid="manage-sync-test"]');
-    await waitFor(`document.getElementById('tool-overlay').classList.contains('is-open')`, 4000, '设置弹窗');
-    await click('[data-testid="tool-delete"]');
+    const syncId = await evaluate(`(window.hubApp.state.tool_list.find(t => t.skills_dir && t.skills_dir.endsWith('st-skills')) || {}).id`);
+    if (!syncId) throw new Error('找不到同步工具');
+    await click(`[data-testid="manage-${syncId}"]`);
+    await waitFor(`!!document.querySelector('[data-testid="settings-tool-${syncId}"][data-open="1"]')`, 4000, '行内编辑面板');
+    await click('[data-testid="settool-delete"]');
     await waitFor(`!!document.querySelector('.hub-modal__ok')`, 4000, '删除确认');
     await click('.hub-modal__ok');
     await waitFor(`!!document.querySelector('.hub-toast--success')`, 8000, '删除 toast');
     const gone = await evaluate(`fetch('/api/skills/targets').then(r=>r.json()).then(d=>!d.targets.some(t=>t.path.includes('st-skills')))`);
     if (!gone) throw new Error('删除后目标未清理');
     return '添加同步（Skills+MCP）→ 删除自动清理';
+  });
+
+  S('tools-no-add-entry', async () => {
+    // 用户指令 2026-10-16「去掉添加工具的能力」：任何界面都不得出现添加入口 / 工具弹窗
+    await openToolPane();
+    const r = await evaluate(`JSON.stringify({
+      overlay: !!document.getElementById('tool-overlay'),
+      api: typeof (window.hubApp || {}).openToolModal,
+      addBtn: !!document.querySelector('[data-testid="settings-tool-add"], [data-testid="tool-add"]') })`);
+    const d = JSON.parse(r);
+    if (d.overlay || d.api !== 'undefined' || d.addBtn) throw new Error('仍存在添加入口：' + r);
+    return '无工具弹窗 / 无 openToolModal / 无添加按钮';
   });
 
   for (const s of scenarios) await scenario(s.name, s.fn);

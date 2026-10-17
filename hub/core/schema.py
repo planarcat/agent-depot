@@ -110,3 +110,44 @@ def ensure(store):
         if "origin" not in tcols:
             store.db.execute("ALTER TABLE targets ADD COLUMN origin TEXT")
         store.db.commit()
+    ensure_memory_line_schema(store)
+
+
+# v0.7 记忆分发线：中间条目登记表 + 写回部署记录
+MEMORY_LINE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS memory_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_tool TEXT NOT NULL,        -- 采集自哪个工具
+  kind TEXT NOT NULL,               -- user_profile | project_memory | topics
+  scope TEXT NOT NULL,              -- global | 项目标识（slug）
+  name TEXT NOT NULL,               -- 源文件名（展示用）
+  version INTEGER DEFAULT 1,
+  hash TEXT,                        -- hub 中间体内容 hash（权威）
+  prev_hash TEXT,
+  last_source_hash TEXT,            -- 上次扫描时源文件的 hash（漂移检测基准）
+  source_path TEXT,                 -- 源文件绝对路径
+  updated_at TEXT,
+  status TEXT DEFAULT 'ok',         -- ok | drifted
+  UNIQUE(source_tool, kind, scope)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_items_status ON memory_items(status);
+
+CREATE TABLE IF NOT EXISTS memory_deployments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id INTEGER NOT NULL,
+  tool TEXT NOT NULL,               -- 写回目标工具 id
+  path TEXT NOT NULL,               -- 写出绝对路径
+  deployed_hash TEXT,               -- 写出时 item 内容 hash
+  deployed_at TEXT,
+  status TEXT DEFAULT 'ok',         -- ok | drifted | removed
+  UNIQUE(item_id, tool)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_deploy_item ON memory_deployments(item_id);
+"""
+
+
+def ensure_memory_line_schema(store):
+    """记忆分发线建表（幂等，随 ensure() 一并执行）。"""
+    with store.lock:
+        store.db.executescript(MEMORY_LINE_SCHEMA)
+        store.db.commit()

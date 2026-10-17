@@ -8,7 +8,7 @@
   display: inline-flex; align-items: center; gap: var(--sp-1);
   font-family: var(--font-sans); font-size: var(--fs-body);
   padding: var(--sp-2) var(--sp-4); border: 1px solid var(--c-line);
-  border-radius: var(--r-s); background: var(--c-surface-2); color: var(--c-ink-2);
+  border-radius: var(--r-m); background: var(--c-surface-2); color: var(--c-ink-2);
   cursor: pointer; transition: border-color var(--t-fast), color var(--t-fast), background var(--t-fast), transform var(--t-fast);
   position: relative;
 }
@@ -33,7 +33,7 @@
 .hub-input {
   font-family: var(--font-sans); font-size: var(--fs-body); color: var(--c-ink);
   padding: var(--sp-2) var(--sp-3); border: 1px solid var(--c-line);
-  border-radius: var(--r-s); background: var(--c-surface-2); outline: none;
+  border-radius: var(--r-m); background: var(--c-surface-2); outline: none;
   transition: border-color var(--t-fast);
   width: 100%;
 }
@@ -77,6 +77,8 @@
   transform: translateY(6px); transition: transform var(--t-med);
 }
 .hub-overlay.is-in .hub-modal { transform: translateY(0); }
+/* 关闭时窗口跟着遮罩一起淡出/下沉（不再瞬间消失） */
+.hub-overlay:not(.is-in) .hub-modal { transform: translateY(8px) scale(.985); opacity: 0; }
 .hub-modal__head { display: flex; align-items: center; gap: var(--sp-3);
   padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--c-line); }
 .hub-modal__title { font-size: var(--fs-l); font-weight: 600; color: var(--c-ink); flex: 1; }

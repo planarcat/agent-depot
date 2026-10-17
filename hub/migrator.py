@@ -6,6 +6,7 @@ writes + read-back verification. We shell out to it; when absent, migration is
 disabled and the UI degrades gracefully.
 """
 import json
+import os
 import shutil
 import subprocess
 
@@ -20,15 +21,28 @@ TOOL_TO_CASR = {
 }
 
 
+def _casr_candidates():
+    """casr 查找顺序：PATH → 常见用户安装位置（nohup/LaunchAgent 环境的 PATH 往往被裁剪）。"""
+    import os
+    home = os.path.expanduser("~")
+    return [
+        shutil.which("casr"),
+        os.path.join(home, "bin", "casr"),
+        os.path.join(home, ".local", "bin", "casr"),
+        "/usr/local/bin/casr",
+        "/opt/homebrew/bin/casr",
+    ]
+
+
 def casr_path():
-    for p in ("casr", shutil.which("casr")):
-        if p and (p != "casr" or shutil.which("casr")):
-            return shutil.which("casr")
+    for p in _casr_candidates():
+        if p and os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
     return None
 
 
 def available():
-    return shutil.which("casr") is not None
+    return casr_path() is not None
 
 
 def check_migrated_before(store, sid, source_tool, target_tool):

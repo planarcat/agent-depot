@@ -173,5 +173,37 @@ class AutoPull(ExtrasBase):
         self.assertIn("auto:skills:%d" % sid, ran)
 
 
+class ScannerRootTildeTest(unittest.TestCase):
+    """回归：扫描器必须把 root 里的 ~ 展开 —— 内置工具的 root 存的就是 ~/...，
+    不展开时 glob/os.path.exists 一律返回空，会【静默采不到任何会话】
+    （2026-10-15 生产 bug：zcode/autoclaw/workbuddy 等全部 0 条）。"""
+
+    def test_expand_root_helper(self):
+        from hub import scanners as sc
+        self.assertNotIn("~", sc._expand_root("~/.x"))
+        self.assertTrue(sc._expand_root("~/.x").startswith(os.path.expanduser("~")))
+
+    def test_scanner_init_expands_tilde(self):
+        from hub import scanners as sc
+        for cls in (sc.ClaudeScanner, sc.CodexScanner, sc.PiScanner,
+                    sc.WorkBuddyScanner, sc.CursorScanner, sc.AutoClawScanner,
+                    sc.OpenCodeScanner, sc.ZCodeScanner):
+            self.assertNotIn("~", cls(tool_id="t", root="~/probe").root or "", cls.__name__)
+
+    def test_build_scanners_expands_tilde(self):
+        """注册表里带 ~ 的工具，构造出的扫描器 root 必须已展开。"""
+        from hub import scanners as sc, tools_registry as tr
+        tools = [{"id": "wrk", "name": "W", "adapter": "workbuddy", "builtin": False,
+                  "enabled": True, "root": "~/probe-dir", "color": 9}]
+        orig = tr.load_tools
+        try:
+            tr.load_tools = lambda store: tools
+            got = sc.build_scanners(None)
+        finally:
+            tr.load_tools = orig
+        self.assertTrue(got, "应构造出扫描器")
+        self.assertNotIn("~", got[0].root)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

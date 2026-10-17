@@ -15,115 +15,138 @@
   <header class="topbar">
     <div class="topbar__brand">
       <span class="topbar__name">Agent Depot</span>
-      <span class="topbar__path">~/.agent/hub/</span>
     </div>
-    <nav class="mod-nav" id="mod-nav" data-testid="mod-nav">
+    <nav class="mod-nav" id="mod-nav" data-testid="mod-nav"><span class="mod-nav__ind" aria-hidden="true"></span>
       <button data-view="sessions" data-testid="nav-sessions" class="is-on">会话</button>
       <button data-view="memory" data-testid="nav-memory">记忆</button>
       <button data-view="skills" data-testid="nav-skills">Skills</button>
       <button data-view="mcp" data-testid="nav-mcp">MCP</button>
       <button data-view="ops" data-testid="nav-ops">台账</button>
+      <span class="mod-nav__sep"></span>
+      <button data-view="stats" data-testid="stats-open" id="stats-open">统计</button>
+      <button data-view="schedule" data-testid="schedule-open" id="schedule-open" hidden>定时任务</button>
+      <button data-view="settings" data-testid="settings-open" id="settings-open" title="设置">设置</button>
     </nav>
     <span class="topbar__spacer"></span>
     <span class="hub-badge" data-testid="engine-badge" id="engine-badge">检测引擎…</span>
-    <button class="hub-btn" data-testid="stats-open" id="stats-open">统计</button>
-    <button class="hub-btn" data-testid="schedule-open" id="schedule-open">定时任务</button>
-    <button class="hub-btn hub-btn--primary" data-testid="refresh-all" id="refresh-all">⟳ 全部刷新</button>
+    <button class="hub-btn hub-btn--primary" data-testid="refresh-all" id="refresh-all"><span class="btn-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11A8.5 8.5 0 1 0 12 20.5"/><path d="M20.5 4v7h-7"/></svg></span>全部刷新</button>
   </header>
 
   <!-- ===== views ===== -->
   <div class="view is-active" id="view-sessions">
-  <div class="main">
+  <div class="sess">
 
-    <!-- left rail -->
-    <aside class="rail">
-      <div class="rail__h">已接入工具</div>
-      <div id="tool-cards" data-testid="tool-cards"></div>
-      <button class="hub-btn rail__add" id="tool-add" data-testid="tool-add">＋ 添加工具</button>
-    </aside>
-
-    <!-- center list -->
-    <main class="center">
-      <div class="center__toolbar">
-        <div class="seg" id="filter-seg" data-testid="filter-seg">
-          <button data-filter="all" data-testid="filter-all" class="is-on">全部</button>
-          <button data-filter="claude" data-testid="filter-claude">Claude</button>
-          <button data-filter="codex" data-testid="filter-codex">Codex</button>
-          <button data-filter="opencode" data-testid="filter-opencode">OpenCode</button>
-          <button data-filter="starred" data-testid="filter-starred">★ 收藏</button>
+    <!-- 顶部：ADE 工具卡片网格（进入某个工具的会话视图后整块收起） -->
+    <section class="sess-tools" id="sess-tools">
+      <div class="sess-tools__in">
+        <div class="sess-tools__h" hidden>
+          <h2>ADE 工具 <span class="sess-tools__n">· <b id="sess-tools-count">0</b></span></h2>
         </div>
-        <input class="hub-input search" data-testid="search-input" id="search-input"
-               placeholder="搜索标题 / 消息内容…">
+        <div class="tgrid" id="tool-cards" data-testid="tool-cards"></div>
+        <div class="sess-tools__more"><button id="sess-tools-toggle" hidden></button></div>
       </div>
-      <div class="list-head">
-        <div><input type="checkbox" data-testid="sel-all" id="sel-all"
-                    style="width:13px;height:13px;accent-color:var(--c-accent)"></div>
-        <div>会话</div>
-        <div style="text-align:right;padding-right:var(--sp-4)">消息</div>
-        <div style="text-align:right">时间 · 来源</div>
-      </div>
-      <div class="rows" id="session-rows" data-testid="session-rows">
-        <div class="hub-empty">加载中…</div>
-      </div>
-      <div class="search-panel" id="search-panel" data-testid="search-panel" style="display:none"></div>
-    </main>
+    </section>
 
-    <!-- right side -->
-    <aside class="side">
-      <div class="side__tabs" id="side-tabs" data-testid="side-tabs">
-        <button data-tab="migrate" data-testid="tab-migrate" class="is-on">迁移</button>
-        <button data-tab="memory" data-testid="tab-memory">记忆</button>
-        <button data-tab="ledger" data-testid="tab-ledger">台账</button>
-      </div>
-      <div class="side__body">
+    <div class="sess__main">
+      <!-- 工具侧边栏：进入工具视图后出现（返回全部 + 各工具切换） -->
+      <aside class="sside" id="sess-side" hidden></aside>
 
-        <!-- migrate panel -->
-        <div class="side-panel" data-panel="migrate">
-          <div class="side__h">迁移目标 · 拖入或点选</div>
-          <div id="drops" data-testid="drops"></div>
-          <div class="migrate-box">
-            <div class="migrate-box__count">已选 <b data-testid="sel-count" id="sel-count">0</b> 条会话</div>
-            <div class="side__h" style="margin-top:var(--sp-2)">最近迁移 · lineage</div>
-            <div id="mig-list" data-testid="mig-list"></div>
+      <!-- 会话列表：筛选 + 搜索 + 手风琴列表 + 分页 -->
+      <section class="slist" id="sess-listcol">
+        <div class="slist__h">
+          <h2 id="sess-title">全部会话</h2>
+          <span class="slist__n" id="sess-left-count">0</span>
+          <div class="slist__seg" id="filter-seg" data-testid="filter-seg">
+            <button data-filter="all" data-testid="filter-all" class="is-on">全部</button>
+            <button data-filter="starred" data-testid="filter-starred">★ 星标</button>
           </div>
         </div>
+        <div class="slist__search">
+          <label class="ssearch">
+            <span class="ssearch__ic">⌕</span>
+            <input data-testid="search-input" id="search-input" placeholder="搜索标题 / 消息内容…">
+          </label>
+          <div class="search-panel" id="search-panel" data-testid="search-panel" style="display:none"></div>
+        </div>
+        <div class="nv-list" id="session-rows" data-testid="session-rows">
+          <div class="hub-empty">加载中…</div>
+        </div>
+        <div class="slist__foot" data-testid="sess-pager">
+          <button class="nv-pbtn" data-sel="all" data-testid="sess-sel-all" title="全选本页">全选</button>
+          <button class="nv-pbtn" data-sel="invert" data-testid="sess-sel-invert" title="反选本页">反选</button>
+          <button class="nv-pbtn" data-sel="none" data-testid="sess-sel-none" title="清空选择">清空</button>
+          <span class="nv-pinfo" id="sess-pinfo"></span>
+        </div>
+      </section>
 
-        <!-- memory panel -->
-        <div class="side-panel" data-panel="memory" style="display:none">
-          <div class="side__h">新增记忆</div>
-          <div class="mem-form">
-            <input class="hub-input" data-testid="memory-title" id="memory-title" placeholder="标题（可选）">
-            <textarea class="hub-input" data-testid="memory-body" id="memory-body"
-                      placeholder="内容：偏好、决策、约定…" rows="3"></textarea>
-            <button class="hub-btn hub-btn--primary" data-testid="memory-add" id="memory-add">保存记忆</button>
+      <!-- 迁移目标面板：展开会话或勾选后从右侧滑出 -->
+      <aside class="spanel" id="sess-panel">
+        <div class="spanel__in">
+          <div class="spanel__h">
+            <h3>迁移目标</h3>
+            <button class="spanel__x" id="sess-panel-close" title="收起">×</button>
           </div>
-          <div class="side__h">记忆列表</div>
-          <div id="memory-list" data-testid="memory-list"></div>
+          <div class="spanel__sel" id="sess-panel-sel">—</div>
+          <ul class="spanel__targets" id="sess-targets" data-testid="sess-targets"></ul>
+          <div class="spanel__go">
+            <button class="spanel__gobtn" id="sess-migrate-go" disabled>迁移 —</button>
+          </div>
+          <div class="spanel__lin">
+            <h4>最近迁移 · lineage</h4>
+            <div id="mig-list" data-testid="mig-list" class="nv-miglist"></div>
+          </div>
         </div>
-
-        <!-- ledger panel -->
-        <div class="side-panel" data-panel="ledger" style="display:none">
-          <div class="side__h">最近操作</div>
-          <div id="ledger-list" data-testid="ledger-list"></div>
-        </div>
-
-      </div>
-    </aside>
+      </aside>
+    </div>
   </div>
   </div><!-- /view-sessions -->
   <div class="view" id="view-memory"></div>
   <div class="view" id="view-skills"></div>
   <div class="view" id="view-mcp"></div>
   <div class="view" id="view-ops"></div>
+  <div class="view" id="view-stats"></div>
+  <!-- 设置 = 页面（顶栏下方），不是弹窗（用户 2026-10-16） -->
+<div class="view setview" id="settings-overlay" data-testid="settings-overlay">
+  <div class="setwin">
+    <aside class="setwin__nav">
+      <h2 class="setwin__brand">设置</h2>
+      <button class="setwin__item is-on" data-pane="modules" data-testid="settings-nav-modules">
+        <span class="setwin__label">模块</span>
+        <span class="setwin__desc">启用或停用顶部导航模块</span></button>
+      <button class="setwin__item" data-pane="tools" data-testid="settings-nav-tools">
+        <span class="setwin__label">工具</span>
+        <span class="setwin__desc">排序、启停与路径配置</span></button>
+      <button class="setwin__item" data-pane="env" data-testid="settings-nav-env">
+        <span class="setwin__label">关于</span>
+        <span class="setwin__desc">版本与存储位置</span></button>
+      <div class="setwin__ver mono" id="settings-version">Agent Depot</div>
+    </aside>
+    <section class="setwin__main">
+      <header class="setwin__head">
+        <div class="setwin__headtxt">
+          <span class="setwin__title" id="settings-title">模块</span>
+          <span class="setwin__sub" id="settings-sub">启用或停用顶部导航模块</span>
+        </div>
+        <button class="setwin__x" hidden data-testid="settings-close" id="settings-close" title="关闭" aria-label="关闭设置">✕</button>
+      </header>
+      <div class="setwin__body" data-testid="settings-body">
+        <div class="setpane is-on" data-pane="modules" id="settings-modules" data-testid="settings-modules"></div>
+        <div class="setpane" data-pane="tools" id="settings-tools" data-testid="settings-tools"></div>
+        <div class="setpane" data-pane="env" id="settings-env" data-testid="settings-env"></div>
+      </div>
+    </section>
+  </div>
+</div>
+
 
   <!-- ===== status bar ===== -->
   <footer class="statusbar">
     <span><span class="dot-ok"></span><span data-testid="status-db" id="status-db">hub.db · ~/.agent/hub/</span></span>
+    <span class="statusbar__live hub-badge hub-badge--neutral" data-testid="live-dot" id="live-dot" title="磁盘变动即时刷新：内核文件事件（kqueue/watchdog）→ SSE；断线自动退回轮询" hidden>即时</span>
     <span data-testid="status-sched" id="status-sched">定时调度：—</span>
     <span data-testid="status-mem" id="status-mem">记忆 —</span>
     <span data-testid="status-am" id="status-am">记忆总线 —</span>
     <span class="spacer"></span>
-    <span>仅本地 · 无云端上传</span>
   </footer>
 </div>
 
@@ -162,55 +185,23 @@
   </div>
 </div>
 
-<!-- ===== tool modal ===== -->
-<div class="sched-overlay" id="tool-overlay" data-testid="tool-overlay">
-  <div class="sched">
-    <div class="sched__head">
-      <span class="sched__title" id="tool-modal-title">添加工具</span>
-      <button class="hub-btn btn-sm" data-testid="tool-close" id="tool-close">关闭</button>
-    </div>
-    <div class="sched__body">
-      <div class="sched__hint" id="tool-modal-hint">登记一个新工具后，它会被纳入采集、筛选与定时刷新。</div>
-      <div class="tool-form">
-        <label id="tool-preset-row"><span>预设（快速填入）</span>
-          <select id="tool-preset" data-testid="tool-preset"></select></label>
-        <label><span>名称</span>
-          <input class="hub-input" id="tool-name" data-testid="tool-name" placeholder="例如 Cursor / 我的 Pi 工具"></label>
-        <label><span>会话格式</span>
-          <select id="tool-adapter" data-testid="tool-adapter"></select></label>
-        <div class="tool-hint" id="tool-adapter-hint" style="display:none">内置工具的会话格式固定（不可修改）。</div>
-        <label><span>会话路径</span>
-          <input class="hub-input" id="tool-root" data-testid="tool-root" placeholder="绝对路径（可用 ~）"></label>
-        <div class="tool-hint" id="tool-root-hint"></div>
-        <label><span>Skills 目录（可选）</span>
-          <input class="hub-input" id="tool-skills" data-testid="tool-skills" placeholder="例如 ~/.cursor/skills"></label>
-        <label><span>MCP 配置（可选）</span>
-          <input class="hub-input" id="tool-mcp" data-testid="tool-mcp" placeholder="例如 ~/.cursor/mcp.json"></label>
-        <div class="tool-hint">填了 Skills / MCP 路径后，会自动出现在对应模块的「目标」列表里。</div>
-        <label class="tool-enable-row" id="tool-enable-row" style="display:none">
-          <span>启用</span>
-          <span class="switch" id="tool-enabled" data-testid="tool-enabled"><span class="switch__track"></span></span>
-        </label>
-      </div>
-      <div class="tool-mem-row" id="tool-mem-row" style="display:none">
-        <span class="tool-mem-label">记忆总线</span>
-        <span class="tool-hint" id="tool-mem-status">—</span>
-        <button class="hub-btn btn-sm" id="tool-wire" data-testid="tool-wire" style="display:none">接入记忆总线</button>
-      </div>
-    </div>
-    <div class="sched__foot">
-      <button class="hub-btn" id="tool-delete" data-testid="tool-delete" style="display:none">删除工具</button>
-      <span class="tool-foot-spacer"></span>
-      <button class="hub-btn" data-testid="tool-cancel" id="tool-cancel">取消</button>
-      <button class="hub-btn hub-btn--primary" data-testid="tool-save" id="tool-save">保存</button>
-    </div>
-  </div>
-</div>
-
+<script>
+// ⌘R / F5 刷新兜底（Tauri 壳已由原生菜单接管；此段保证浏览器直开时行为一致）
+window.addEventListener('keydown', function (e) {
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'r' || e.key === 'R')) {
+    e.preventDefault(); window.location.reload();
+  } else if (e.key === 'F5') {
+    e.preventDefault(); window.location.reload();
+  }
+});
+</script>
 <script src="/assets/hub-ui.js"></script>
 <script src="/assets/app.js"></script>
 <script src="/assets/views/skills.js"></script>
 <script src="/assets/views/mcp.js"></script>
+<script src="/assets/views/memory.js"></script>
 <script src="/assets/views/ops.js"></script>
+<script src="/assets/views/settings.js"></script>
+<script src="/assets/views/stats.js"></script>
 </body>
 </html>

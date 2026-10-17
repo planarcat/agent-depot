@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Depot · 手动条目画布 V1</title>
+<style>
+/* ---- tokens（源自 web/tokens.css） ---- */
+:root{
+  --zwork-preview-accent:#0d6a63;
+  --c-ink:#171d1f;--c-ink-2:#3c4447;--c-ink-3:#5b6669;--c-ink-4:#8a9497;
+  --c-bg:#f2f4f4;--c-surface:#f9fafa;--c-surface-2:#ffffff;
+  --c-line:#d9dedf;--c-line-soft:#e6eaeb;
+  --c-accent:var(--zwork-preview-accent,#0d6a63);--c-accent-strong:#0a544e;
+  --c-accent-soft:#eaf2f1;--c-accent-line:#bfd6d2;--c-on-accent:#ffffff;--c-on-dark:#f4f6f6;
+  --c-ok:#1a7f4b;--c-ok-soft:#e9f4ee;--c-warn:#8a6d1f;--c-warn-soft:#f6f1e2;
+  --c-err:#a03d2e;--c-err-soft:#f8ece9;
+  --fs-xs:10px;--fs-s:11px;--fs-body:13px;--fs-m:14px;--fs-l:16px;--fs-xl:20px;--fs-2xl:26px;
+  --font-sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB",sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sp-1:4px;--sp-2:8px;--sp-3:12px;--sp-4:16px;--sp-5:24px;--sp-6:32px;--sp-7:48px;
+  --r-s:4px;--r-m:8px;--r-l:12px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#f3f4f6;font-family:var(--font-sans);color:var(--c-ink);
+  background-image:radial-gradient(circle,#d5dadc 1px,transparent 1px);background-size:24px 24px}
+/* ---- 画布 chrome ---- */
+.chead{max-width:1400px;margin:0 auto;padding:40px 24px 8px}
+.chead h1{font-size:var(--fs-xl);font-weight:700;letter-spacing:-.01em}
+.chead p{font-size:var(--fs-s);color:var(--c-ink-3);margin-top:var(--sp-2);line-height:1.6}
+.chead .flow{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--c-ink-2);
+  background:var(--c-surface-2);border:1px solid var(--c-line);border-radius:var(--r-m);
+  display:inline-block;padding:var(--sp-1) var(--sp-3);margin-top:var(--sp-3)}
+.chead .hint{margin-top:var(--sp-2);color:var(--c-ink-4)}
+#cv{padding:var(--sp-6) var(--sp-6) 96px;display:flex;flex-direction:column;align-items:center;gap:var(--sp-7);
+  min-height:100vh;user-select:none;-webkit-user-select:none;cursor:default}
+#cv.pan{cursor:grabbing}
+.screen{width:1360px;flex:none;background:#fff;border:1px solid var(--c-line);border-radius:var(--r-l);
+  box-shadow:0 8px 30px rgba(0,0,0,.12);overflow:hidden;position:relative}
+.screen.drag{box-shadow:0 16px 40px rgba(0,0,0,.2)}
+.slabel{height:28px;display:flex;align-items:center;justify-content:space-between;padding:0 var(--sp-4);
+  background:var(--c-surface);border-bottom:1px solid var(--c-line-soft)}
+.slabel b{font-size:var(--fs-s);font-weight:600;color:var(--c-ink-2)}
+.slabel span{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--c-ink-4)}
+/* ---- app 骨架 ---- */
+.app{display:grid;grid-template-rows:52px 1fr 28px;min-height:740px;background:var(--c-bg)}
+.topbar{display:flex;align-items:center;gap:var(--sp-3);padding:0 var(--sp-4);background:var(--c-surface-2);
+  border-bottom:1px solid var(--c-line)}
+.brand{display:flex;align-items:baseline;gap:var(--sp-2)}
+.bname{font-size:var(--fs-l);font-weight:700;letter-spacing:-.01em}
+.bpath{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--c-ink-4)}
+.nav{display:flex;gap:var(--sp-1);margin-left:var(--sp-4)}
+.nav button{border:0;background:none;font-size:var(--fs-body);color:var(--c-ink-3);padding:var(--sp-2) var(--sp-3);
+  border-radius:var(--r-s);cursor:pointer;font-family:inherit}
+.nav button.on{color:var(--c-accent);background:var(--c-accent-soft);font-weight:600}
+.tsp{flex:1}
+.hub-btn{font-family:inherit;font-size:var(--fs-body);color:var(--c-ink);background:var(--c-surface-2);
+  border:1px solid var(--c-line);border-radius:var(--r-s);padding:5px var(--sp-3);cursor:pointer}
+.hub-btn.sm{font-size:var(--fs-s);padding:3px var(--sp-2)}
+.hub-btn.pri{background:var(--c-accent);border-color:var(--c-accent);color:var(--c-on-accent);font-weight:600}
+.hub-btn.gh{background:transparent;border-color:transparent;color:var(--c-ink-2)}
+.hub-btn.dgr{color:var(--c-err);border-color:var(--c-err)}
+.hub-badge{display:inline-flex;align-items:center;font-family:var(--font-mono);font-size:var(--fs-s);
+  padding:1px var(--sp-2);border-radius:999px;background:var(--c-line-soft);color:var(--c-ink-3)}
+.hub-badge.ok{background:var(--c-ok-soft);color:var(--c-ok)}
+.hub-badge.wn{background:var(--c-warn-soft);color:var(--c-warn)}
+/* ---- 三栏 ---- */
+.sb{display:grid;grid-template-columns:300px 1fr 340px;min-height:0}
+.rail{background:var(--c-surface);border-right:1px solid var(--c-line);padding:var(--sp-3) 0 var(--sp-4);overflow:hidden}
+.rail.right{border-right:0;border-left:1px solid var(--c-line)}
+.railh{display:flex;align-items:center;justify-content:space-between;font-size:var(--fs-s);font-weight:600;
+  color:var(--c-ink-3);padding:var(--sp-2) var(--sp-4)}
+.railh + .railh{padding-top:var(--sp-4)}
+.tcard{background:var(--c-surface-2);border:1px solid var(--c-line-soft);border-radius:var(--r-m);
+  margin:var(--sp-1) var(--sp-3) var(--sp-2);padding:var(--sp-2) var(--sp-3)}
+.thead{display:flex;align-items:center;gap:var(--sp-2)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--c-accent);flex:none}
+.tname{font-size:var(--fs-body);font-weight:600;flex:1}
+.tcount{font-family:var(--font-mono);font-size:var(--fs-s);color:var(--c-ink-4)}
+.tmeta{font-size:var(--fs-s);color:var(--c-ink-4);margin-top:var(--sp-1);line-height:1.5}
+.tacts{display:flex;gap:var(--sp-1);margin-top:var(--sp-2)}
+.mono{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--c-ink-4);word-break:break-all}
+.railadd{display:block;width:calc(100% - 2*var(--sp-3));margin:var(--sp-1) var(--sp-3) var(--sp-2)}
+.center{display:flex;flex-direction:column;min-width:0;background:var(--c-bg)}
+.toolbar{display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2) var(--sp-4);
+  background:var(--c-surface);border-bottom:1px solid var(--c-line)}
+.sp2{flex:1}
+.lhead{display:grid;grid-template-columns:36px 1fr 90px 150px;padding:var(--sp-2) var(--sp-4);
+  font-size:var(--fs-xs);color:var(--c-ink-4);border-bottom:1px solid var(--c-line-soft);letter-spacing:.03em}
+.lhead div:last-child{text-align:right}
+.rows{flex:1}
+.row{display:grid;grid-template-columns:36px 1fr 90px 150px;align-items:center;
+  padding:var(--sp-2) var(--sp-4);border-bottom:1px solid var(--c-line-soft);background:var(--c-surface-2)}
+.row input{accent-color:var(--c-accent);width:13px;height:13px}
+.rtitle{font-size:var(--fs-body);font-weight:600;display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap}
+.rsub{font-size:var(--fs-s);color:var(--c-ink-3);margin-top:2px}
+.rmsgs{font-family:var(--font-mono);font-size:var(--fs-s);color:var(--c-ink-3)}
+.rmeta{text-align:right;font-size:var(--fs-s);color:var(--c-ink-4);line-height:1.5}
+.rmeta .src{font-family:var(--font-mono);font-size:var(--fs-xs)}
+/* ---- 右栏详情 ---- */
+.dmeta{font-size:var(--fs-s);color:var(--c-ink-3);line-height:1.6;padding:0 var(--sp-4)}
+.dacts{display:flex;gap:var(--sp-1);padding:var(--sp-2) var(--sp-4) var(--sp-3)}
+pre.sbmd{margin:0 var(--sp-4) var(--sp-3);background:var(--c-surface);border:1px solid var(--c-line-soft);
+  border-radius:var(--r-s);padding:var(--sp-3);font-family:var(--font-mono);font-size:var(--fs-xs);
+  color:var(--c-ink-2);line-height:1.6;white-space:pre-wrap;word-break:break-all}
+.envrow{display:flex;align-items:center;gap:var(--sp-2);padding:0 var(--sp-4) var(--sp-2);
+  font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--c-ink-2)}
+.mutnote{font-size:var(--fs-xs);color:var(--c-ink-4);padding:0 var(--sp-4);line-height:1.6}
+/* ---- 状态栏 ---- */
+.sbar{display:flex;align-items:center;gap:var(--sp-4);padding:0 var(--sp-3);font-size:var(--fs-xs);
+  color:var(--c-ink-4);background:var(--c-surface);border-top:1px solid var(--c-line)}
+.sbar .dot-ok{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--c-ok);
+  margin-right:var(--sp-1)}
+.sbar .spacer{flex:1}
+/* ---- 模态 ---- */
+.ovl{position:absolute;inset:28px 0 0 0;background:rgba(23,29,31,.36);display:flex;
+  align-items:flex-start;justify-content:center;padding-top:64px;z-index:50}
+.modal{width:560px;background:var(--c-surface-2);border:1px solid var(--c-line);border-radius:var(--r-l);
+  box-shadow:0 4px 24px rgba(23,29,31,.14)}
+.mhead{display:flex;align-items:center;justify-content:space-between;padding:var(--sp-3) var(--sp-4);
+  border-bottom:1px solid var(--c-line-soft)}
+.mtitle{font-size:var(--fs-l);font-weight:700}
+.mx{font-size:var(--fs-body);color:var(--c-ink-4)}
+.mbody{padding:var(--sp-4);max-height:520px;overflow:hidden}
+.msub{font-size:var(--fs-s);color:var(--c-ink-3);line-height:1.6;margin-bottom:var(--sp-3)}
+.mfoot{display:flex;justify-content:flex-end;gap:var(--sp-2);padding:var(--sp-3) var(--sp-4);
+  border-top:1px solid var(--c-line-soft)}
+.fg label{display:block;margin-bottom:var(--sp-3)}
+.fg .lb{display:block;font-size:var(--fs-s);color:var(--c-ink-3);margin-bottom:var(--sp-1)}
+.fg .half{display:flex;gap:var(--sp-2)}
+.fg .half label{flex:1}
+.hub-input{width:100%;font-family:inherit;font-size:var(--fs-body);color:var(--c-ink);background:var(--c-surface-2);
+  border:1px solid var(--c-line);border-radius:var(--r-s);padding:6px var(--sp-2)}
+.hub-input:focus{outline:none;border-color:var(--c-accent);box-shadow:0 0 0 3px var(--c-accent-soft)}
+textarea.hub-input{font-family:var(--font-mono);font-size:var(--fs-xs);line-height:1.6;resize:none}
+.errtext{font-size:var(--fs-s);color:var(--c-err);margin-top:var(--sp-1);line-height:1.5}
+.keyhint{font-size:var(--fs-xs);color:var(--c-ink-4);margin-top:var(--sp-1);line-height:1.5}
+.envkv{display:flex;gap:var(--sp-1);margin-bottom:var(--sp-1)}
+.envkv .hub-input{font-family:var(--font-mono);font-size:var(--fs-xs)}
+.envkv .k{flex:2}.envkv .v{flex:3}
+/* 分发向导 */
+.wiz label{display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2) var(--sp-3);
+  border:1px solid var(--c-line-soft);border-radius:var(--r-s);margin-bottom:var(--sp-1);cursor:pointer}
+.wiz label.on{border-color:var(--c-accent-line);background:var(--c-accent-soft)}
+.wiz input{accent-color:var(--c-accent)}
+.wiz .wname{font-size:var(--fs-body);font-weight:600}
+.wiz .wpath{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--c-ink-4);flex:1;text-align:right}
+.wizprev{margin-top:var(--sp-3);background:var(--c-surface);border:1px solid var(--c-line-soft);
+  border-radius:var(--r-s);padding:var(--sp-3);font-family:var(--font-mono);font-size:var(--fs-xs);
+  color:var(--c-ink-2);line-height:1.8}
+.wizprev .okline{color:var(--c-ok);font-weight:600}
+.wizprev .new{color:var(--c-ink-4)}
+/* toast */
+.toasts{position:absolute;right:var(--sp-4);bottom:44px;z-index:60}
+.toast{display:flex;align-items:center;gap:var(--sp-2);background:var(--c-ink);color:var(--c-on-dark);
+  border-radius:var(--r-m);padding:var(--sp-2) var(--sp-3);font-size:var(--fs-body);
+  box-shadow:0 4px 16px rgba(23,29,31,.24)}
+.toast .tic{color:#7fd6b8;font-weight:700}
+</style>
+</head>
+<body>
+
+<div class="chead">
+  <h1>Agent Depot · 手动条目（Skill / MCP）功能原型</h1>
+  <p>本地库是枢纽：条目既可从远程仓库拉取，也可本地手动编写或从本地目录导入；入库后与拉取条目<b>同权</b>——同样的分发、验证、台账与回退。</p>
+  <span class="flow">来源：远程拉取 ＋ 本地创建 / 导入　→　本地库 registry　→　分发到各工具目标</span>
+  <p class="hint">滚轮缩放 · 拖拽屏幕重排 · 拖空白处平移画布</p>
+</div>
+
+<div id="cv">
+
+<!-- ============ 01 Skills 列表 ============ -->
+<section class="screen" data-name="01 · Skills · 列表与手动入口">
+  <div class="slabel"><b>01 · Skills · 列表与手动入口</b><span>1360 · 桌面三栏</span></div>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><span class="bname">Agent Depot</span><span class="bpath">~/.agent/hub/</span></div>
+      <nav class="nav"><button>会话</button><button>记忆</button><button class="on">Skills</button><button>MCP</button><button>台账</button></nav>
+      <span class="tsp"></span>
+      <span class="hub-badge">引擎 casr · 已连接</span>
+      <button class="hub-btn">统计</button><button class="hub-btn">定时任务</button><button class="hub-btn pri">⟳ 全部刷新</button>
+    </header>
+    <div class="sb">
+      <aside class="rail">
+        <div class="railh"><span>Skills 源</span><button class="hub-btn sm">＋ 添加</button></div>
+        <div class="tcard">
+          <div class="thead"><span class="dot"></span><span class="tname">team-skills</span><span class="tcount">2</span></div>
+          <div class="tmeta">同步 09/28 14:12 · github.com/acme/team-skills</div>
+          <div class="tacts"><button class="hub-btn sm">拉取</button><button class="hub-btn sm">移除</button></div>
+        </div>
+        <div class="railh"><span>手动条目</span></div>
+        <button class="hub-btn railadd">＋ 新建 Skill</button>
+        <button class="hub-btn railadd">⇩ 从本地目录导入</button>
+        <div class="railh"><span>分发目标</span><button class="hub-btn sm">＋ 添加</button></div>
+        <div class="tcard">
+          <div class="thead"><span class="tname">Claude Code（全局）</span></div>
+          <div class="mono">~/.claude/skills</div>
+        </div>
+        <div class="tcard">
+          <div class="thead"><span class="tname">Cursor</span></div>
+          <div class="mono">~/.cursor/skills</div>
+        </div>
+      </aside>
+      <main class="center">
+        <div class="toolbar">
+          <button class="hub-btn sm">更新所选到本地</button>
+          <button class="hub-btn sm">一键更新全部可更新</button>
+          <button class="hub-btn sm">验证连接</button>
+          <span class="sp2"></span>
+          <button class="hub-btn sm pri">分发所选…</button>
+        </div>
+        <div class="lhead"><div></div><div>条目</div><div>版本</div><div>部署 · 来源</div></div>
+        <div class="rows">
+          <div class="row">
+            <div><input type="checkbox"></div>
+            <div><div class="rtitle">code-review <span class="hub-badge ok">已安装</span></div>
+              <div class="rsub">PR 与 diff 的结构化审查清单与输出模板</div></div>
+            <div class="rmsgs">v3</div>
+            <div class="rmeta">已部署 2 处<br><span class="src">team-skills</span></div>
+          </div>
+          <div class="row">
+            <div><input type="checkbox"></div>
+            <div><div class="rtitle">api-design <span class="hub-badge ok">已安装</span></div>
+              <div class="rsub">REST 接口设计约定与评审要点</div></div>
+            <div class="rmsgs">v1</div>
+            <div class="rmeta">未部署<br><span class="src">team-skills</span></div>
+          </div>
+          <div class="row">
+            <div><input type="checkbox" checked></div>
+            <div><div class="rtitle">commit-lint <span class="hub-badge">手动</span> <span class="hub-badge ok">已安装</span></div>
+              <div class="rsub">校验提交信息是否符合 Conventional Commits 并给出修改建议</div></div>
+            <div class="rmsgs">—</div>
+            <div class="rmeta">已部署 1 处<br><span class="src">本地</span></div>
+          </div>
+          <div class="row">
+            <div><input type="checkbox"></div>
+            <div><div class="rtitle">weekly-digest <span class="hub-badge">手动</span></div>
+              <div class="rsub">汇总本周会话与台账，生成一份进展周报</div></div>
+            <div class="rmsgs">—</div>
+            <div class="rmeta">未部署<br><span class="src">本地</span></div>
+          </div>
+        </div>
+      </main>
+      <aside class="rail right">
+        <div class="railh"><span>commit-lint · 详情</span></div>
+        <div class="dmeta">来源：本地创建 · 文件 3 个 · 无版本快照<br>已部署 1 处 · ~/.claude/skills</div>
+        <div class="dacts">
+          <button class="hub-btn sm">编辑</button>
+          <button class="hub-btn sm">重新导入</button>
+          <button class="hub-btn sm dgr">删除</button>
+        </div>
+        <div class="railh"><span>SKILL.md</span></div>
+        <pre class="sbmd">---
+name: commit-lint
+description: 校验提交信息是否符合
+  Conventional Commits
+---
+
+# commit-lint
+
+校验 feat / fix / chore 类型与 scope，
+检查 breaking change 标注并给出
+修改建议。</pre>
+        <div class="railh"><span>文件</span></div>
+        <div class="dmeta mono">SKILL.md · rules.md · examples.md</div>
+        <div class="mutnote">远程条目此处显示版本与差异对比；手动条目显示文件清单，「编辑」直接改写，「重新导入」用目录内容覆盖。</div>
+      </aside>
+    </div>
+    <footer class="sbar">
+      <span><span class="dot-ok"></span>hub.db · ~/.agent/hub/</span>
+      <span>定时调度：未启用</span><span>记忆 3 条</span><span>记忆总线 agentmemory · 未运行</span>
+      <span class="spacer"></span><span>仅本地 · 无云端上传</span>
+    </footer>
+  </div>
+</section>
+
+<!-- ============ 02 Skills 新建 ============ -->
+<section class="screen" data-name="02 · Skills · 新建对话框">
+  <div class="slabel"><b>02 · Skills · 新建对话框</b><span>1360 · 桌面 · 模态</span></div>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><span class="bname">Agent Depot</span><span class="bpath">~/.agent/hub/</span></div>
+      <nav class="nav"><button>会话</button><button>记忆</button><button class="on">Skills</button><button>MCP</button><button>台账</button></nav>
+      <span class="tsp"></span>
+      <button class="hub-btn pri">⟳ 全部刷新</button>
+    </header>
+    <div class="sb">
+      <aside class="rail">
+        <div class="railh"><span>Skills 源</span><button class="hub-btn sm">＋ 添加</button></div>
+        <div class="tcard"><div class="thead"><span class="dot"></span><span class="tname">team-skills</span><span class="tcount">2</span></div>
+          <div class="tmeta">同步 09/28 14:12</div></div>
+        <button class="hub-btn railadd">＋ 新建 Skill</button>
+        <button class="hub-btn railadd">⇩ 从本地目录导入</button>
+      </aside>
+      <main class="center">
+        <div class="toolbar"><button class="hub-btn sm">更新所选到本地</button><span class="sp2"></span><button class="hub-btn sm pri">分发所选…</button></div>
+        <div class="row"><div><input type="checkbox"></div>
+          <div><div class="rtitle">code-review <span class="hub-badge">手动</span></div></div>
+          <div class="rmsgs">—</div><div class="rmeta"><span class="src">本地</span></div></div>
+        <div class="row"><div><input type="checkbox"></div>
+          <div><div class="rtitle">api-design</div></div>
+          <div class="rmsgs">v1</div><div class="rmeta"><span class="src">team-skills</span></div></div>
+      </main>
+      <aside class="rail right"><div class="railh"><span>选择条目查看详情</span></div></aside>
+    </div>
+    <footer class="sbar"><span><span class="dot-ok"></span>hub.db · ~/.agent/hub/</span><span class="spacer"></span><span>仅本地 · 无云端上传</span></footer>
+    <div class="ovl">
+      <div class="modal" role="dialog">
+        <div class="mhead"><span class="mtitle">新建 Skill</span><span class="mx">✕</span></div>
+        <div class="mbody">
+          <div class="msub">手动编写的条目与远程拉取同库同权：保存后进入本地库，可分发到任意目标、记入台账。</div>
+          <div class="fg">
+            <label><span class="lb">名称</span>
+              <input class="hub-input" value="release-notes"></label>
+            <label><span class="lb">描述</span>
+              <input class="hub-input" value="从 git log 生成面向用户的发布说明"></label>
+            <label><span class="lb">SKILL.md（预填模板，可直接改写）</span>
+<textarea class="hub-input" rows="9">---
+name: release-notes
+description: 从 git log 生成面向用户的发布说明
+---
+
+# release-notes
+
+按 feat / fix / perf 分组整理自上一 tag
+以来的提交，过滤 chore 与 revert，
+输出面向用户的变更摘要。</textarea></label>
+          </div>
+          <div class="keyhint">保存后写入 registry/skills/release-notes/ · 与现有条目（含远程条目）重名将拦截 · 操作记入台账</div>
+        </div>
+        <div class="mfoot"><button class="hub-btn gh">取消</button><button class="hub-btn pri">创建</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 03 Skills 导入 ============ -->
+<section class="screen" data-name="03 · Skills · 从本地目录导入">
+  <div class="slabel"><b>03 · Skills · 从本地目录导入（含重名校验态）</b><span>1360 · 桌面 · 模态</span></div>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><span class="bname">Agent Depot</span><span class="bpath">~/.agent/hub/</span></div>
+      <nav class="nav"><button>会话</button><button>记忆</button><button class="on">Skills</button><button>MCP</button><button>台账</button></nav>
+      <span class="tsp"></span>
+      <button class="hub-btn pri">⟳ 全部刷新</button>
+    </header>
+    <div class="sb">
+      <aside class="rail">
+        <div class="railh"><span>Skills 源</span><button class="hub-btn sm">＋ 添加</button></div>
+        <div class="tcard"><div class="thead"><span class="dot"></span><span class="tname">team-skills</span><span class="tcount">2</span></div>
+          <div class="tmeta">同步 09/28 14:12</div></div>
+        <button class="hub-btn railadd">＋ 新建 Skill</button>
+        <button class="hub-btn railadd">⇩ 从本地目录导入</button>
+      </aside>
+      <main class="center">
+        <div class="toolbar"><button class="hub-btn sm">更新所选到本地</button><span class="sp2"></span><button class="hub-btn sm pri">分发所选…</button></div>
+        <div class="row"><div><input type="checkbox"></div>
+          <div><div class="rtitle">code-review</div></div>
+          <div class="rmsgs">v3</div><div class="rmeta"><span class="src">team-skills</span></div></div>
+        <div class="row"><div><input type="checkbox"></div>
+          <div><div class="rtitle">commit-lint <span class="hub-badge">手动</span></div></div>
+          <div class="rmsgs">—</div><div class="rmeta"><span class="src">本地</span></div></div>
+      </main>
+      <aside class="rail right"><div class="railh"><span>选择条目查看详情</span></div></aside>
+    </div>
+    <footer class="sbar"><span><span class="dot-ok"></span>hub.db · ~/.agent/hub/</span><span class="spacer"></span><span>仅本地 · 无云端上传</span></footer>
+    <div class="ovl">
+      <div class="modal" role="dialog">
+        <div class="mhead"><span class="mtitle">从本地目录导入</span><span class="mx">✕</span></div>
+        <div class="mbody">
+          <div class="msub">复制现有目录（含子目录）进入本地库，作为手动条目管理；原目录只读，不做任何改动。</div>
+          <div class="fg">
+            <label><span class="lb">目录路径（支持 ~）</span>
+              <input class="hub-input" value="~/skills/my-deploy-checklist"></label>
+            <label><span class="lb">名称（默认取目录名）</span>
+              <input class="hub-input" value="my-deploy-checklist">
+              <div class="errtext">已存在同名条目（team-skills · 远程）。重名将拦截，请改名后导入，或回退该条目后再试。</div>
+            </label>
+          </div>
+          <div class="keyhint">将复制目录内全部文件进入 registry/skills/&lt;名称&gt;/ · 需包含 SKILL.md，缺失时给出明确报错 · 导入记入台账</div>
+        </div>
+        <div class="mfoot"><button class="hub-btn gh">取消</button><button class="hub-btn pri">导入</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 04 MCP 列表 ============ -->
+<section class="screen" data-name="04 · MCP · 列表与手动入口">
+  <div class="slabel"><b>04 · MCP · 列表与手动入口</b><span>1360 · 桌面三栏</span></div>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><span class="bname">Agent Depot</span><span class="bpath">~/.agent/hub/</span></div>
+      <nav class="nav"><button>会话</button><button>记忆</button><button>Skills</button><button class="on">MCP</button><button>台账</button></nav>
+      <span class="tsp"></span>
+      <span class="hub-badge">引擎 casr · 已连接</span>
+      <button class="hub-btn">统计</button><button class="hub-btn">定时任务</button><button class="hub-btn pri">⟳ 全部刷新</button>
+    </header>
+    <div class="sb">
+      <aside class="rail">
+        <div class="railh"><span>MCP 源</span><button class="hub-btn sm">＋ 添加</button></div>
+        <div class="tcard">
+          <div class="thead"><span class="dot"></span><span class="tname">demo-mcp</span><span class="tcount">2</span></div>
+          <div class="tmeta">同步 09/22 09:06</div>
+          <div class="tacts"><button class="hub-btn sm">拉取</button><button class="hub-btn sm">移除</button></div>
+        </div>
+        <button class="hub-btn railadd">＋ 手动创建条目</button>
+        <div class="railh"><span>写入目标</span></div>
+        <div class="tcard"><div class="thead"><span class="tname">Claude Code（全局）</span><span class="hub-badge">JSON</span></div>
+          <div class="mono">~/.claude.json</div></div>
+        <div class="tcard"><div class="thead"><span class="tname">Codex CLI（全局）</span><span class="hub-badge">TOML</span></div>
+          <div class="mono">~/.codex/config.toml</div></div>
+        <div class="tcard"><div class="thead"><span class="tname">OpenCode（全局）</span><span class="hub-badge">JSON</span></div>
+          <div class="mono">~/.config/opencode/opencode.json</div></div>
+        <div class="tcard"><div class="thead"><span class="tname">Cursor（全局）</span><span class="hub-badge">JSON</span></div>
+          <div class="mono">~/.cursor/mcp.json</div></div>
+      </aside>
+      <main class="center">
+        <div class="toolbar">
+          <button class="hub-btn sm">更新所选到本地</button>
+          <button class="hub-btn sm">一键更新全部可更新</button>
+          <button class="hub-btn sm">验证连接</button>
+          <span class="sp2"></span>
+          <button class="hub-btn sm pri">分发所选…</button>
+        </div>
+        <div class="lhead"><div></div><div>条目</div><div></div><div>写入 · 来源</div></div>
+        <div class="rows">
+          <div class="row">
+            <div><input type="checkbox"></div>
+            <div><div class="rtitle">demo-http <span class="hub-badge ok">已安装</span> <span class="hub-badge">http</span></div>
+              <div class="rsub">https://example.invalid/demo/mcp</div></div>
+            <div class="rmsgs"></div>
+            <div class="rmeta">已写入 2 处<br><span class="src">demo-mcp</span></div>
+          </div>
+          <div class="row">
+            <div><input type="checkbox"></div>
+            <div><div class="rtitle">demo-time <span class="hub-badge ok">已安装</span> <span class="hub-badge">stdio</span></div>
+              <div class="rsub">python3 -m demo_time_mcp</div></div>
+            <div class="rmsgs">1 env</div>
+            <div class="rmeta">已写入 2 处<br><span class="src">demo-mcp</span></div>
+          </div>
+          <div class="row">
+            <div><input type="checkbox" checked></div>
+            <div><div class="rtitle">agentmemory <span class="hub-badge">手动</span> <span class="hub-badge ok">已安装</span> <span class="hub-badge">stdio</span></div>
+              <div class="rsub">python3 -m agentmemory.mcp</div></div>
+            <div class="rmsgs">2 env</div>
+            <div class="rmeta">已写入 3 处<br><span class="src">本地</span></div>
+          </div>
+          <div class="row">
+            <div><input type="checkbox"></div>
+            <div><div class="rtitle">web-fetch <span class="hub-badge">手动</span> <span class="hub-badge">http</span></div>
+              <div class="rsub">https://fetch.example.com/mcp</div></div>
+            <div class="rmsgs"></div>
+            <div class="rmeta">未写入<br><span class="src">本地</span></div>
+          </div>
+        </div>
+      </main>
+      <aside class="rail right">
+        <div class="railh"><span>agentmemory · 详情</span></div>
+        <div class="dmeta">来源：本地创建 · type stdio · 已写入 3 处</div>
+        <div class="dacts">
+          <button class="hub-btn sm">编辑</button>
+          <button class="hub-btn sm">验证连接</button>
+          <button class="hub-btn sm dgr">删除</button>
+        </div>
+        <div class="railh"><span>config</span></div>
+        <pre class="sbmd">{
+  "command": "python3",
+  "args": ["-m", "agentmemory.mcp"],
+  "type": "stdio",
+  "env": {
+    "AGENTMEMORY_DB": "~/.agent/hub/hub.db",
+    "AGENTMEMORY_TOKEN": "••••••••"
+  }
+}</pre>
+        <div class="envrow"><span>AGENTMEMORY_TOKEN</span><span>••••••••</span><span class="sp2"></span><button class="hub-btn sm">显示</button></div>
+        <div class="mutnote">手动条目与拉取条目共用分发与握手验证；「编辑」打开与新建一致的表单。</div>
+      </aside>
+    </div>
+    <footer class="sbar">
+      <span><span class="dot-ok"></span>hub.db · ~/.agent/hub/</span>
+      <span>定时调度：未启用</span><span>记忆 3 条</span><span>记忆总线 agentmemory · 未运行</span>
+      <span class="spacer"></span><span>仅本地 · 无云端上传</span>
+    </footer>
+    <div class="toasts"><div class="toast"><span class="tic">✓</span><span>已创建 agentmemory · 已记入台账</span></div></div>
+  </div>
+</section>
+
+<!-- ============ 05 MCP 新建 ============ -->
+<section class="screen" data-name="05 · MCP · 手动创建 / 编辑对话框">
+  <div class="slabel"><b>05 · MCP · 手动创建 / 编辑对话框</b><span>1360 · 桌面 · 模态</span></div>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><span class="bname">Agent Depot</span><span class="bpath">~/.agent/hub/</span></div>
+      <nav class="nav"><button>会话</button><button>记忆</button><button>Skills</button><button class="on">MCP</button><button>台账</button></nav>
+      <span class="tsp"></span>
+      <button class="hub-btn pri">⟳ 全部刷新</button>
+    </header>
+    <div class="sb">
+      <aside class="rail">
+        <div class="railh"><span>MCP 源</span><button class="hub-btn sm">＋ 添加</button></div>
+        <div class="tcard"><div class="thead"><span class="dot"></span><span class="tname">demo-mcp</span><span class="tcount">2</span></div>
+          <div class="tmeta">同步 09/22 09:06</div></div>
+        <button class="hub-btn railadd">＋ 手动创建条目</button>
+      </aside>
+      <main class="center">
+        <div class="toolbar"><button class="hub-btn sm">更新所选到本地</button><span class="sp2"></span><button class="hub-btn sm pri">分发所选…</button></div>
+        <div class="row"><div><input type="checkbox"></div>
+          <div><div class="rtitle">demo-time <span class="hub-badge">stdio</span></div></div>
+          <div class="rmsgs">1 env</div><div class="rmeta"><span class="src">demo-mcp</span></div></div>
+        <div class="row"><div><input type="checkbox"></div>
+          <div><div class="rtitle">agentmemory <span class="hub-badge">手动</span> <span class="hub-badge">stdio</span></div></div>
+          <div class="rmsgs">2 env</div><div class="rmeta"><span class="src">本地</span></div></div>
+      </main>
+      <aside class="rail right"><div class="railh"><span>选择条目查看详情</span></div></aside>
+    </div>
+    <footer class="sbar"><span><span class="dot-ok"></span>hub.db · ~/.agent/hub/</span><span class="spacer"></span><span>仅本地 · 无云端上传</span></footer>
+    <div class="ovl">
+      <div class="modal" role="dialog">
+        <div class="mhead"><span class="mtitle">手动创建 MCP 条目</span><span class="mx">✕</span></div>
+        <div class="mbody">
+          <div class="msub">保存为 registry/mcp/&lt;名称&gt;.json，与拉取条目同权：可分发到各工具目标、可握手验证。</div>
+          <div class="fg">
+            <div class="half">
+              <label><span class="lb">名称</span><input class="hub-input" value="agentmemory"></label>
+              <label><span class="lb">传输</span>
+                <select class="hub-input"><option>stdio</option><option>http</option></select></label>
+            </div>
+            <label><span class="lb">命令（stdio）</span><input class="hub-input" value="python3"></label>
+            <label><span class="lb">参数（空格分隔）</span><input class="hub-input" value="-m agentmemory.mcp"></label>
+            <label><span class="lb">环境变量（值保存后掩码显示）</span>
+              <div class="envkv"><input class="hub-input k" value="AGENTMEMORY_DB"><input class="hub-input v" value="~/.agent/hub/hub.db"><button class="hub-btn sm">移除</button></div>
+              <div class="envkv"><input class="hub-input k" value="AGENTMEMORY_TOKEN"><input class="hub-input v" value="••••••••"><button class="hub-btn sm">移除</button></div>
+              <button class="hub-btn sm gh">＋ 添加变量</button>
+            </label>
+          </div>
+          <div class="keyhint">校验：command 或 url 必填其一 · 键白名单 command / args / env / url / headers / type / cwd / transport · 也可<a href="#" onclick="return false" style="color:var(--c-accent)">改用 JSON 模式编辑</a>（校验失败会就地提示，不关窗）</div>
+        </div>
+        <div class="mfoot"><button class="hub-btn gh">取消</button><button class="hub-btn pri">创建</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 06 分发向导 ============ -->
+<section class="screen" data-name="06 · 分发向导 · 手动条目同权">
+  <div class="slabel"><b>06 · 分发向导 · 手动条目同权</b><span>1360 · 桌面 · 模态</span></div>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><span class="bname">Agent Depot</span><span class="bpath">~/.agent/hub/</span></div>
+      <nav class="nav"><button>会话</button><button>记忆</button><button class="on">Skills</button><button>MCP</button><button>台账</button></nav>
+      <span class="tsp"></span>
+      <button class="hub-btn pri">⟳ 全部刷新</button>
+    </header>
+    <div class="sb">
+      <aside class="rail">
+        <div class="railh"><span>Skills 源</span><button class="hub-btn sm">＋ 添加</button></div>
+        <div class="tcard"><div class="thead"><span class="dot"></span><span class="tname">team-skills</span><span class="tcount">2</span></div>
+          <div class="tmeta">同步 09/28 14:12</div></div>
+        <button class="hub-btn railadd">＋ 新建 Skill</button>
+        <button class="hub-btn railadd">⇩ 从本地目录导入</button>
+      </aside>
+      <main class="center">
+        <div class="toolbar"><button class="hub-btn sm">更新所选到本地</button><span class="sp2"></span><button class="hub-btn sm pri">分发所选…</button></div>
+        <div class="row"><div><input type="checkbox" checked></div>
+          <div><div class="rtitle">commit-lint <span class="hub-badge">手动</span></div>
+            <div class="rsub">已选 1 条 · 3 个文件</div></div>
+          <div class="rmsgs">—</div><div class="rmeta"><span class="src">本地</span></div></div>
+        <div class="row"><div><input type="checkbox"></div>
+          <div><div class="rtitle">api-design</div></div>
+          <div class="rmsgs">v1</div><div class="rmeta"><span class="src">team-skills</span></div></div>
+      </main>
+      <aside class="rail right"><div class="railh"><span>选择条目查看详情</span></div></aside>
+    </div>
+    <footer class="sbar"><span><span class="dot-ok"></span>hub.db · ~/.agent/hub/</span><span class="spacer"></span><span>仅本地 · 无云端上传</span></footer>
+    <div class="ovl">
+      <div class="modal" role="dialog">
+        <div class="mhead"><span class="mtitle">分发「commit-lint」</span><span class="mx">✕</span></div>
+        <div class="mbody">
+          <div class="msub">手动条目与拉取条目共用同一分发流程：先 dry-run 校验，再写入目标目录。</div>
+          <div class="wiz">
+            <label class="on"><input type="checkbox" checked><span class="wname">Claude Code（全局）</span><span class="wpath">~/.claude/skills</span></label>
+            <label><input type="checkbox"><span class="wname">Codex CLI（全局）</span><span class="wpath">~/.codex/skills</span></label>
+            <label class="on"><input type="checkbox" checked><span class="wname">Cursor</span><span class="wpath">~/.cursor/skills</span></label>
+            <label><input type="checkbox"><span class="wname">demo-project</span><span class="wpath">./skills</span></label>
+          </div>
+          <div class="wizprev">
+            <div class="okline">dry-run 通过 · 将写入 2 个目标 · 6 个文件</div>
+            ~/.claude/skills/commit-lint/<br>
+            &nbsp;&nbsp;SKILL.md · rules.md · examples.md <span class="new">（新建）</span><br>
+            ~/.cursor/skills/commit-lint/<br>
+            &nbsp;&nbsp;SKILL.md · rules.md · examples.md <span class="new">（新建）</span>
+          </div>
+        </div>
+        <div class="mfoot"><button class="hub-btn gh">取消</button><button class="hub-btn pri">开始分发</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+const cv=document.getElementById('cv');let d=null;
+cv.addEventListener('pointerdown',e=>{
+  const s=e.target.closest('.screen'),i=e.target.closest('input,textarea,select,button,a,label,pre');
+  if(s&&!i){d={s,x:e.clientX,y:e.clientY};s.classList.add('drag');s.setPointerCapture(e.pointerId);}
+  else if(!s){d={cv,x:e.clientX,y:e.clientY,l:cv.scrollLeft,t:cv.scrollTop};cv.classList.add('pan');}
+});
+cv.addEventListener('pointermove',e=>{
+  if(!d)return;const dx=e.clientX-d.x,dy=e.clientY-d.y;
+  if(d.cv){cv.scrollLeft=d.l-dx;cv.scrollTop=d.t-dy;}
+  else{d.s.style.transform=`translate(${dx}px,${dy}px)`;}
+});
+cv.addEventListener('pointerup',()=>{
+  if(!d)return;cv.classList.remove('pan');
+  if(d.s){
+    d.s.classList.remove('drag');
+    const r=d.s.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;
+    let best=null,bd=1e9;
+    document.querySelectorAll('.screen').forEach(o=>{
+      if(o===d.s)return;const q=o.getBoundingClientRect();
+      const dist=Math.hypot(q.left+q.width/2-cx,q.top+q.height/2-cy);
+      if(dist<bd){bd=dist;best=o;}
+    });
+    if(best&&bd<280){
+      const q=best.getBoundingClientRect();
+      d.s.parentNode.insertBefore(d.s,cy<q.top+q.height/2?best:best.nextSibling);
+    }
+    d.s.style.transform='';
+  }
+  d=null;
+});
+</script>
+</body>
+</html>

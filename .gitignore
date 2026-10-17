@@ -10,3 +10,7 @@ scripts/local-guard.sh
 
 # 门禁产物
 reports/
+
+# 本地 agent 工具状态（记忆/运行产物），不进公开仓
+.workbuddy/
+.zwork/

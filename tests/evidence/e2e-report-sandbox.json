@@ -1,45 +1,81 @@
 {
   "mode": "sandbox",
-  "chrome": "Chrome/153.0.8010.53",
-  "base": "http://127.0.0.1:8404",
-  "passed": 7,
+  "chrome": "Chrome/155.0.8059.40",
+  "base": "http://127.0.0.1:8658",
+  "passed": 13,
   "failed": 0,
   "results": [
     {
       "name": "empty-then-refresh",
       "ok": true,
-      "ms": 8,
+      "ms": 16,
       "detail": "100 行直接渲染（db 预置）"
     },
     {
       "name": "render-performance-100-rows",
       "ok": true,
-      "ms": 47,
-      "detail": "100 行 loadState+渲染 47ms"
+      "ms": 65,
+      "detail": "100 行 loadState+渲染 65ms"
     },
     {
       "name": "casr-missing-error-feedback",
       "ok": true,
-      "ms": 185,
-      "detail": "引擎缺失 → 明确错误 toast: ✕1 条失败：casr 未安装（brew/pip 安装后自动启用）"
+      "ms": 270,
+      "detail": "引擎缺失 → 明确错误 toast: ✕1 条失败：迁移失败（HTTP 200，引擎 casr）"
     },
     {
       "name": "validation-empty-memory",
       "ok": true,
-      "ms": 1,
+      "ms": 161,
       "detail": "空记忆内容被拦截"
     },
     {
       "name": "long-title-no-overflow",
       "ok": true,
-      "ms": 83,
+      "ms": 69,
       "detail": "长标题省略正常，无溢出"
     },
     {
       "name": "screenshot-mobile-sandbox",
       "ok": true,
-      "ms": 380,
+      "ms": 362,
       "detail": "沙箱移动端 390px 无溢出"
+    },
+    {
+      "name": "tools-add-and-refresh",
+      "ok": true,
+      "ms": 522,
+      "detail": "登记(pi-agent，格式自动识别) → 采集 1 会话 / 3 消息 → 卡片筛选生效"
+    },
+    {
+      "name": "tools-root-redetect",
+      "ok": true,
+      "ms": 618,
+      "detail": "改路径→自动重识别（持久化+还原）· 内置路径锁定 + 格式可见"
+    },
+    {
+      "name": "tools-disable-and-remove",
+      "ok": true,
+      "ms": 468,
+      "detail": "停用→卡片隐藏（数据保留）→移除→数据仍保留"
+    },
+    {
+      "name": "tools-purge-delete",
+      "ok": true,
+      "ms": 171,
+      "detail": "勾选彻底清除 → 数据清除 → 卡片消失"
+    },
+    {
+      "name": "tools-sync-targets",
+      "ok": true,
+      "ms": 187,
+      "detail": "添加同步（Skills+MCP）→ 删除自动清理"
+    },
+    {
+      "name": "tools-no-add-entry",
+      "ok": true,
+      "ms": 5,
+      "detail": "无工具弹窗 / 无 openToolModal / 无添加按钮"
     },
     {
       "name": "console-clean",
@@ -48,5 +84,5 @@
     }
   ],
   "consoleErrors": [],
-  "at": "2026-09-22T01:29:23.707Z"
+  "at": "2026-10-17T07:29:16.300Z"
 }

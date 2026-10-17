@@ -3,7 +3,7 @@
    规范：Müller-Brockmann 网格功能主义（preset 10）
    原则：8pt 基线网格 · 双色方案（墨 + 单强调）· 全部样式走变量，
         界面不允许出现游离的硬编码颜色/字号/间距。
-   详见 docs/STYLE_GUIDE.md
+   详见 DESIGN.md
    ==================================================================== */
 :root {
   /* ---- 色彩：中性阶梯（墨系，非纯黑） ---- */
@@ -17,6 +17,7 @@
   --c-surface-2:  #ffffff;   /* 卡片 */
   --c-line:       #d9dedf;   /* 分隔线 hairline */
   --c-line-soft:  #e6eaeb;   /* 更弱的分隔 */
+  --c-rail:       #f4f3f0;   /* 侧栏/导航底色（设置左导航、面板内嵌卡片） */
   /* ---- 色彩：强调（唯一 accent，双色方案的第二色） ---- */
   --c-accent:       #0d6a63;  /* 深青绿：主操作/激活/链接 */
   --c-accent-strong:#0a544e;  /* 强调按下态 */
@@ -34,12 +35,19 @@
   --c-err:        #a03d2e;   /* 失败/错误 */
   --c-err-soft:   #f8ece9;
   /* 工具识别色（仅用于来源标识点/徽章，不参与交互色） */
+  /* p1-p3 归最初三个内置工具，p4-p7 归 v0.6 新增的内置工具，p8+ 给自定义工具 */
   --c-tool-claude:  #d97757;
   --c-tool-codex:   #171d1f;
   --c-tool-opencode:#7c5cff;
-  --c-tool-p4:     #4a7d8c;  /* 自定义工具 4 · 钢蓝 */
-  --c-tool-p5:     #9a6b3f;  /* 自定义工具 5 · 赭石 */
-  --c-tool-p6:     #6f8a4f;  /* 自定义工具 6 · 橄榄 */
+  --c-tool-p4:     #4a7d8c;  /* WorkBuddy · 钢蓝 */
+  --c-tool-p5:     #9a6b3f;  /* ZCode · 赭石 */
+  --c-tool-p6:     #6f8a4f;  /* AutoClaw · 橄榄 */
+  --c-tool-p7:     #a35d7a;  /* Trae CN · 玫紫 */
+  --c-tool-p8:     #5b6b8c;  /* 自定义槽位 · 石板蓝 */
+  --c-tool-p9:     #7a6a45;  /* 自定义槽位 · 卡其 */
+  --c-tool-p10:    #4f7a6b;  /* 自定义槽位 · 松绿 */
+  --c-tool-p11:    #8c5b5b;  /* 自定义槽位 · 砖红 */
+  --c-tool-p12:    #6b5b8c;  /* 自定义槽位 · 紫罗兰 */
 
   /* ---- 字号阶梯（1.25 模数，px，仅此 7 档） ---- */
   --fs-xs:   10px;   /* 微标注：状态栏、时间戳 */
@@ -63,17 +71,45 @@
   --sp-6: 32px;
   --sp-7: 48px;
 
-  /* ---- 圆角（功能主义：克制，仅 3 档） ---- */
+  /* ---- 卡片边长（工具/来源卡片唯一尺寸来源：.tcard 与各处网格共用） ---- */
+  --tcard: 128px;
+
+  /* ---- 圆角（功能主义：克制，仅 3 档：微元素 4 / 小控件 6 / 窗口·卡片·按钮 8） ---- */
+  --r-xs: 6px;   /* 小按钮、图标按钮、小徽章（稿子 rounded-[6px]） */
   --r-s: 4px;
   --r-m: 8px;
   --r-l: 12px;
 
   /* ---- 层级 ---- */
+  --z-raised:   10;   /* 同级浮起：hover 的工具卡片压过相邻卡片 */
   --z-dropdown: 40;
   --z-modal:    50;
+  --z-modal-top: 55;  /* 从弹层（设置窗）里再开的子对话框：工具登记弹窗 */
   --z-toast:    60;
+
+  /* ---- 动效曲线（时长与曲线分离，便于 animation/transition 单独引用） ---- */
+  --ease:        cubic-bezier(.2,.6,.3,1);   /* 标准 */
+  --ease-spring: cubic-bezier(.34,1.56,.64,1); /* 弹性（勾选/开关） */
+
+  /* ---- 纯时长（animation/transition 需要"时长与曲线分开"时用这组） ---- */
+  --dur-fast:   120ms;
+  --dur-quick:  150ms;
+  --dur-base:   250ms;
+  --dur-layout: 300ms;
 
   /* ---- 动效（唯一时长曲线） ---- */
   --t-fast: 120ms cubic-bezier(.2,.6,.3,1);
   --t-med:  200ms cubic-bezier(.2,.6,.3,1);
+
+  /* ---- 动效：会话视图（三档时长 + 弹性曲线，与设计稿一致） ----
+     150ms 交互反馈 / 250ms 内容展开 / 300ms 布局位移 ---- */
+  --t-quick:  150ms cubic-bezier(.2,.6,.3,1);
+  --t-base:   250ms cubic-bezier(.2,.6,.3,1);
+  --t-layout: 300ms cubic-bezier(.2,.6,.3,1);
+  --t-pop:    260ms cubic-bezier(.34,1.56,.64,1);
+
+  /* ---- 阴影三级：hover（悬停浮起）/ active（选中描边）/ float（浮层、滑出面板） ---- */
+  --sh-hover:  0 4px 12px rgba(23,29,31,.08), 0 1px 2px rgba(23,29,31,.04);
+  --sh-active: 0 0 0 1.5px var(--c-accent), 0 2px 8px rgba(13,106,99,.15);
+  --sh-float:  0 12px 32px rgba(23,29,31,.14), 0 2px 6px rgba(23,29,31,.06);
 }

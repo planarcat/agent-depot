@@ -21,9 +21,8 @@ MODULES = {
     "memory": {
         "id": "memory",
         "name": "记忆",
-        "desc": "长期记忆（db + 每日 Markdown 日志）",
-        "routes": ["/api/memories", "/api/memory/add", "/api/memory/delete",
-                   "/api/memory/search", "/api/memory/export"],
+        "desc": "记忆分发线（工具记忆 ↔ hub 中间体）+ 长期笔记",
+        "routes": ["/api/memory/", "/api/memories"],
         "nav": {"key": "memory", "label": "记忆", "order": 2},
     },
     "skills": {

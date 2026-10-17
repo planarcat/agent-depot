@@ -14,6 +14,7 @@ Scheduler runs in-thread; every due tool refresh is recorded to the ledger.
 """
 import json
 import os
+import queue as queue_mod
 import shutil
 import subprocess
 import sys
@@ -21,7 +22,7 @@ import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
@@ -33,19 +34,22 @@ from hub.store import (Store, now_iso, ensure_lineage_schema,   # noqa: E402
                        set_star, search_messages, export_markdown,
                        session_stats, search_memories, export_memories,
                        export_batch)
-from hub.scanners import scan_all             # noqa: E402
+from hub.scanners import scan_all, probe_source, detect_format   # noqa: E402
 from hub import tools_registry               # noqa: E402
+from hub.watcher import FileWatcher          # noqa: E402 文件监控 → SSE 即时刷新
 from hub import migrator                      # noqa: E402
 from hub.core import registry as mod_registry  # noqa: E402
 from hub.core import schema as core_schema     # noqa: E402
 from hub.core import ops as core_ops           # noqa: E402
 from hub.lib import gitsrc                     # noqa: E402
-from hub.modules import mod_skills             # noqa: E402
-from hub.modules import mod_mcp                # noqa: E402
+from hub.modules import mod_skills    # noqa: E402
+from hub.modules import mod_mcp       # noqa: E402
+from hub.modules import mod_memory    # noqa: E402
 
-MODULE_HANDLERS = (mod_skills, mod_mcp)
+MODULE_HANDLERS = (mod_skills, mod_mcp, mod_memory)
 
 PORT = int(os.environ.get("HUB_PORT", "8317"))
+APP_VERSION = "0.5.0"   # 单一版本源：启动台账与 /api/state 共用
 
 DEFAULT_SCHEDULE = {
     "all":       {"enabled": False, "interval_min": 30},
@@ -78,6 +82,7 @@ class Scheduler(threading.Thread):
 
 STORE = None       # initialized in main()
 SCHED = None
+WATCHER = None     # hub.watcher.FileWatcher：磁盘变动 → /api/events 推送
 REFRESH_LOCK = threading.Lock()
 
 
@@ -92,10 +97,64 @@ def ensure_store():
         mod_skills.seed_defaults(STORE)
         mod_mcp.seed_defaults(STORE)
         ops = core_ops
-        ops.log_op(STORE, "system", "boot", "ok", detail={"version": "0.5.0"})
+        ops.log_op(STORE, "system", "boot", "ok", detail={"version": APP_VERSION})
         SCHED = Scheduler(STORE)
         SCHED.start()
     return STORE
+
+
+def watch_roots(store):
+    """监控范围：{scope: [路径]}。
+
+    粒度到"工具"，前端据此判断该刷新哪一块（会话页 / 记忆页 / 台账）。
+    """
+    roots = {}
+    try:
+        for t in tools_registry.load_tools(store):
+            paths = [p for p in (t.get("root"), t.get("skills_dir")) if p]
+            if paths:
+                roots["tool:" + str(t["id"])] = paths
+    except Exception:
+        pass
+    try:
+        for tid, lay in (mod_memory.LAYOUTS or {}).items():
+            paths = [v for k, v in (lay or {}).items() if k in ("global", "projects_dir") and v]
+            if paths:
+                roots["memory:" + tid] = paths
+    except Exception:
+        pass
+    try:
+        roots["memory:hub"] = [mod_memory.memstore_root()]
+    except Exception:
+        pass
+    return roots
+
+
+def start_watcher(store):
+    """启动文件监控（幂等）。返回 FileWatcher。
+
+    HUB_WATCH=0 可关闭（受限环境 / 排障）：前端会自动退回自适应轮询。
+    """
+    global WATCHER
+    if os.environ.get("HUB_WATCH") == "0":
+        return None
+    if WATCHER is None:
+        WATCHER = FileWatcher(debounce=0.25, interval=2.0)
+        WATCHER.set_roots(watch_roots(store))
+        WATCHER.start()
+    return WATCHER
+
+
+def bump_watch(scope="hub", full=False, refresh_roots=False):
+    """自身写入后立即广播（不等 watcher 事件），可选重建监控范围。"""
+    if not WATCHER:
+        return
+    try:
+        if refresh_roots:
+            WATCHER.set_roots(watch_roots(STORE))
+        WATCHER.bump(scope, full=full)
+    except Exception:
+        pass
 
 
 def scheduler_tick(store, last_run):
@@ -118,6 +177,7 @@ def scheduler_tick(store, last_run):
             else:
                 results = scan_all(store, tools=[tool])
             store.log("refresh:scheduled", {"tool": tool, "results": results})
+            bump_watch("tool:" + str(tool) if tool != "all" else "hub")
             ran.append(tool)
     ran.extend(registry_autopull(store, last_run, now=now))
     return ran
@@ -149,12 +209,14 @@ def registry_autopull(store, last_run, now=None):
                 continue
             last_run[key] = now
             try:
-                res = mod.pull_source(store, s.get("id"))
+                res = mod.pull_source(store, s.get("id"), removed_action="localize")
                 core_ops.log_op(store, kind, "auto-pull", "ok" if res.get("ok") else "failed",
                                 source_id=s.get("id"), item_name=s.get("name"),
                                 item_version=res.get("commit"),
                                 detail={"added": len(res.get("added") or []),
-                                        "changed": len(res.get("changed") or [])},
+                                        "changed": len(res.get("changed") or []),
+                                        "removed": len(res.get("removed") or []),
+                                        "removed_action": "localize(auto)"},
                                 reason=None if res.get("ok") else (res.get("error") or "")[:200])
             except Exception as e:
                 core_ops.log_op(store, kind, "auto-pull", "failed",
@@ -296,11 +358,42 @@ def _wire_memory(tool):
     return {"ok": True, "path": path, "backup": backup, "key": key}
 
 
+def _unwire_memory(tool):
+    """从工具的 MCP 配置移除 agentmemory 条目（先备份；只删本系统写入的条目）。"""
+    cfg = tool.get("mcp_config")
+    if not cfg:
+        return {"ok": False, "error": "该工具没有登记 MCP 配置"}
+    path = os.path.expanduser(str(cfg))
+    if not os.path.exists(path):
+        return {"ok": False, "error": "配置文件不存在：%s" % path}
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception as e:
+        return {"ok": False, "error": "读取失败：%s" % str(e)[:160]}
+    key = "mcp" if ("mcp" in d and "mcpServers" not in d) else "mcpServers"
+    if not (isinstance(d.get(key), dict) and "agentmemory" in d[key]):
+        return {"ok": True, "already": True, "path": path}
+    backup = "%s.bak-%s" % (path, time.strftime("%Y%m%d-%H%M%S"))
+    shutil.copy2(path, backup)
+    del d[key]["agentmemory"]
+    tmp = path + ".tmp-%d" % os.getpid()
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+    return {"ok": True, "path": path, "backup": backup, "key": key}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "AgentDepot/0.5"
 
     def _dispatch_modules(self, method, path, query, body):
-        """四模块路由分发。未命中返回 None；模块禁用返回 503。"""
+        """四模块路由分发。未命中返回 None；模块禁用返回 503。
+
+        路径先做百分号解码：条目名常是中文（如「代码审查」），浏览器发来的是 %E4%BB%A3…，
+        不解码就永远对不上本地库目录名 → 一律 404「本地库中不存在」。
+        """
+        path = unquote(path)
         for mod in MODULE_HANDLERS:
             if path.startswith(mod.PREFIX):
                 r = mod.handle(STORE, method, path, query, body)
@@ -340,6 +433,25 @@ class Handler(BaseHTTPRequestHandler):
             STORE.log("config", {"tools": "add:" + entry["id"]})
             return 200, {"ok": True, "tool": entry, "warning": warning,
                          "targets_created": linked.get("created") or []}
+        # 只读识别：给一条路径，hub 自己认会话格式（内容嗅探 + 候选文件计数）
+        # 工具排序（设置 → 工具 的拖动 / 箭头）
+        if path == "/api/tools/reorder" and method == "POST":
+            order = tools_registry.set_order(STORE, (body or {}).get("ids"))
+            core_ops.log_op(STORE, "tools", "reorder", "ok",
+                            detail={"order": order[:20]})
+            STORE.log("config", {"tools": "reorder"})
+            return 200, {"ok": True, "order": order}
+        if path == "/api/tools/detect" and method == "POST":
+            root = (body or {}).get("root")
+            d = detect_format(root)
+            if d.get("adapter"):
+                pr = probe_source(d["adapter"], root)
+                d["files"], d["sample"], d["layout"] = pr["files"], pr["sample"], pr["layout"]
+                d["name"] = tools_registry.ADAPTERS.get(d["adapter"], {}).get("name") or d["adapter"]
+            else:
+                d["files"], d["sample"], d["name"] = 0, [], ""
+            d["ok"] = True
+            return 200, d
         if (path.startswith("/api/tools/") and path.endswith("/wire-memory")
                 and method == "POST"):
             tid = path[len("/api/tools/"):-len("/wire-memory")]
@@ -352,6 +464,17 @@ class Handler(BaseHTTPRequestHandler):
                                 detail={"path": r.get("path"), "backup": r.get("backup")})
                 STORE.log("config", {"tools": "wire-memory:" + tid})
             return (200 if r.get("ok") else 400), r
+        if (path.startswith("/api/tools/") and path.endswith("/unwire-memory")
+                and method == "POST"):
+            tid = path[len("/api/tools/"):-len("/unwire-memory")]
+            tool = tools_registry.tool_by_id(STORE, tid)
+            if not tool:
+                return 404, {"ok": False, "error": "工具不存在：%s" % tid}
+            r = _unwire_memory(tool)
+            if r.get("ok") and not r.get("already"):
+                core_ops.log_op(STORE, "tools", "unwire-memory", "ok", item_name=tool["name"],
+                                detail={"path": r.get("path"), "backup": r.get("backup")})
+            return 200, r
         if path.startswith("/api/tools/") and method in ("PATCH", "DELETE"):
             tid = path[len("/api/tools/"):]
             if method == "PATCH":
@@ -474,6 +597,39 @@ class Handler(BaseHTTPRequestHandler):
         pass  # keep console quiet
 
     # ---------- helpers ----------
+    def _sse_write(self, event, data):
+        body = "event: %s\ndata: %s\n\n" % (event, json.dumps(data, ensure_ascii=False))
+        self.wfile.write(body.encode("utf-8"))
+        self.wfile.flush()
+
+    def _sse(self):
+        """SSE：磁盘变动即时推送（前端 EventSource 订阅；断开自动重连）。"""
+        if not WATCHER:
+            return self._json({"ok": False, "error": "watcher 未启动"}, 503)
+        q = WATCHER.subscribe()
+        st = WATCHER.status()
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store")
+            self.send_header("Connection", "close")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            self.close_connection = True
+            self._sse_write("hello", {"rev": st.get("rev", 0), "backend": st.get("backend"),
+                                      "degraded": st.get("degraded"), "watch": st})
+            while True:
+                try:
+                    ev = q.get(timeout=15)
+                except queue_mod.Empty:
+                    self._sse_write("ping", {"t": now_iso()})     # 心跳，防中间层超时断流
+                    continue
+                self._sse_write("change", ev)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            WATCHER.unsubscribe(q)
+
     def _json(self, obj, status=200):
         body = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(status)
@@ -521,6 +677,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # 本地单用户控制台：静态资源一律不缓存，避免改完前端仍显示旧版界面
+        self.send_header("Cache-Control", "no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(body)
 
@@ -573,6 +731,9 @@ class Handler(BaseHTTPRequestHandler):
                     s["lid"] = lin["lid"]
                     s["migrations"] = lin["migrations"]
             return self._json({
+                "version": APP_VERSION,
+                "rev": (WATCHER.status()["rev"] if WATCHER else 0),
+                "watch": (WATCHER.status() if WATCHER else {"backend": "off"}),
                 "tools": counts,
                 "tool_list": tool_list,
                 "sessions": sessions,
@@ -584,6 +745,11 @@ class Handler(BaseHTTPRequestHandler):
                 "memories": list_memories(STORE, limit=50),
                 "now": now_iso(),
             })
+        if u.path == "/api/events":
+            return self._sse()
+        if u.path == "/api/watch":
+            return self._json({"ok": True, "watch": (WATCHER.status() if WATCHER else {"backend": "off"}),
+                               "roots": ({k: v for k, v in WATCHER.watched_paths()} if WATCHER else {})})
         if u.path == "/api/search":
             q = parse_qs(u.query)
             query = q.get("q", [""])[0]
@@ -678,17 +844,29 @@ class Handler(BaseHTTPRequestHandler):
         return self._do_write("PUT")
 
     def _do_write(self, method):
+        path = urlparse(self.path).path
         try:
-            return self._do_post_inner(method)
+            r = self._do_post_inner(method)
+            # 自己写盘立刻广播（不等 watcher）：工具的增删改还要重建监控范围
+            bump_watch("hub", refresh_roots=path.startswith("/api/tools"))
+            return r
         except (ValueError, TypeError, KeyError) as e:
             self._json({"ok": False, "error": "无效输入: %s" % e}, 400)
         except Exception as e:
-            self._json({"ok": False, "error": "服务器内部错误: %s" % e}, 500)
+            # 带上请求路径与引擎上下文：迁移类失败要能一眼看出是 casr 的问题还是数据的问题
+            eng = "（引擎 casr）" if "/migrate" in str(getattr(self, "path", "")) else ""
+            self._json({"ok": False, "error": "服务器内部错误%s: %s" % (eng, e)}, 500)
 
     def _do_post_inner(self, method="POST"):
         u = urlparse(self.path)
         data = self._body()
-        r = self._dispatch_modules(method, u.path, parse_qs(u.query), data)
+        if not isinstance(data, dict):
+            data = {}
+        q = parse_qs(u.query)
+        # DELETE 等请求允许用 query string 传参（如 ?force=1）：合并进 body 供模块读取
+        for k, v in q.items():
+            data.setdefault(k, v[0] if v else "")
+        r = self._dispatch_modules(method, u.path, q, data)
         if r is not None:
             return self._json(r[1], r[0])
         r = self._control_routes(method, u.path, parse_qs(u.query), data)
@@ -814,6 +992,8 @@ def main():
     global STORE
     ensure_store()
     addr = ("127.0.0.1", PORT)
+    ensure_store()
+    start_watcher(STORE)          # 起服务时才挂文件监控（单测只建 store 不挂）
     httpd = HubServer(addr, Handler)
     print("Agent Depot -> http://127.0.0.1:%d  (Ctrl-C to stop)" % PORT)
     print("hub dir: %s" % STORE.db.db if False else "hub db:  ~/.agent/hub/hub.db")

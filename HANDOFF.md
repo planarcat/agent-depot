@@ -23,7 +23,8 @@ bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E �
 - **建议项 S1–S8 全部完成**：会话统计面板+批量导出 zip · 记忆搜索+导出（md/json） · **定时拉取**（源表单 poll_min，调度器自动执行入台账） · 一键更新全部 · doctor · 备份 · 演示源
 - 测试：Skills 13 + MCP 9 + Extras 8 + API 35；E2E +2 场景；全量 **91 项全绿** + lint
 - 演练：`python3 scripts/drill_v04.py`（干净环境 8 步：注册→拉取→更新→分发×2→幂等→升级→回退→台账）
-- 设计评审：`docs/design/v0.4-skills-mcp-modules.md`（含实现对照 §13）
+- 设计评审稿：v0.4 当时落在 `docs/design/v0.4-skills-mcp-modules.md`，已于 2026-10-15 清理；
+  需要回看用 `git show 8d25573:docs/design/v0.4-skills-mcp-modules.md`（同名 `.html` 把后缀换掉即可）
 
 ## v0.3 增量（23:30 前完成第二部分自我复盘开发）
 
@@ -49,7 +50,7 @@ bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E �
 | 9 | **记忆区** | hub.db + `~/.agent/hub/memory/` 每日 Markdown 日志双写；增删查 | E2E memory-flow |
 | 10 | 台账 | 每次刷新/迁移/配置变更入 ledger，可审计 | 数据核验 |
 | 11 | 桌面壳 | `~/Applications/AgentDepot.app`（Tauri 原生窗口，冷启动自动确保服务）双击即开 | 冷启动 + 边界实测 |
-| 12 | 设计系统 | tokens + HubUI 组件 + STYLE_GUIDE + lint 强制 | lint + 视觉走查 |
+| 12 | 设计系统 | tokens + HubUI 组件 + DESIGN + lint 强制 | lint + 视觉走查 |
 
 ## 延后项落实情况（本次全部处理）
 
@@ -67,7 +68,7 @@ bash tests/run_all.sh    # 全量测试：lint + API 集成 + E2E 无头 + E2E �
 
 ## 设计系统（UI 库选型与样式规范）
 
-- **选型决策**：默认 npm 源不可达（npmmirror 可用但仅用于 agentmemory 安装）。为保证**零依赖、离线可用**，自建轻量设计系统：`web/tokens.css`（全部字号/字色/间距/圆角/状态色）+ `web/hub-ui.js|css`（Toast/Modal/Button/Input/Badge/Empty 组件）+ `docs/STYLE_GUIDE.md`（规范文档）；`tests/lint_styles.py` **强制**：界面文件不允许出现游离十六进制色值与 px 字号（CI 化，全量套件第一步）。
+- **选型决策**：默认 npm 源不可达（npmmirror 可用但仅用于 agentmemory 安装）。为保证**零依赖、离线可用**，自建轻量设计系统：`web/tokens.css`（全部字号/字色/间距/圆角/状态色）+ `web/hub-ui.js|css`（Toast/Modal/Button/Input/Badge/Empty 组件）+ `DESIGN.md`（规范文档）；`tests/lint_styles.py` **强制**：界面文件不允许出现游离十六进制色值与 px 字号（CI 化，全量套件第一步）。
 - 风格：Müller-Brockmann 网格功能主义——8pt 基线、双色方案（墨色系 + 深青绿 `#0d6a63` 单强调）、7 档字号阶梯。
 - 反馈统一：成功/失败/警告/信息 4 类 toast、危险操作模态确认、按钮 loading 态、空态组件——同类场景全局一致，E2E 逐项验证。
 

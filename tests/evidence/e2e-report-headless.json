@@ -2,99 +2,111 @@
   "mode": "headless",
   "smoke": false,
   "base": "http://127.0.0.1:8317",
-  "chrome": "Chrome/153.0.8010.53",
-  "startedAt": "2026-09-22T01:29:20.597Z",
-  "passed": 16,
+  "chrome": "Chrome/155.0.8059.40",
+  "startedAt": "2026-10-17T07:29:09.817Z",
+  "passed": 18,
   "failed": 0,
   "results": [
     {
+      "name": "live-sse-refresh",
+      "ok": true,
+      "ms": 795,
+      "detail": "SSE kqueue · 磁盘 23→24 · 自身写入 24→25"
+    },
+    {
       "name": "page-load",
       "ok": true,
-      "ms": 36,
-      "detail": "8 行会话 · 引擎 casr · 已连接"
+      "ms": 2,
+      "detail": "307 行会话 · 引擎 casr · 已连接 · 列表可滚动"
     },
     {
       "name": "screenshot-desktop",
       "ok": true,
-      "ms": 73,
+      "ms": 96,
       "detail": "desktop-main.png"
     },
     {
       "name": "filter-codex",
       "ok": true,
-      "ms": 517,
-      "detail": "codex 4 行 · 恢复全部 8 行"
+      "ms": 537,
+      "detail": "claude 3 行 · 恢复全部 307 行"
     },
     {
       "name": "selection",
       "ok": true,
-      "ms": 3,
+      "ms": 2,
       "detail": "选中 2 → 取消 1 → 清空 → 0"
     },
     {
       "name": "preview-modal",
       "ok": true,
-      "ms": 199,
-      "detail": "链=OpenCode · ses_072837a66ffeS3nUuWJgzINIr9 · [hub:lx-0004] ·  · 2 条消息"
+      "ms": 360,
+      "detail": "链=OpenCode · ses_072837a66ffeS3nUuWJgzINIr9 · [hub:lx-0004] ·  · 2 条消息（中栏内联）"
     },
     {
       "name": "refresh-one",
       "ok": true,
-      "ms": 153,
-      "detail": "刷新成功 toast 出现"
+      "ms": 178,
+      "detail": "进入 claude → 侧栏刷新成功 toast"
     },
     {
       "name": "schedule-flow",
       "ok": true,
-      "ms": 415,
-      "detail": "启用→保存→重开校验→恢复，均通过"
+      "ms": 213,
+      "detail": "claude: 启用→持久化→还原 均通过 · 入口按用户要求隐藏"
     },
     {
       "name": "memory-flow",
       "ok": true,
-      "ms": 526,
-      "detail": "记忆 3 → 增 → 删 → 3"
+      "ms": 485,
+      "detail": "记忆 7 → 增 → 详情内删 → 7"
     },
     {
       "name": "memory-validation-error",
       "ok": true,
-      "ms": 1,
+      "ms": 9,
       "detail": "空内容被拦截，错误反馈正确"
     },
     {
       "name": "duplicate-migration-guard",
       "ok": true,
-      "ms": 1279,
-      "detail": "重复迁移被拦截，无新会话产生（计数 3,4,1）"
+      "ms": 1278,
+      "detail": "重复迁移被拦截，无新会话产生（计数 3,4,1,0,243,0,47,9）"
     },
     {
       "name": "content-search-flow",
       "ok": true,
-      "ms": 466,
-      "detail": "2 条消息命中 → 点击打开对应会话"
+      "ms": 626,
+      "detail": "33 条消息命中 → 点击打开对应会话（中栏详情）"
     },
     {
       "name": "preview-actions",
       "ok": true,
-      "ms": 777,
+      "ms": 475,
       "detail": "收藏 ☆ 收藏 → ★ 已收藏 → 还原"
     },
     {
       "name": "module-nav-views",
       "ok": true,
-      "ms": 473,
-      "detail": "五视图切换 OK · skills 2 / mcp 2 / ops 51 条"
+      "ms": 490,
+      "detail": "五视图切换 OK · skills 20 / mcp 1 / ops 935 条"
+    },
+    {
+      "name": "skills-overview-render",
+      "ok": true,
+      "ms": 8,
+      "detail": "概览 20 统计卡 · 4 工具行 · 详情开关 OK · 无异常"
     },
     {
       "name": "skills-pull-and-wizard",
       "ok": true,
-      "ms": 459,
-      "detail": "UI 拉取 OK · 分发向导展示 6 个目标（未执行写入）"
+      "ms": 332,
+      "detail": "UI 拉取 OK · 多选批量面 OK · 右栏内联按钮「一键更新可更新（0）」 · 新建对话框开关 OK（无分发向导弹窗）"
     },
     {
       "name": "screenshot-mobile",
       "ok": true,
-      "ms": 482,
+      "ms": 536,
       "detail": "390px 视口无横向溢出（scrollWidth=390）"
     },
     {
@@ -104,5 +116,42 @@
       "detail": "无未处理异常/console.error"
     }
   ],
-  "consoleErrors": []
+  "consoleErrors": [],
+  "navEvents": [
+    {
+      "t": 1792222143383,
+      "loading": true,
+      "scenario": ""
+    },
+    {
+      "t": 1792222143396,
+      "url": "http://127.0.0.1:8317/",
+      "scenario": "live-sse-refresh"
+    }
+  ],
+  "netSummary": {
+    "fails": [],
+    "inflightAtEnd": [
+      {
+        "url": "http://127.0.0.1:8317/api/events",
+        "t": 1792222143484
+      },
+      {
+        "url": "http://127.0.0.1:8317/api/tools/agents",
+        "t": 1792222144008
+      },
+      {
+        "url": "http://127.0.0.1:8317/api/schedule",
+        "t": 1792222145400
+      },
+      {
+        "url": "http://127.0.0.1:8317/api/schedule",
+        "t": 1792222145483
+      },
+      {
+        "url": "http://127.0.0.1:8317/api/skills/sources/3/pull",
+        "t": 1792222148951
+      }
+    ]
+  }
 }
