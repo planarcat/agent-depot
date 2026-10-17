@@ -315,13 +315,19 @@ def main() -> int:
             print("✗ 配置里没有这些目标：%s（先写进 scripts/mutation.config.json）" % ", ".join(sorted(missing)))
             return 2
 
-    # ---- 收集变异点
+    # ---- 收集变异点（目标文件不在本次检出 → 惰性跳过，别让配置里列了未入库的文件就整体报错）
     plan = []
     for t in targets:
         path = os.path.join(ROOT, t["file"])
+        if not os.path.isfile(path):
+            print("· 跳过（文件不在本次检出）：%s" % t["file"])
+            continue
         src = open(path, "rb").read()
         sites = collect_sites(src)
         plan.append((t, src, sites))
+    if not plan:
+        print("没有可变异的目标（配置里的文件都不在本次检出）")
+        return 0
 
     if args.list:
         for t, _, sites in plan:
@@ -477,4 +483,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BrokenPipeError:      # 输出被 head/less 截断，不是错误
+        os._exit(0)
