@@ -1,0 +1,12 @@
+#!/bin/sh
+# 进仓的惰性钩子：本机装了门禁本体才生效；没装 = 这台机器没铺体系 → 直接放行。
+# 本仓非 Node 工程（没有 husky），启用方式是一条本机命令（不进仓库、不影响别人）：
+#     git config core.hooksPath scripts/hooks
+# 关闭：git config --unset core.hooksPath
+#
+# ⚠️ 不能写成 `[ -f scripts/local-guard.sh ] && sh ... || true`
+#    —— `|| true` 会吞掉拦截的 exit 1，门禁变摆设。
+
+if [ -f scripts/local-guard.sh ]; then
+	sh scripts/local-guard.sh
+fi

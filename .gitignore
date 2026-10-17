@@ -4,3 +4,9 @@ __pycache__/
 .venv/
 .hub.pid
 .hub.log
+
+# 质量门禁本体：只留本机，不进仓库（钩子 scripts/hooks/pre-commit 惰性调用它）
+scripts/local-guard.sh
+
+# 门禁产物
+reports/

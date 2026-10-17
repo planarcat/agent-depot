@@ -1,0 +1,5 @@
+{
+  "_说明": "lint 存量登记（scripts/lint_baseline.py 读取）。只许降（--ratchet），不许静默升；手改升高须走提交门禁留痕（LOCAL_GUARD_OK=1，commit 写清理由）。",
+  "rule_source": "tests/lint_styles.py",
+  "files": {}
+}
