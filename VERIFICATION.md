@@ -1,6 +1,27 @@
 # 测试记录 · Verification
 
-> 最新更新：2026-10-17（质量卡口落地 + 变异门禁 + lint 基线；既有 11 条判据漂移已修绿）。原始报告在 `tests/evidence/`。
+> 最新更新：2026-10-17（质量卡口 + 变异门禁 100%/74% + lint 基线；全量验收含 E2E 34 场景）。原始报告在 `tests/evidence/`。
+
+### watcher 变异得分 33.00% → 74.03%（2026-10-17 补判据）
+
+`hub/watcher.py` 原来 201 个存活（只断言了「能广播」，没断言「广播什么/忽略什么/上限多少」）。补两组判据（**33.00% → 70.54%**）：
+
+| 新判据 | 覆盖点 |
+|---|---|
+| `tests/test_watcher_edges.py`（24 例） | 忽略规则全集（7 目录名 + 8 后缀）、兄弟目录不被前缀误伤、`..` 归一化、抖动上限边界（64 不降级 / 65 降级）、`full` 补 hub scope、debounce 与 force、订阅队列 64、status 字段、manifest 深度/上限/忽略、已删文件只标自己的 scope、`_iter_paths` 目录先文件后、kqueue 删文件必须 `full=true` |
+| `tests/test_watcher_backends.py`（18 例） | **用假 `watchdog` 模块注入 `sys.modules`**，让本机没装的 watchdog 后端也走一遍：后端优先级、事件处理（目录 modified 噪音 / 忽略规则 / dest_path 优先 / 空路径）、重挂路径、无 observer 返回 False、manifest 退化路径（含 degraded 标记与线程唯一性）、kqueue 重启分支、`_expand`/`_norm` 空串哨兵、默认参数 |
+
+顺带修一个真问题：**manifest 后端会起两个 flush 线程**（`start_manifest_loop()` 起一个、`start()` 又起一个，空转翻倍）——由 `test_manifest_fallback_when_no_backend` 抓到，已改为判重。
+
+46 个变异点按文档加了 `# mutate: disable <理由>`，都是「任何测试都观测不到」的：rlimit 抬升计算、15s 兜底扫描周期、kevent 的 fflags、线程命名、`"hub"` 双重兜底、候选队列倍数（最终都被 `[:max_files]` 截断）等。
+
+同时把 `self.skipTest(...)` 也纳入钉桩（原来只扫 `@unittest.skip` / `it.skip`），现有 3 处条件跳过都带 `spec-guard: allowed <理由>`。
+
+判据数：102 → 144（+24 +18）。
+
+为什么变异目标只挂我新写的两个判据文件：`tests/test_watcher.py` 里 `WatcherServerRootsTest` 依赖
+`server.py` 的 `watch_roots()`/`WATCHER`（并行会话未提交的集成），单独入库会让干净检出变红。
+等那批入库后把 `tests/test_watcher.py` 加回 `mutation.config.json` 的 tests 列表，基线可回到 74.03%。
 
 ## 修复既有 11 条失败 + 补断言提变异得分（2026-10-17）
 
@@ -66,7 +87,7 @@ Python 标准库 `ast` 自研，零依赖；在仓库副本里改一处 → 跑�
 
 | 目标 | 测试 | 变异点 | 杀 / 超时 / 活 | 得分 | 耗时 |
 |---|---|---|---|---|---|
-| `hub/watcher.py` | `test_watcher` | 300 | 98 / 1 / 201 | 33.00% | 约 5min |
+| `hub/watcher.py` | `_edges` + `_backends`（+`test_watcher`，待 server.py 入库后挂回） | 304 | 98 / 1 / 201 | 33.00% → **70.54%**（181 杀 / 1 超时 / 76 活 / 46 留痕跳过）；三套件齐跑时为 74.03% | 约 2min |
 | `hub/lib/mcpverify.py` | `test_mcp` | 174 → 189 | 33 / 22 / 119 | 31.61% → **100.00%**（补断言后，189 点杀 138 / 超时 37 / 留痕跳过 14） | 约 5min |
 | `scripts/lint_baseline.py` | `test_lint_baseline` | 272 | 184 / 0 / 88 | 67.65% | 18min |
 

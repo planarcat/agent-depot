@@ -8,7 +8,7 @@
   },
   "tolerance": 2.0,
   "baseline_scores": {
-    "hub/watcher.py": 33.0,
+    "hub/watcher.py": 70.54,
     "hub/lib/mcpverify.py": 100.0,
     "scripts/lint_baseline.py": 67.65
   },
@@ -18,7 +18,8 @@
     {
       "file": "hub/watcher.py",
       "tests": [
-        "python3 tests/test_watcher.py"
+        "python3 tests/test_watcher_edges.py",
+        "python3 tests/test_watcher_backends.py"
       ]
     },
     {

@@ -25,6 +25,7 @@ PATTERNS = [
     (re.compile(r"@\s*unittest\s*\.\s*(?:skip|skipIf|skipUnless|expectedFailure)\b"), "unittest.skip"),
     (re.compile(r"@\s*(?:pytest\s*\.\s*mark\s*\.\s*(?:skip|skipif|xfail)|pytest\s*\.\s*skip)\b"), "pytest.skip"),
     (re.compile(r"\bunittest\s*\.\s*skip(?:If|Unless)?\s*\("), "unittest.skip(...)"),
+    (re.compile(r"\bself\s*\.\s*skipTest\s*\("), "self.skipTest(...)"),
     (re.compile(r"@\s*(?:skip|skipIf|skipUnless)\s*\("), "裸 skip 装饰器"),
     (re.compile(r"\b(?:it|test|describe)\s*\.\s*(?:skip|only|todo|fails)\b"), "skip/only/todo"),
     (re.compile(r"\b(?:xit|xdescribe|xtest)\s*\("), "xit/xdescribe/xtest"),

@@ -29,6 +29,8 @@ run_suite tests/test_mcp.py
 run_suite tests/test_manual_mcp.py
 run_suite tests/test_extras.py
 run_suite tests/test_watcher.py
+run_suite tests/test_watcher_edges.py
+run_suite tests/test_watcher_backends.py
 run_suite tests/test_lint_baseline.py
 echo; echo "========== check 汇总 =========="
 if [ $FAIL -eq 0 ]; then echo "CHECK PASSED ✓"; else echo "CHECK FAILED ✗"; fi
