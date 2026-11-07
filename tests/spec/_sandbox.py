@@ -86,7 +86,14 @@ class SpecSandbox(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.tmp = tempfile.mkdtemp(prefix="spec-")
+        # Rust 验收模式（DEPOT_SANDBOX 已设）：runner 起的 depotd 与本测试进程共用
+        # 同一沙箱根（tmp/hub = AGENT_HUB_DIR），磁盘断言与服务端落盘对齐。
+        ext_root = os.environ.get("DEPOT_SANDBOX")
+        if ext_root:
+            cls.tmp = ext_root
+            os.makedirs(cls.tmp, exist_ok=True)
+        else:
+            cls.tmp = tempfile.mkdtemp(prefix="spec-")
         cls.port = _free_port()
         cls.mem_src = os.path.join(cls.tmp, "mem-src.json")
         with open(cls.mem_src, "w") as f:
@@ -185,7 +192,9 @@ class SpecSandbox(unittest.TestCase):
             except Exception:
                 pass
         import shutil
-        shutil.rmtree(cls.tmp, ignore_errors=True)
+        if not os.environ.get("DEPOT_SANDBOX"):
+            # external（Rust 验收）模式：沙箱根由 runner 创建与回收，测试不删
+            shutil.rmtree(cls.tmp, ignore_errors=True)
 
     # ---------- 断言助手 ----------
 

@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/depot-core",
+    "crates/depot-skills",
+    "crates/depot-mcp",
+    "crates/depot-memory",
+    "crates/depot-sessions",
+    "crates/depot-watch",
+    "crates/depotd",
+]
+
+[workspace.package]
+version = "2.0.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["catch-panic", "request-id", "trace", "limit", "fs"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml_edit = "0.22"
+toml = "0.8"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+notify = "8"
+notify-debouncer-full = "0.7"
+rust-embed = "8"
+clap = { version = "4", features = ["derive"] }
+sha2 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+rand = "0.9"
+tokio-util = "0.7"
+futures = "0.3"
+percent-encoding = "2"
+
+[profile.release]
+lto = "thin"
+strip = true
