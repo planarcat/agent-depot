@@ -10,21 +10,23 @@
 import json
 import os
 import time
+import uuid
 
 from _sandbox import SpecSandbox, req
 
 CLAUDE_SID = "11111111-2222-4333-8444-555555555555"
 
 
-def claude_lines(n, base_ts="2026-09-21T10:00:00.000Z", uid_prefix="u"):
+def claude_lines(n, base_ts="2026-09-21T10:00:00.000Z", uid_prefix="u", sid=None):
     """生成 n 条消息的 claude 会话行（uuid 唯一，追加段用不同前缀防去重）。"""
+    sid = sid or CLAUDE_SID
     lines = [json.dumps({"type": "queue-operation", "timestamp": base_ts,
-                         "sessionId": CLAUDE_SID, "cwd": "/tmp/proj-x",
+                         "sessionId": sid, "cwd": "/tmp/proj-x",
                          "uuid": "%s-0" % uid_prefix, "parentUuid": None,
                          "version": "2.1.217"})]
     for i in range(n):
         role = "user" if i % 2 == 0 else "assistant"
-        lines.append(json.dumps({"type": role, "timestamp": base_ts, "sessionId": CLAUDE_SID,
+        lines.append(json.dumps({"type": role, "timestamp": base_ts, "sessionId": sid,
                                  "cwd": "/tmp/proj-x", "uuid": "%s-%d" % (uid_prefix, i + 1),
                                  "parentUuid": None, "version": "2.1.217",
                                  "message": {"role": role,
@@ -37,7 +39,10 @@ class SessionParseSpec(SpecSandbox):
     """契约9 · 会话解析边界（WITH_SESSIONS=False，每用例自建夹具）。"""
 
     def setUp(self):
-        # 每用例独立 claude 项目目录（随 tmp 清理）
+        # 每用例独立 claude 项目目录（随 tmp 清理）+ 唯一 sid：
+        # 同 sid 跨用例重写 + 游标只在文件缩小时重置 → 会把「续读半截」的
+        # 字节偏移伪影钉进断言（2026-11-08 审查修正，旧 ==3/>=3 均为伪影拟合）
+        self.sid = "11111111-2222-4333-8444-" + uuid.uuid4().hex[:12]
         self.proj = os.path.join(self.tmp, "claude", "proj-x")   # 与沙箱 env 对齐
         os.makedirs(self.proj, exist_ok=True)
 
@@ -59,33 +64,34 @@ class SessionParseSpec(SpecSandbox):
 
     def test_sess_c9_happy_fields(self):
         """正常解析：会话字段契约（sid/title/msg_count/tool）。"""
-        self._write(CLAUDE_SID, claude_lines(4))
+        self._write(self.sid, claude_lines(4, sid=self.sid))
         self._scan()
-        rows = [x for x in self._sessions() if x["sid"] == CLAUDE_SID]
+        rows = [x for x in self._sessions() if x["sid"] == self.sid]
         self.assertTrue(rows)
         row = rows[0]
         for key in ("sid", "title", "msg_count", "tool"):
             self.assertIn(key, row, row)
-        # 完整扫描 = 4 条消息行（queue-op 不计数）。Python 端 auto-ingest 与 refresh
-        # 存在半截文件竞态（2026-11-08 对拍发现，计数可能暂时 3）→ 下界断言 + title 契约。
-        self.assertGreaterEqual(row["msg_count"], 3, row)
+        # 真实口径 = 4：夹具 4 条消息行，queue-operation 不计数（_classify_claude_line 跳过）。
+        # 旧 ==3 是「同 sid 跨用例重写 + 游标滞留」伪影（2026-11-08 审查修正）；
+        # 每用例唯一 sid 后全量扫描确定性产出 4，双引擎（Python/depotd）一致。
+        self.assertEqual(row["msg_count"], 4, row)
 
     def test_sess_c9_truncated_jsonl(self):
         """反例：截断 JSONL（最后一行半截）→ 不炸服务，完整行照常入库。"""
-        good = claude_lines(2)
-        self._write(CLAUDE_SID, good + '{"type": "user", "timestamp": "2026')   # 半截
+        good = claude_lines(2, sid=self.sid)
+        self._write(self.sid, good + '{"type": "user", "timestamp": "2026')   # 半截
         self._scan()
-        rows = [x for x in self._sessions() if x["sid"] == CLAUDE_SID]
+        rows = [x for x in self._sessions() if x["sid"] == self.sid]
         self.assertTrue(rows, "截断文件应跳过坏行继续解析")
 
     def test_sess_c9_bad_lines_interleaved(self):
         """反例：中间夹坏行/空行 → 跳过坏行，好行全部入库。"""
-        lines = claude_lines(2).rstrip("\n").split("\n")
+        lines = claude_lines(2, sid=self.sid).rstrip("\n").split("\n")
         lines.insert(1, "{corrupted")
         lines.insert(3, "")
-        self._write(CLAUDE_SID, "\n".join(lines) + "\n")
+        self._write(self.sid, "\n".join(lines) + "\n")
         self._scan()
-        rows = [x for x in self._sessions() if x["sid"] == CLAUDE_SID]
+        rows = [x for x in self._sessions() if x["sid"] == self.sid]
         self.assertTrue(rows)
         self.assertGreaterEqual(rows[0]["msg_count"], 2, rows[0])
 
@@ -100,13 +106,13 @@ class SessionParseSpec(SpecSandbox):
         """unicode/emoji 内容逐字节保留（搜索与导出依赖）。"""
         text = "规格夹具：中文 🎉 emoji '引号' \"双引号\" \\反斜杠"
         lines = [json.dumps({"type": "queue-operation", "timestamp": "2026-09-21T10:00:00.000Z",
-                             "sessionId": CLAUDE_SID, "cwd": "/tmp/proj-x", "uuid": "u-0",
+                             "sessionId": self.sid, "cwd": "/tmp/proj-x", "uuid": "u-0",
                              "parentUuid": None, "version": "2.1.217"}),
                  json.dumps({"type": "user", "timestamp": "2026-09-21T10:00:01.000Z",
-                             "sessionId": CLAUDE_SID, "cwd": "/tmp/proj-x", "uuid": "u-1",
+                             "sessionId": self.sid, "cwd": "/tmp/proj-x", "uuid": "u-1",
                              "parentUuid": None, "version": "2.1.217",
                              "message": {"role": "user", "content": text}}, ensure_ascii=False)]
-        self._write(CLAUDE_SID, "\n".join(lines) + "\n")
+        self._write(self.sid, "\n".join(lines) + "\n")
         self._scan()
         import urllib.parse
         q = urllib.parse.quote("规格夹具")
@@ -117,16 +123,16 @@ class SessionParseSpec(SpecSandbox):
 
     def test_sess_c9_incremental_idempotent(self):
         """增量幂等：同会话二次扫描不重复计数；追加消息后计数增加。"""
-        self._write(CLAUDE_SID, claude_lines(4))
+        self._write(self.sid, claude_lines(4, sid=self.sid))
         self._scan()
-        n1 = [x for x in self._sessions() if x["sid"] == CLAUDE_SID][0]["msg_count"]
+        n1 = [x for x in self._sessions() if x["sid"] == self.sid][0]["msg_count"]
         self._scan()
-        n2 = [x for x in self._sessions() if x["sid"] == CLAUDE_SID][0]["msg_count"]
+        n2 = [x for x in self._sessions() if x["sid"] == self.sid][0]["msg_count"]
         self.assertEqual(n1, n2, "二次扫描不得重复计数")
-        with open(os.path.join(self.proj, CLAUDE_SID + ".jsonl"), "a") as f:
-            f.write(claude_lines(2, "2026-09-21T11:00:00.000Z", uid_prefix="u2"))
+        with open(os.path.join(self.proj, self.sid + ".jsonl"), "a") as f:
+            f.write(claude_lines(2, "2026-09-21T11:00:00.000Z", uid_prefix="u2", sid=self.sid))
         self._scan()
-        n3 = [x for x in self._sessions() if x["sid"] == CLAUDE_SID][0]["msg_count"]
+        n3 = [x for x in self._sessions() if x["sid"] == self.sid][0]["msg_count"]
         self.assertGreater(n3, n2, "追加消息 → 计数增加")
 
 

@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use serde_json::Value;
+
 use crate::error::{CoreError, Result};
 
 pub struct GitOut {
@@ -14,22 +16,74 @@ pub struct GitOut {
     pub err: String,
 }
 
-pub fn run_git(args: &[&str], cwd: Option<&Path>, timeout: Duration) -> GitOut {
-    let mut cmd = Command::new("git");
+/// 带真实超时的子进程运行（对位 Python subprocess.run(timeout=…)）：
+/// 超时 kill 进程，code=124（与 GNU timeout 惯例一致），err 注明超时。
+pub fn run_cmd(program: &str, args: &[&str], cwd: Option<&Path>, timeout: Duration,
+               envs: &[(&str, &str)]) -> GitOut {
+    let mut cmd = Command::new(program);
     cmd.args(args);
     if let Some(d) = cwd {
         cmd.current_dir(d);
     }
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.env("GIT_ASKPASS", "echo");
-    match cmd.output() {
-        Ok(o) => GitOut {
-            code: o.status.code().unwrap_or(-1),
-            out: String::from_utf8_lossy(&o.stdout).to_string(),
-            err: String::from_utf8_lossy(&o.stderr).to_string(),
-        },
-        Err(e) => GitOut { code: -1, out: String::new(), err: e.to_string() },
+    for (k, v) in envs {
+        cmd.env(k, v);
     }
+    let child = match cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return GitOut { code: -1, out: String::new(), err: e.to_string() },
+    };
+    let start = std::time::Instant::now();
+    let mut child = child;
+    let deadline_kill = |c: &mut std::process::Child| {
+        let _ = c.kill();
+        let _ = c.wait();
+    };
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // 收尾读输出（进程已退出，管道不会再增长）
+                let mut out = String::new();
+                let mut err = String::new();
+                if let Some(mut io) = child.stdout.take() {
+                    use std::io::Read;
+                    let _ = io.read_to_string(&mut out);
+                }
+                if let Some(mut io) = child.stderr.take() {
+                    use std::io::Read;
+                    let _ = io.read_to_string(&mut err);
+                }
+                return GitOut {
+                    code: status.code().unwrap_or(-1),
+                    out,
+                    err,
+                };
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    deadline_kill(&mut child);
+                    return GitOut {
+                        code: 124,
+                        out: String::new(),
+                        err: format!("命令超时（{}s）被终止", timeout.as_secs()),
+                    };
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                return GitOut { code: -1, out: String::new(), err: e.to_string() };
+            }
+        }
+    }
+}
+
+pub fn run_git(args: &[&str], cwd: Option<&Path>, timeout: Duration) -> GitOut {
+    run_cmd("git", args, cwd, timeout, &[])
 }
 
 fn valid_branch(branch: &str) -> bool {
@@ -51,21 +105,47 @@ pub fn repo_name(url: &str) -> String {
         let norm = s.replace(':', "/");
         let parts: Vec<&str> = norm.split('/').filter(|p| !p.is_empty()).collect();
         // git@host:owner/repo → 取最后两段
-        if parts.len() >= 2 {
-            return format!("{}-{}", parts[parts.len() - 2], parts[parts.len() - 1]);
-        }
-        return parts.last().unwrap_or(&"repo").to_string();
+        let raw = if parts.len() >= 2 {
+            format!("{}-{}", parts[parts.len() - 2], parts[parts.len() - 1])
+        } else {
+            parts.last().copied().unwrap_or("repo").to_string()
+        };
+        return slug(&raw);
     }
-    Path::new(&s)
+    // 本地路径取末级目录名；过 slug 清洗（Python 同款），空/危险名（".."）回落 "repo"
+    let base = Path::new(&s)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| s.clone())
+        .unwrap_or_else(|| s.clone());
+    let cleaned = slug(&base);
+    if cleaned.is_empty() {
+        "repo".into()
+    } else {
+        cleaned
+    }
 }
 
+/// 对位 hub/paths.py:_slug：保留字母数字与 . _ -（含 CJK 等非 ASCII 字母），
+/// 其余转 -，压缩连续 -，去掉首尾 - 和 .
 fn slug(s: &str) -> String {
-    s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
+    let mapped: String = s
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '-' })
+        .collect();
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for ch in mapped.chars() {
+        if ch == '-' {
+            if !prev_dash {
+                out.push('-');
+            }
+            prev_dash = true;
+        } else {
+            out.push(ch);
+            prev_dash = false;
+        }
+    }
+    out.trim_matches(|c| c == '-' || c == '.').to_string()
 }
 
 /// 远程源缓存目录：`<hub>/sources/<kind>/<仓库名>[-<分支>][-<子目录>]`。
@@ -85,6 +165,9 @@ pub fn source_cache_dir(hub: &Path, kind: &str, url: &str, branch: &str, subdir:
 }
 
 /// clone 或 fetch；返回 (commit 短哈希, resolved_branch, 非致命警告)。
+/// 已知差异（vs Python gitsrc.py）：`auth_ref` 未移植（resolve_auth 的 env:/file:
+/// 凭据注入与 ASKPASS 告警链缺失），传入恒被忽略——私有仓库需预置凭据（如
+/// credential helper），或先补实现再迁移此类源。
 pub fn ensure_cache(
     cache: &Path,
     url: &str,
@@ -148,7 +231,8 @@ pub fn ensure_cache(
 }
 
 fn masked(s: &str) -> String {
-    // 不向外暴露完整 URL 凭据：token 形态一律打码
+    // 打码范围仅覆盖 URL 内嵌凭据（scheme://…@…）；Python _masked 还会按
+    // 环境变量 token 做全局替换——本实现未移植该分支
     let mut out = String::new();
     for tok in s.split_whitespace() {
         if tok.contains("://") && tok.contains('@') {
@@ -260,7 +344,12 @@ pub fn parse_skills(
     };
     let mut out = Vec::new();
     for (dirpath, _) in dirs {
-        let name = dirpath.rsplit('/').next().unwrap_or("root-skill").to_string();
+        // 根级 SKILL.md（dirpath 为空）→ Python 口径名 "root-skill"
+        let name = if dirpath.is_empty() {
+            "root-skill".to_string()
+        } else {
+            dirpath.rsplit('/').next().unwrap_or("root-skill").to_string()
+        };
         let skill_md_rel = if dirpath.is_empty() {
             "SKILL.md".to_string()
         } else {
@@ -278,7 +367,9 @@ pub fn parse_skills(
             })
             .collect();
         if !dir_files.contains_key(&skill_md_rel) {
-            continue; // 只有 skill.json 没 SKILL.md 的目录跳过
+            // Rust 简化：仅收集含 SKILL.md 的目录（Python catalog 还认 skill.json，
+            // 见 catalog.py:38——本实现未移植该分支）
+            continue;
         }
         let fm = show_bytes(cache, commit, &skill_md_rel)
             .and_then(|raw| String::from_utf8(raw).ok())
@@ -365,13 +456,21 @@ pub fn parse_mcp(
             );
         }
         for (name, cfg) in entries {
-            if let Some(norm) = crate::mcputil::normalize_entry(&cfg, &name) {
-                let canon = serde_json::to_string(
-                    &remap_sorted(&norm),
-                )
-                .unwrap_or_default();
+            if let Some(mut norm) = crate::mcputil::normalize_entry(&cfg, &name) {
+                // hash 口径与 Python catalog.parse_mcp 完全一致：
+                // sha256(json.dumps(带 name 的 norm, sort_keys=True, ensure_ascii=False))
+                // （紧凑键序不一致会让迁移后的 items.source_hash 全部失配 → 首轮全量伪变更）
+                if let Some(o) = norm.as_object_mut() {
+                    // Python norm 的 name 在最前，但 sort_keys 会重排——插入顺序无关
+                    o.insert("name".into(), Value::String(name.clone()));
+                }
+                let canon = python_json_sorted(&norm);
                 let mut h = Sha256::new();
                 h.update(canon.as_bytes());
+                // meta 里不落 name（与 normalize_entry 既有语义一致：写入时的 name 由 key 表达）
+                if let Some(o) = norm.as_object_mut() {
+                    o.remove("name");
+                }
                 out.push(SourceItem {
                     name,
                     path: format!("{prefix}{rel}"),
@@ -387,19 +486,6 @@ pub fn parse_mcp(
     out
 }
 
-fn remap_sorted(v: &serde_json::Value) -> serde_json::Value {
-    match v {
-        serde_json::Value::Object(m) => {
-            let mut out = serde_json::Map::new();
-            for (k, val) in m {
-                out.insert(k.clone(), remap_sorted(val));
-            }
-            serde_json::Value::Object(out)
-        }
-        other => other.clone(),
-    }
-}
-
 pub fn _unused(e: CoreError) -> CoreError {
     e
 }
@@ -407,4 +493,25 @@ pub fn _unused(e: CoreError) -> CoreError {
 #[allow(dead_code)]
 pub fn result_stub() -> Result<()> {
     Ok(())
+}
+
+/// Python `json.dumps(obj, sort_keys=True, ensure_ascii=False)` 默认分隔符等价实现
+/// （`, ` / `: `；字符串走标准 JSON 转义；键序递归排序）。仅用于 source_hash 口径对齐。
+fn python_json_sorted(v: &Value) -> String {
+    match v {
+        Value::Object(m) => {
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort();
+            let parts: Vec<String> = keys
+                .iter()
+                .map(|k| format!("{}: {}", serde_json::to_string(k).unwrap_or_default(), python_json_sorted(&m[*k])))
+                .collect();
+            format!("{{{}}}", parts.join(", "))
+        }
+        Value::Array(a) => {
+            let parts: Vec<String> = a.iter().map(python_json_sorted).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
 }

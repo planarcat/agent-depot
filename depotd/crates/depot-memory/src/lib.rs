@@ -149,17 +149,27 @@ pub fn search_notes(conn: &Connection, q: &str, limit: i64) -> Vec<Value> {
         Ok(mut stmt) => stmt
             .query_map(rusqlite::params![pat, limit], |r| {
                 let body: String = r.get(4)?;
+                // 字符边界安全切片（字节索引会切进多字节字符 → panic）；
+                // 优先原串精确命中，否则退到小写副本索引（snippet 可能小写化，可接受退化）
                 let low = q.to_lowercase();
-                let idx = body.to_lowercase().find(&low).unwrap_or(0);
-                let start = idx.saturating_sub(30);
-                let snippet: String = body[start..(start + 120).min(body.len())]
-                    .replace('\n', " ");
+                let idx = body.find(q).unwrap_or_else(|| body.to_lowercase().find(&low).unwrap_or(0));
+                let floor = |mut i: usize| -> usize {
+                    while i > 0 && !body.is_char_boundary(i) { i -= 1; }
+                    i
+                };
+                let ceil = |mut i: usize| -> usize {
+                    while i < body.len() && !body.is_char_boundary(i) { i += 1; }
+                    i
+                };
+                let start = floor(idx.saturating_sub(30));
+                let end = ceil((idx + 120).min(body.len()));
+                let snippet: String = body[start..end].replace('\n', " ");
                 Ok(json!({"id": r.get::<_, i64>(0)?, "ts": r.get::<_, Option<String>>(1)?,
                     "kind": r.get::<_, String>(2)?, "title": r.get::<_, String>(3)?,
                     "body": body,
                     "snippet": format!("{}{}{}",
                         if start > 0 { "…" } else { "" }, snippet,
-                        if body.len() > start + 120 { "…" } else { "" })}))
+                        if body.len() > end { "…" } else { "" })}))
             })
             .map(|rows| rows.filter_map(|r| r.ok()).collect())
             .unwrap_or_default(),
@@ -274,18 +284,24 @@ fn upsert_item(conn: &Connection, tool_id: &str, slot: &Slot, content: &str) -> 
         .ok();
     match row {
         None => {
-            conn.execute(
-                "INSERT INTO memory_items(source_tool, kind, scope, name, version, hash, \
-                 prev_hash, last_source_hash, source_path, updated_at, status) \
-                 VALUES(?,?,?,?,1,?,NULL,?,?,?,'ok')",
-                rusqlite::params![
-                    tool_id, slot.kind, slot.scope, slot.name, src_hash, src_hash,
-                    slot.path.to_string_lossy(), fsutil::now_iso()
-                ],
-            )
-            .ok();
+            if conn
+                .execute(
+                    "INSERT INTO memory_items(source_tool, kind, scope, name, version, hash, \
+                     prev_hash, last_source_hash, source_path, updated_at, status) \
+                     VALUES(?,?,?,?,1,?,NULL,?,?,?,'ok')",
+                    rusqlite::params![
+                        tool_id, slot.kind, slot.scope, slot.name, src_hash, src_hash,
+                        slot.path.to_string_lossy(), fsutil::now_iso()
+                    ],
+                )
+                .is_err()
+            {
+                return "failed";
+            }
             let item = json!({"scope": slot.scope, "source_tool": tool_id, "kind": slot.kind});
-            let _ = fsutil::atomic_write_text(&memstore_path(&item), content);
+            if fsutil::atomic_write_text(&memstore_path(&item), content).is_err() {
+                return "failed";
+            }
             "imported"
         }
         Some((_id, hash, last_src)) => {
@@ -497,7 +513,7 @@ pub fn edit_item(conn: &Connection, item_id: i64, content: &str) -> Result<Value
         rusqlite::params![new_hash, old_hash.as_str(), fsutil::now_iso(), item_id],
     )
     .map_err(CoreError::from)?;
-    let _ = fsutil::atomic_write_text(&memstore_path(&row), content);
+    fsutil::atomic_write_text(&memstore_path(&row), content)?;
     let _ = depot_core::events::append(conn, &depot_core::events::Event {
         module: "memory",
         actor: "local", kind: "edit", subject: None, outcome: "ok", error_code: None,
@@ -528,7 +544,7 @@ pub fn adopt_source(conn: &Connection, item_id: i64) -> Result<Value> {
         rusqlite::params![src_hash, old_hash.as_str(), src_hash, fsutil::now_iso(), item_id],
     )
     .map_err(CoreError::from)?;
-    let _ = fsutil::atomic_write_text(&memstore_path(&row), &content);
+    fsutil::atomic_write_text(&memstore_path(&row), &content)?;
     let _ = depot_core::events::append(conn, &depot_core::events::Event {
         module: "memory",
         actor: "local", kind: "adopt", subject: None, outcome: "ok", error_code: None,

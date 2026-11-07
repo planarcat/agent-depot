@@ -11,6 +11,7 @@ pub mod fsutil;
 pub mod paths;
 pub mod store;
 pub mod tools;
+pub mod zipstore;
 
 pub use error::{CoreError, Code};
 pub use store::Store;

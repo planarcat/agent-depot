@@ -108,19 +108,17 @@ where
 
 // ---------- 基础助手 ----------
 
-fn rc(state: &AppState) -> std::sync::MutexGuard<'static, rusqlite::Connection> {
-    let conn: Arc<std::sync::Mutex<rusqlite::Connection>> = state.store.read_conn();
-    let guard = conn.lock().unwrap();
-    // 借用安全化：读池 Arc 常驻（Store 持有），守卫生命周期与池一致
-    unsafe { std::mem::transmute::<std::sync::MutexGuard<'_, rusqlite::Connection>,
-        std::sync::MutexGuard<'static, rusqlite::Connection>>(guard) }
+/// 连接守卫：从 Store 的 'static 池引用直接上锁，无 unsafe、无 transmute。
+/// 池与进程同寿（Store::open 时一次性 Box::leak 的 Arc 槽位），守卫可安全
+/// 跨作用域返回给 handler 使用。
+pub type DbGuard = std::sync::MutexGuard<'static, rusqlite::Connection>;
+
+fn rc(state: &AppState) -> DbGuard {
+    state.store.read_static().lock().unwrap()
 }
 
-fn wc(state: &AppState) -> std::sync::MutexGuard<'static, rusqlite::Connection> {
-    let conn: Arc<std::sync::Mutex<rusqlite::Connection>> = state.store.write_conn();
-    let guard = conn.lock().unwrap();
-    unsafe { std::mem::transmute::<std::sync::MutexGuard<'_, rusqlite::Connection>,
-        std::sync::MutexGuard<'static, rusqlite::Connection>>(guard) }
+fn wc(state: &AppState) -> DbGuard {
+    state.store.write_static().lock().unwrap()
 }
 
 fn jerr(status: u16, msg: &str) -> Response {
@@ -133,13 +131,61 @@ fn jraw(status: u16, v: Value) -> Response {
     (code, Json(v)).into_response()
 }
 
+/// 域 Result 统一出口：Err 走 CoreError::to_body（稳定 code + status 映射），
+/// Ok 走 wrap（ok:false → 400）。模块路由的所有 Err 都该从这里出去，不再 unwrap。
+fn wrap_res(r: depot_core::error::Result<Value>) -> Response {
+    match r {
+        Ok(v) => wrap(v),
+        Err(e) => {
+            let body = e.to_body();
+            jraw(body.status, body.body)
+        }
+    }
+}
+
 /// 域结果统一包口：ok:true → 200；ok:false → 400（Python `200 if r.get("ok") else 400`）。
 fn wrap(v: Value) -> Response {
     let ok = v.get("ok").and_then(|b| b.as_bool()).unwrap_or(true);
     jraw(if ok { 200 } else { 400 }, v)
 }
 
-/// Python truthy 口径：bool 直取；字符串 "1"/"true"/"on" 为 true；其余 false。
+/// 搜索 snippet：按字符边界切片（字节索引会切进多字节字符 → panic）。
+/// 优先在原串上大小写敏感查找（offset 精确）；找不到再退到小写副本
+/// （此时 snippet 可能被小写化——可接受的退化，Python 语义为原串切片）。
+fn make_snippet(c0: &str, low_query: &str) -> String {
+    // 优先原串精确命中；否则在小写副本上找（snippet 会被小写化——可接受的退化）。
+    // 全程 char-boundary 安全，杜绝字节切片 panic。
+    let (idx, hay_owned, hay): (usize, Option<String>, &str) = match c0.find(low_query) {
+        Some(i) => (i, None, c0),
+        None => {
+            let lc = c0.to_lowercase();
+            match lc.find(low_query) {
+                Some(i) => (i, Some(lc), ""),
+                None => (0, None, c0),
+            }
+        }
+    };
+    let hay: &str = hay_owned.as_deref().unwrap_or(hay);
+    let floor = |mut i: usize| -> usize {
+        while i > 0 && !hay.is_char_boundary(i) { i -= 1; }
+        i
+    };
+    let ceil = |mut i: usize| -> usize {
+        while i < hay.len() && !hay.is_char_boundary(i) { i += 1; }
+        i
+    };
+    let start = floor(idx.saturating_sub(30));
+    let end = ceil((idx + 120).min(hay.len()));
+    let snippet: String = hay[start..end].replace('\n', " ");
+    format!("{}{}{}",
+        if start > 0 { "…" } else { "" }, snippet,
+        if hay.len() > end { "…" } else { "" })
+}
+
+/// 白名单布尔解析：bool 直取；字符串 "1"/"true"/"True"/"on"/"yes" 为 true。
+/// 注意：这是自定义口径而非 Python bool()（Python 任何非空字符串都是 True，
+/// 连 "0"/"false" 也是）——前端实际只传 JSON bool，字符串分支仅为 query
+/// 参数兜底，取更防误触的语义。
 fn as_bool(v: Option<&Value>) -> bool {
     match v {
         Some(Value::Bool(b)) => *b,
@@ -433,7 +479,18 @@ async fn api_events(State(state): State<Arc<AppState>>) -> Response {
                                     (rx, ping, first),
                                 ));
                             }
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                // 慢订阅者丢事件：立即推 full=true 让前端全量重取
+                                let payload = serde_json::json!({
+                                    "rev": 0, "scopes": ["hub"], "full": true, "lagged": n,
+                                })
+                                .to_string();
+                                return Some((
+                                    Ok::<_, std::convert::Infallible>(
+                                        SseEvent::default().event("change").data(payload)),
+                                    (rx, ping, first),
+                                ));
+                            }
                             Err(_) => {
                                 return Some((
                                     Ok::<_, std::convert::Infallible>(
@@ -566,12 +623,7 @@ async fn api_search(State(state): State<Arc<AppState>>, Query(q): Query<HashMap<
         g["hits"] = json!(g["hits"].as_i64().unwrap_or(0) + 1);
         if g["snippet"].is_null() {
             let c0 = content.as_deref().unwrap_or("");
-            let idx = c0.to_lowercase().find(&low).unwrap_or(0);
-            let start = idx.saturating_sub(30);
-            let snippet: String = c0[start..(start + 120).min(c0.len())].replace('\n', " ");
-            g["snippet"] = json!(format!("{}{}{}",
-                if start > 0 { "…" } else { "" }, snippet,
-                if c0.len() > start + 120 { "…" } else { "" }));
+            g["snippet"] = json!(make_snippet(c0, &low));
         }
         let _ = (role, ts);
     }
@@ -610,37 +662,7 @@ async fn api_export(State(state): State<Arc<AppState>>, Query(q): Query<HashMap<
             Err(_) => vec![],
         }
     };
-    let toolname = match tool.as_str() {
-        "claude" => "Claude Code",
-        "codex" => "Codex CLI",
-        "opencode" => "OpenCode",
-        other => Box::leak(other.to_string().into_boxed_str()),
-    };
-    let mut lines = vec![
-        format!("# {}", title.as_deref().unwrap_or("(无标题)")),
-        String::new(),
-        format!("- 工具: {toolname}"),
-        format!("- 会话 ID: `{sid}`"),
-        format!("- 项目: `{}`", cwd.as_deref().unwrap_or("-")),
-        format!("- 消息数: {msg_count}"),
-        format!("- 导出时间: {}", depot_core::fsutil::now_iso()),
-        String::new(),
-        "---".to_string(),
-        String::new(),
-    ];
-    for (ts, role, content) in messages {
-        let content = content.unwrap_or_default();
-        if content.trim().is_empty() {
-            continue;
-        }
-        let t16 = ts.unwrap_or_default().get(..16).unwrap_or("").to_string().replace('T', " ");
-        let role = role.unwrap_or_else(|| "?".into());
-        lines.push(format!("**{role}**{}", if t16.is_empty() { String::new() } else { format!(" · {t16}") }));
-        lines.push(String::new());
-        lines.push(content);
-        lines.push(String::new());
-    }
-    let body = lines.join("\n") + "\n";
+    let body = session_markdown(&c, &sid).unwrap_or_default();
     let export_dir = depot_core::paths::hub_dir().join("exports");
     let _ = std::fs::create_dir_all(&export_dir);
     let safe: String = sid
@@ -681,11 +703,25 @@ async fn api_export_batch(State(state): State<Arc<AppState>>, bytes: Bytes) -> R
         "batch-{}.zip",
         chrono::Local::now().format("%Y%m%d-%H%M%S")
     ));
-    // 简化 zip（store 无压缩）：足够人类可读/可解包
-    let count = sids.len();
-    let mut zbody: Vec<u8> = Vec::new();
-    zbody.extend_from_slice(b"PK\x05\x06"); // empty-zip EOCD 最小形态
-    zbody.extend_from_slice(&[0u8; 18]);
+    // 逐会话导出 markdown（复用单条导出的行装配），真实 STORED zip 打包
+    let mut entries: Vec<depot_core::zipstore::ZipEntry> = Vec::new();
+    let mut total_bytes = 0usize;
+    for sid in &sids {
+        if let Some(md) = session_markdown(&c, sid) {
+            total_bytes += md.len();
+            let safe: String = sid
+                .chars()
+                .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
+                .take(24)
+                .collect();
+            entries.push(depot_core::zipstore::ZipEntry {
+                name: format!("{safe}.md"),
+                data: md.into_bytes(),
+            });
+        }
+    }
+    let count = entries.len();
+    let zbody = depot_core::zipstore::build_zip(&entries);
     if std::fs::write(&zpath, &zbody).is_err() {
         return jerr(500, "打包失败");
     }
@@ -695,7 +731,7 @@ async fn api_export_batch(State(state): State<Arc<AppState>>, bytes: Bytes) -> R
         item_kind: None, item_name: None, item_version: None, source_id: None, target_id: None,
     });
     jraw(200, json!({"ok": true, "path": zpath.to_string_lossy(), "count": count,
-        "bytes": 0, "zip_bytes": zbody.len()}))
+        "bytes": total_bytes, "zip_bytes": zbody.len()}))
 }
 
 async fn api_stats(State(state): State<Arc<AppState>>) -> Response {
@@ -768,13 +804,15 @@ async fn api_star(State(state): State<Arc<AppState>>, bytes: Bytes) -> Response 
         .ok();
     let Some(cur) = cur else { return jerr(404, "会话不存在") };
     let new_star = 1 - cur;
-    c.execute("UPDATE sessions SET starred=?2 WHERE sid=?1", rusqlite::params![sid, new_star])
-        .map_err(|e| jerr(500, &e.to_string()))
-        .unwrap();
+    if let Err(e) = c.execute("UPDATE sessions SET starred=?2 WHERE sid=?1",
+        rusqlite::params![sid, new_star]) {
+        return jerr(500, &e.to_string());
+    }
     after_write(&state, "hub", false);
     jraw(200, json!({"ok": true, "starred": new_star == 1}))
 }
 
+static REFRESH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 async fn api_refresh(State(state): State<Arc<AppState>>, bytes: Bytes) -> Response {
     let data = body_json(&bytes);
     let tool = data.get("tool").and_then(|t| t.as_str()).map(|s| s.to_string());
@@ -786,6 +824,10 @@ async fn api_refresh(State(state): State<Arc<AppState>>, bytes: Bytes) -> Respon
             return jerr(400, &format!("工具不存在或已停用：{t}"));
         }
     }
+    let _guard = match REFRESH_LOCK.try_lock() {
+        Ok(g) => g,
+        Err(_) => return jraw(409, json!({"ok": false, "error": "刷新正在进行中"})),
+    };
     let c = wc(&state);
     let mut results = Vec::new();
     let tools: Vec<(String, String, Option<String>)> = depot_core::tools::load_tools(&c)
@@ -862,23 +904,28 @@ async fn api_migrate(State(state): State<Arc<AppState>>, bytes: Bytes) -> Respon
     }
     let force = as_bool(data.get("force"));
     if !force {
-        let prior: Option<(String, String)> = c
+        let prior: Option<(String, String, i64, Option<String>)> = c
             .query_row(
-                "SELECT lid, ts FROM migrations WHERE src_tool=?1 AND src_sid=?2 \
-                 AND dst_tool=?3 AND status='ok' ORDER BY id DESC LIMIT 1",
+                "SELECT lid, ts, COALESCE(src_msg_count,0), dst_sid FROM migrations \
+                 WHERE src_tool=?1 AND src_sid=?2 AND dst_tool=?3 AND status='ok' \
+                 ORDER BY id DESC LIMIT 1",
                 rusqlite::params![src_tool, sid, target],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .ok();
-        if let Some((lid, ts)) = prior {
-            let delta: i64 = c
+        if let Some((lid, ts, base, dst_sid)) = prior {
+            let current: i64 = c
                 .query_row("SELECT msg_count FROM sessions WHERE sid=?1", [&sid], |r| r.get(0))
                 .unwrap_or(0);
+            let delta = (current - base).max(0);
             return jraw(200, json!({
                 "ok": false, "duplicate": true,
-                "sync": {"delta": 0, "base_count": delta, "current_count": delta},
-                "error": format!("该会话已于 {} 迁移到 {}（{}）", &ts[..16.min(ts.len())], target, lid),
-                "prior": {"lid": lid, "ts": ts},
+                "sync": {"delta": delta, "base_count": base, "current_count": current,
+                         "last_dst_sid": dst_sid, "last_ts": ts},
+                "error": format!("该会话已于 {} 迁移到 {}（{}）{}",
+                    &ts[..16.min(ts.len())], target, lid,
+                    if delta > 0 { format!("；此后新增 {delta} 条消息，可同步更新") } else { String::new() }),
+                "prior": {"lid": lid, "ts": ts, "src_msg_count": base, "dst_sid": dst_sid},
             }));
         }
     }
@@ -907,20 +954,31 @@ async fn api_migrate(State(state): State<Arc<AppState>>, bytes: Bytes) -> Respon
             }
         }
     };
-    let out = std::process::Command::new("casr")
-        .args(["resume", target, &sid, "--source", &src_tool])
-        .output();
-    let (ok, new_id, output) = match out {
-        Ok(o) => {
-            let text = format!(
-                "{}{}",
-                String::from_utf8_lossy(&o.stdout),
-                String::from_utf8_lossy(&o.stderr)
-            );
-            let new_id = uuid_like(&text);
-            (o.status.code() == Some(0), new_id, text.chars().rev().take(500).collect::<String>().chars().rev().collect::<String>())
-        }
-        Err(e) => (false, None, e.to_string()),
+    // Python migrator.TOOL_TO_CASR：casr 只认短码，不认工具全名
+    let casr_target = match target {
+        "claude" => "cc",
+        "codex" => "cod",
+        "opencode" => "opc",
+        other => other,
+    };
+    let casr_source = match src_tool.as_str() {
+        "claude" => "cc",
+        "codex" => "cod",
+        "opencode" => "opc",
+        other => other,
+    };
+    let cmd_line = format!("casr resume {casr_target} {sid} --source {casr_source}");
+    let out = depot_core::gitsrc::run_cmd(
+        "casr",
+        &["resume", casr_target, sid.as_str(), "--source", &casr_source],
+        None,
+        std::time::Duration::from_secs(120),
+        &[],
+    );
+    let (ok, new_id, output) = {
+        let text = format!("{}{}", out.out, out.err);
+        let new_id = uuid_like(&text);
+        (out.code == 0, new_id, text)
     };
     let _ = c.execute(
         "INSERT INTO migrations(lid, ts, src_tool, src_sid, dst_tool, dst_sid, status, \
@@ -938,8 +996,73 @@ async fn api_migrate(State(state): State<Arc<AppState>>, bytes: Bytes) -> Respon
         item_kind: None, item_name: title.as_deref(),
         item_version: None, source_id: None, target_id: None,
     });
-    jraw(200, json!({"ok": ok, "lid": lid, "new_id": new_id,
-        "output": output.chars().take(2000).collect::<String>()}))
+    let mut resp = json!({"ok": ok, "lid": lid, "cmd": cmd_line,
+        "new_id": new_id,
+        "output": output.chars().take(2000).collect::<String>()});
+    if ok {
+        // 拉起新会话立刻可见：补扫目标工具（Python 成功路径同款动作）
+        let rc_ = state.store.read_conn();
+        let rc__ = rc_.lock().unwrap();
+        if let Some(root) = tool_root_env(target).filter(|p| p.is_dir()) {
+            let _ = depot_sessions::scan_tool(&*rc__, target, &root);
+        }
+        after_write(&state, "hub", true);
+    }
+    jraw(200, resp)
+}
+
+/// 会话 → Markdown（单条导出与批量打包共用）。
+fn session_markdown(c: &rusqlite::Connection, sid: &str) -> Option<String> {
+    let (tool, title, cwd, msg_count): (String, Option<String>, Option<String>, i64) = c
+        .query_row(
+            "SELECT tool, title, cwd, msg_count FROM sessions WHERE sid=?1",
+            [sid],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .ok()?;
+    let messages: Vec<(Option<String>, Option<String>, Option<String>)> = match c.prepare(
+        "SELECT ts, role, content, content_type FROM messages WHERE sid=?1 ORDER BY seq",
+    ) {
+        Ok(mut stmt) => stmt
+            .query_map([sid], |r| {
+                Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?))
+            })
+            .map(|x| x.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default(),
+        Err(_) => vec![],
+    };
+    let toolname = match tool.as_str() {
+        "claude" => "Claude Code",
+        "codex" => "Codex CLI",
+        "opencode" => "OpenCode",
+        other => other,
+    };
+    let mut lines = vec![
+        format!("# {}", title.as_deref().unwrap_or("(无标题)")),
+        String::new(),
+        format!("- 工具: {toolname}"),
+        format!("- 会话 ID: `{sid}`"),
+        format!("- 项目: `{}`", cwd.as_deref().unwrap_or("-")),
+        format!("- 消息数: {msg_count}"),
+        format!("- 导出时间: {}", depot_core::fsutil::now_iso()),
+        String::new(),
+        "---".to_string(),
+        String::new(),
+    ];
+    for (ts, role, content) in messages {
+        let content = content.unwrap_or_default();
+        if content.trim().is_empty() {
+            continue;
+        }
+        let t16 = ts.unwrap_or_default().get(..16).unwrap_or("").to_string().replace('T', " ");
+        let role = role.unwrap_or_else(|| "?".into());
+        lines.push(format!("**{role}**{}", if t16.is_empty() { String::new() } else { format!(" · {t16}") }));
+        lines.push(String::new());
+        lines.push(content);
+        lines.push(String::new());
+    }
+    Some(lines.join("\n") + "\n")
 }
 
 fn msg_count_of(c: &rusqlite::Connection, sid: &str) -> i64 {
@@ -1188,11 +1311,13 @@ async fn api_lineage(State(state): State<Arc<AppState>>, Query(q): Query<HashMap
 
 async fn api_ops(State(state): State<Arc<AppState>>, Query(q): Query<HashMap<String, String>>) -> Response {
     let c = rc(&state);
-    match depot_core::events::query(
+    match depot_core::events::query_filtered(
         &c,
         q.get("module").map(|s| s.as_str()),
         q.get("status").map(|s| s.as_str()),
         q.get("q").map(|s| s.as_str()),
+        q.get("target_id").and_then(|l| l.parse().ok()),
+        q.get("since").map(|s| s.as_str()),
         q.get("limit").and_then(|l| l.parse().ok()).unwrap_or(100),
         q.get("offset").and_then(|l| l.parse().ok()).unwrap_or(0),
     ) {
@@ -1534,10 +1659,6 @@ async fn api_tools_id(State(state): State<Arc<AppState>>, AxPath(tid): AxPath<St
             let mut entries: Vec<Value> = depot_core::tools::get_config(&c, "tools")
                 .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
                 .unwrap_or_default();
-            let mut ent = entries
-                .iter_mut()
-                .find(|e| e["id"].as_str() == Some(tid.as_str()))
-                .map(|e| e.clone());
             if let Some(nm) = data.get("name").and_then(|n| n.as_str()).filter(|s| !s.is_empty()) {
                 tool["name"] = json!(nm.chars().take(60).collect::<String>());
             }
@@ -1552,7 +1673,8 @@ async fn api_tools_id(State(state): State<Arc<AppState>>, AxPath(tid): AxPath<St
                     tool[k] = v.clone();
                 }
             }
-            match ent.as_mut() {
+            // 覆盖项原地修改（此前 clone 后丢弃 → 已存在自定义工具的 PATCH 静默失效）
+            match entries.iter_mut().find(|e| e["id"].as_str() == Some(tid.as_str())) {
                 Some(e) => {
                     for k in ["name", "enabled", "skills_dir", "mcp_config", "mcp_format"] {
                         if let Some(v) = data.get(k) {
@@ -1567,13 +1689,11 @@ async fn api_tools_id(State(state): State<Arc<AppState>>, AxPath(tid): AxPath<St
                             e[k] = v.clone();
                         }
                     }
-                    entries.push(e.clone());
-                    ent = Some(e);
+                    entries.push(e);
                 }
                 None => return jerr(404, &format!("工具不存在：{tid}")),
             }
             depot_core::tools::save_tools(&c, &entries);
-            let _ = ent;
             let _ = depot_core::events::append(&c, &depot_core::events::Event {
                 module: "tools", actor: "local", kind: "update", subject: None, outcome: "ok",
                 error_code: None, extra: json!({"tool": tid}),
@@ -1589,6 +1709,48 @@ async fn api_tools_id(State(state): State<Arc<AppState>>, AxPath(tid): AxPath<St
             if tool.get("builtin").and_then(|b| b.as_bool()).unwrap_or(false) {
                 return jerr(400, "内置工具不可移除（可停用）");
             }
+            let data = body_json(&bytes);
+            // purge=1：先导出备份 zip，再清该工具已采集的会话/消息/游标（Python remove_tool 对位）
+            let purge = as_bool(data.get("purge"));
+            let mut purge_stats = json!({"purged": false, "sessions": 0, "messages": 0,
+                "backup": Value::Null});
+            if purge {
+                let sids: Vec<String> = list_sessions(&c, Some(&tid), None)
+                    .iter()
+                    .filter_map(|x| x["sid"].as_str().map(|s| s.to_string()))
+                    .collect();
+                let n_msg: i64 = c
+                    .query_row("SELECT COUNT(*) FROM messages WHERE tool=?1", [&tid], |r| r.get(0))
+                    .unwrap_or(0);
+                purge_stats["sessions"] = json!(sids.len());
+                purge_stats["messages"] = json!(n_msg);
+                if !sids.is_empty() {
+                    // 备份 zip（删除前自动导出）
+                    let export_dir = depot_core::paths::hub_dir().join("exports");
+                    let _ = std::fs::create_dir_all(&export_dir);
+                    let zpath = export_dir.join(format!(
+                        "purge-{}-{}.zip", tid,
+                        chrono::Local::now().format("%Y%m%d-%H%M%S")));
+                    let mut entries = Vec::new();
+                    for sid in &sids {
+                        if let Some(md) = session_markdown(&c, sid) {
+                            entries.push(depot_core::zipstore::ZipEntry {
+                                name: format!("{}.md", sid),
+                                data: md.into_bytes(),
+                            });
+                        }
+                    }
+                    let _ = std::fs::write(&zpath, depot_core::zipstore::build_zip(&entries));
+                    purge_stats["backup"] = json!(zpath.to_string_lossy());
+                }
+                let _ = c.execute("DELETE FROM messages WHERE tool=?1", [&tid]);
+                let _ = c.execute("DELETE FROM sessions WHERE tool=?1", [&tid]);
+                let _ = c.execute(
+                    "DELETE FROM cursor WHERE source_key LIKE ?1",
+                    [format!("{tid}:%")],
+                );
+                purge_stats["purged"] = json!(true);
+            }
             let entries: Vec<Value> = depot_core::tools::get_config(&c, "tools")
                 .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
                 .unwrap_or_default()
@@ -1596,15 +1758,26 @@ async fn api_tools_id(State(state): State<Arc<AppState>>, AxPath(tid): AxPath<St
                 .filter(|e| e["id"].as_str() != Some(tid.as_str()))
                 .collect();
             depot_core::tools::save_tools(&c, &entries);
+            // 关联 targets 处置：登记来源 tool:<id> 的目标一并移除（Python _sync_tool_targets 对位）
+            let targets_removed: Vec<String> = match c
+                .prepare("SELECT name FROM targets WHERE tool=?1")
+            {
+                Ok(mut stmt) => stmt
+                    .query_map([&tid], |r| r.get::<_, String>(0))
+                    .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                    .unwrap_or_default(),
+                Err(_) => vec![],
+            };
+            let _ = c.execute("DELETE FROM targets WHERE tool=?1", [&tid]);
             let _ = depot_core::events::append(&c, &depot_core::events::Event {
                 module: "tools", actor: "local", kind: "remove", subject: None, outcome: "ok",
-                error_code: None, extra: json!({"tool": tid, "purged": false}),
+                error_code: None, extra: json!({"tool": tid, "purged": purge}),
                 item_kind: None, item_name: None, item_version: None,
                 source_id: None, target_id: None,
             });
             after_write(&state, "hub", true);
-            jraw(200, json!({"ok": true, "stats": {"purged": false, "sessions": 0,
-                "messages": 0, "backup": Value::Null}}))
+            jraw(200, json!({"ok": true, "removed": tid, "purge": purge_stats,
+                "targets_removed": targets_removed, "targets_kept": []}))
         }
         _ => jerr(404, "not found"),
     }
@@ -1790,12 +1963,12 @@ async fn api_remote_repos(State(state): State<Arc<AppState>>, method: Method, by
             if dup {
                 return jraw(400, json!({"ok": false, "error": "该仓库已存在，请在列表里直接编辑"}));
             }
-            c.execute(
+            if let Err(e) = c.execute(
                 "INSERT INTO remote_repos(name, url, branch, subdir, created_at) VALUES(?,?,?,?,?)",
                 rusqlite::params![name, url, branch, subdir, depot_core::fsutil::now_iso()],
-            )
-            .map_err(|e| jerr(500, &e.to_string()))
-            .unwrap();
+            ) {
+                return jerr(500, &e.to_string());
+            }
             let rid = c.last_insert_rowid();
             for kind in &modules {
                 let _ = c.execute(
@@ -2016,12 +2189,12 @@ async fn api_local_dirs_link(State(state): State<Arc<AppState>>, bytes: Bytes) -
     if dup {
         return jraw(400, json!({"ok": false, "error": "已存在同名/同路径目录"}));
     }
-    c.execute(
+    if let Err(e) = c.execute(
         "INSERT INTO local_dirs(name, path, origin, created_at) VALUES(?,?,?,?)",
         rusqlite::params![name, real.to_string_lossy(), "linked", depot_core::fsutil::now_iso()],
-    )
-    .map_err(|e| jerr(500, &format!("登记失败：{e}")))
-    .unwrap();
+    ) {
+        return jerr(500, &format!("登记失败：{e}"));
+    }
     let did = c.last_insert_rowid();
     let scan = depot_skills::scan_sync(&c, &depot_core::paths::hub_dir(), did, &name, &real)
         .unwrap_or(json!({}));
@@ -2196,12 +2369,12 @@ fn skills_route(
     if path == "/api/skills/sources" {
         return match *method {
             Method::GET => jraw(200, json!({"ok": true, "sources": ex::list_sources(c)})),
-            Method::POST => wrap(ex::add_source(c,
+            Method::POST => wrap_res(ex::add_source(c,
                 data.get("name").and_then(|n| n.as_str()),
                 data.get("url").and_then(|n| n.as_str()),
                 data.get("branch").and_then(|n| n.as_str()),
                 data.get("subdir").and_then(|n| n.as_str()),
-                data.get("auth_ref").and_then(|n| n.as_str())).unwrap()),
+                data.get("auth_ref").and_then(|n| n.as_str()))),
             _ => unknown("skills", m, path),
         };
     }
@@ -2209,13 +2382,13 @@ fn skills_route(
         let (sid, tail) = rest.split_once('/').unwrap_or((rest, ""));
         let Ok(sid) = sid.parse::<i64>() else { return jerr(400, "非法 source id") };
         return match (tail, method.clone()) {
-            ("pull", Method::POST) => wrap(ex::pull_source(c, hub, sid,
+            ("pull", Method::POST) => wrap_res(ex::pull_source(c, hub, sid,
                 as_bool(data.get("force")),
-                data.get("removed_action").and_then(|f| f.as_str())).unwrap()),
-            ("sync-local", Method::POST) => wrap(ex::sync_from_cache(c, hub, sid).unwrap()),
-            ("", Method::PATCH) => wrap(ex::update_source(c, sid, data).unwrap()),
-            ("", Method::DELETE) => wrap(ex::delete_source(c, hub, sid,
-                data.get("removed_action").and_then(|f| f.as_str())).unwrap()),
+                data.get("removed_action").and_then(|f| f.as_str()))),
+            ("sync-local", Method::POST) => wrap_res(ex::sync_from_cache(c, hub, sid)),
+            ("", Method::PATCH) => wrap_res(ex::update_source(c, sid, data)),
+            ("", Method::DELETE) => wrap_res(ex::delete_source(c, hub, sid,
+                data.get("removed_action").and_then(|f| f.as_str()))),
             _ => unknown("skills", m, path),
         };
     }
@@ -2250,32 +2423,32 @@ fn skills_route(
         let Some(name) = data.get("name").and_then(|n| n.as_str()) else {
             return jerr(400, "name 必填");
         };
-        return wrap(depot_skills::rollback_registry(c, hub, name, "local").unwrap());
+        return wrap_res(depot_skills::rollback_registry(c, hub, name, "local"));
     }
     if path == "/api/skills/diff" && *method == Method::GET {
         let Some(name) = qget(q, "name") else { return jerr(400, "name 必填") };
-        return wrap(ex::diff_registry_vs_source(c, hub, &name, None).unwrap());
+        return wrap_res(ex::diff_registry_vs_source(c, hub, &name, None));
     }
     if path == "/api/skills/registry/item" && *method == Method::POST {
-        return wrap(depot_skills::create_manual(c, hub,
+        return wrap_res(depot_skills::create_manual(c, hub,
             data.get("name").and_then(|n| n.as_str()).unwrap_or(""),
             data.get("description").and_then(|n| n.as_str()).unwrap_or(""),
             data.get("files").unwrap_or(&json!({})),
-            data.get("dir_id").and_then(|d| d.as_i64()), "local").unwrap());
+            data.get("dir_id").and_then(|d| d.as_i64()), "local"));
     }
     if path == "/api/skills/registry/import" && *method == Method::POST {
-        return wrap(ex::import_local(c, hub,
+        return wrap_res(ex::import_local(c, hub,
             data.get("path").and_then(|n| n.as_str()),
             data.get("name").and_then(|n| n.as_str()),
             as_bool(data.get("overwrite")),
-            data.get("dir_id").and_then(|d| d.as_i64())).unwrap());
+            data.get("dir_id").and_then(|d| d.as_i64())));
     }
     if let Some(rest) = path.strip_prefix("/api/skills/registry/item/") {
         return match *method {
-            Method::PUT => wrap(depot_skills::update_manual(c, hub, rest,
-                data.get("files").unwrap_or(&json!({})), "local").unwrap()),
-            Method::DELETE => wrap(depot_skills::delete_manual(c, hub, rest,
-                as_bool(data.get("force")), "local").unwrap()),
+            Method::PUT => wrap_res(depot_skills::update_manual(c, hub, rest,
+                data.get("files").unwrap_or(&json!({})), "local")),
+            Method::DELETE => wrap_res(depot_skills::delete_manual(c, hub, rest,
+                as_bool(data.get("force")), "local")),
             _ => unknown("skills", m, path),
         };
     }
@@ -2304,9 +2477,9 @@ fn skills_route(
                 let tids: Vec<i64> = data.get("target_ids").and_then(|t| t.as_array())
                     .map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
                     .unwrap_or_default();
-                return wrap(ex::bind_dirs_full(c, hub, did, &tids,
+                return wrap_res(ex::bind_dirs_full(c, hub, did, &tids,
                     data.get("mode").and_then(|x| x.as_str()).unwrap_or("copy"),
-                    as_bool(data.get("force"))).unwrap());
+                    as_bool(data.get("force"))));
             }
             _ => unknown("skills", m, path),
         };
@@ -2320,14 +2493,14 @@ fn skills_route(
         return match (tail, method.clone()) {
             ("", Method::PATCH) => {
                 if data.get("excluded").is_some() {
-                    wrap(ex::set_binding_excluded(c, hub, bid, data.get("excluded").unwrap()).unwrap())
+                    wrap_res(ex::set_binding_excluded(c, hub, bid, data.get("excluded").unwrap_or(&Value::Null)))
                 } else if data.get("channels").is_some() {
-                    wrap(ex::set_binding_channels(c, hub, bid, data.get("channels").unwrap()).unwrap())
+                    wrap_res(ex::set_binding_channels(c, hub, bid, data.get("channels").unwrap_or(&Value::Null)))
                 } else {
-                    wrap(ex::set_binding_enabled(c, bid, as_bool(data.get("enabled"))).unwrap())
+                    wrap_res(ex::set_binding_enabled(c, bid, as_bool(data.get("enabled"))))
                 }
             }
-            ("", Method::DELETE) => wrap(ex::unbind(c, hub, bid, as_bool(data.get("clean"))).unwrap()),
+            ("", Method::DELETE) => wrap_res(ex::unbind(c, hub, bid, as_bool(data.get("clean")))),
             ("sync", Method::POST) => {
                 let bindings = ex::list_dir_bindings(c, None);
                 let Some(b) = bindings.iter().find(|b| b["id"] == json!(bid)) else {
@@ -2370,12 +2543,12 @@ fn skills_route(
                     .collect();
                 jraw(200, json!({"ok": true, "targets": targets}))
             }
-            Method::POST => wrap(depot_skills::add_target(c,
+            Method::POST => wrap_res(depot_skills::add_target(c,
                 data.get("name").and_then(|n| n.as_str()).unwrap_or(""),
                 data.get("kind").and_then(|n| n.as_str()).unwrap_or(""),
                 data.get("tool").and_then(|n| n.as_str()),
                 data.get("path").and_then(|n| n.as_str()).unwrap_or(""),
-                data.get("format_key").and_then(|n| n.as_str())).unwrap()),
+                data.get("format_key").and_then(|n| n.as_str()))),
             _ => unknown("skills", m, path),
         };
     }
@@ -2385,8 +2558,8 @@ fn skills_route(
     if let Some(tid) = path.strip_prefix("/api/skills/targets/") {
         if *method == Method::DELETE {
             let Ok(tid) = tid.parse::<i64>() else { return jerr(400, "非法 target id") };
-            return wrap(ex::delete_target(c, tid,
-                as_bool(data.get("force"))).unwrap());
+            return wrap_res(ex::delete_target(c, tid,
+                as_bool(data.get("force"))));
         }
         return unknown("skills", m, path);
     }
@@ -2399,7 +2572,7 @@ fn skills_route(
         let names: Vec<String> = data.get("names").and_then(|n| n.as_array())
             .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
             .unwrap_or_default();
-        return wrap(ex::extract(c, hub, tool, &names).unwrap());
+        return wrap_res(ex::extract(c, hub, tool, &names));
     }
     if path == "/api/skills/tool-sync" && *method == Method::POST {
         let tool = data.get("tool").and_then(|t| t.as_str()).unwrap_or("");
@@ -2409,8 +2582,8 @@ fn skills_route(
         let tids: Vec<i64> = data.get("target_ids").and_then(|t| t.as_array())
             .map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
             .unwrap_or_default();
-        return wrap(ex::sync_to_targets(c, hub, tool, &names, &tids,
-            data.get("mode").and_then(|x| x.as_str()).unwrap_or("copy")).unwrap());
+        return wrap_res(ex::sync_to_targets(c, hub, tool, &names, &tids,
+            data.get("mode").and_then(|x| x.as_str()).unwrap_or("copy")));
     }
     if path == "/api/skills/distribute" && *method == Method::POST {
         let names: Vec<String> = data.get("names").and_then(|n| n.as_array())
@@ -2443,12 +2616,12 @@ fn mcp_route(
     if path == "/api/mcp/sources" {
         return match *method {
             Method::GET => jraw(200, json!({"ok": true, "sources": ex::list_sources(c)})),
-            Method::POST => wrap(ex::add_source(c,
+            Method::POST => wrap_res(ex::add_source(c,
                 data.get("name").and_then(|n| n.as_str()),
                 data.get("url").and_then(|n| n.as_str()),
                 data.get("branch").and_then(|n| n.as_str()),
                 data.get("subdir").and_then(|n| n.as_str()),
-                data.get("auth_ref").and_then(|n| n.as_str())).unwrap()),
+                data.get("auth_ref").and_then(|n| n.as_str()))),
             _ => unknown("mcp", m, path),
         };
     }
@@ -2456,10 +2629,10 @@ fn mcp_route(
         let (sid, tail) = rest.split_once('/').unwrap_or((rest, ""));
         let Ok(sid) = sid.parse::<i64>() else { return jerr(400, "非法 source id") };
         return match (tail, method.clone()) {
-            ("pull", Method::POST) => wrap(ex::pull_source(c, hub, sid,
-                data.get("removed_action").and_then(|f| f.as_str())).unwrap()),
-            ("", Method::PATCH) => wrap(ex::update_source(c, sid, data).unwrap()),
-            ("", Method::DELETE) => wrap(ex::delete_source(c, hub, sid).unwrap()),
+            ("pull", Method::POST) => wrap_res(ex::pull_source(c, hub, sid,
+                data.get("removed_action").and_then(|f| f.as_str()))),
+            ("", Method::PATCH) => wrap_res(ex::update_source(c, sid, data)),
+            ("", Method::DELETE) => wrap_res(ex::delete_source(c, hub, sid)),
             _ => unknown("mcp", m, path),
         };
     }
@@ -2494,7 +2667,7 @@ fn mcp_route(
         let Some(name) = data.get("name").and_then(|n| n.as_str()) else {
             return jerr(400, "name 必填");
         };
-        return wrap(depot_mcp::rollback_registry(c, name, "local").unwrap());
+        return wrap_res(depot_mcp::rollback_registry(c, name, "local"));
     }
     if path == "/api/mcp/verify" && *method == Method::POST {
         let Some(name) = data.get("name").and_then(|n| n.as_str()) else {
@@ -2518,17 +2691,17 @@ fn mcp_route(
         return unknown("mcp", m, path);
     }
     if path == "/api/mcp/registry/item" && *method == Method::POST {
-        return wrap(depot_mcp::create_manual(c,
+        return wrap_res(depot_mcp::create_manual(c,
             data.get("name").and_then(|n| n.as_str()).unwrap_or(""),
             data.get("config").unwrap_or(&json!({})),
-            data.get("dir_id").and_then(|d| d.as_i64()), "local").unwrap());
+            data.get("dir_id").and_then(|d| d.as_i64()), "local"));
     }
     if let Some(rest) = path.strip_prefix("/api/mcp/registry/item/") {
         return match *method {
-            Method::PUT => wrap(depot_mcp::update_manual(c, rest,
-                data.get("config").unwrap_or(&json!({})), "local").unwrap()),
-            Method::DELETE => wrap(depot_mcp::delete_manual(c, rest,
-                as_bool(data.get("force")), "local").unwrap()),
+            Method::PUT => wrap_res(depot_mcp::update_manual(c, rest,
+                data.get("config").unwrap_or(&json!({})), "local")),
+            Method::DELETE => wrap_res(depot_mcp::delete_manual(c, rest,
+                as_bool(data.get("force")), "local")),
             _ => unknown("mcp", m, path),
         };
     }
@@ -2560,12 +2733,12 @@ fn mcp_route(
                     .collect();
                 jraw(200, json!({"ok": true, "targets": targets}))
             }
-            Method::POST => wrap(depot_skills::add_target(c,
+            Method::POST => wrap_res(depot_skills::add_target(c,
                 data.get("name").and_then(|n| n.as_str()).unwrap_or(""),
                 data.get("kind").and_then(|n| n.as_str()).unwrap_or(""),
                 data.get("tool").and_then(|n| n.as_str()),
                 data.get("path").and_then(|n| n.as_str()).unwrap_or(""),
-                data.get("format_key").and_then(|n| n.as_str())).unwrap()),
+                data.get("format_key").and_then(|n| n.as_str()))),
             _ => unknown("mcp", m, path),
         };
     }
@@ -2575,8 +2748,8 @@ fn mcp_route(
     if let Some(tid) = path.strip_prefix("/api/mcp/targets/") {
         if *method == Method::DELETE {
             let Ok(tid) = tid.parse::<i64>() else { return jerr(400, "非法 target id") };
-            return wrap(ex::delete_target(c, tid,
-                as_bool(data.get("force"))).unwrap());
+            return wrap_res(ex::delete_target(c, tid,
+                as_bool(data.get("force"))));
         }
         return unknown("mcp", m, path);
     }
@@ -2588,7 +2761,7 @@ fn mcp_route(
         let names: Vec<String> = data.get("names").and_then(|n| n.as_array())
             .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
             .unwrap_or_default();
-        return wrap(ex::extract(c, tool, &names).unwrap());
+        return wrap_res(ex::extract(c, tool, &names));
     }
     if path == "/api/mcp/tool-sync" && *method == Method::POST {
         let tool = data.get("tool").and_then(|t| t.as_str()).unwrap_or("");
@@ -2598,7 +2771,7 @@ fn mcp_route(
         let tids: Vec<i64> = data.get("target_ids").and_then(|t| t.as_array())
             .map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
             .unwrap_or_default();
-        return wrap(ex::sync_to_targets(c, tool, &names, &tids).unwrap());
+        return wrap_res(ex::sync_to_targets(c, tool, &names, &tids));
     }
     if path == "/api/mcp/distribute" && *method == Method::POST {
         let names: Vec<String> = data.get("names").and_then(|n| n.as_array())
@@ -2661,11 +2834,11 @@ fn memory_route(
                 if !row {
                     jerr(404, "条目不存在")
                 } else {
-                    wrap(depot_memory::get_item_full(c, iid).unwrap())
+                    wrap_res(depot_memory::get_item_full(c, iid))
                 }
             }
-            ("", Method::PUT) => wrap(depot_memory::edit_item(c, iid,
-                data.get("content").and_then(|x| x.as_str()).unwrap_or("")).unwrap()),
+            ("", Method::PUT) => wrap_res(depot_memory::edit_item(c, iid,
+                data.get("content").and_then(|x| x.as_str()).unwrap_or(""))),
             ("", Method::DELETE) => {
                 let row: bool = c
                     .query_row("SELECT 1 FROM memory_items WHERE id=?1", [iid], |_| Ok(true))
@@ -2673,10 +2846,10 @@ fn memory_route(
                 if !row {
                     jerr(404, "条目不存在")
                 } else {
-                    wrap(depot_memory::delete_item(c, iid).unwrap())
+                    wrap_res(depot_memory::delete_item(c, iid))
                 }
             }
-            ("adopt", Method::POST) => wrap(depot_memory::adopt_source(c, iid).unwrap()),
+            ("adopt", Method::POST) => wrap_res(depot_memory::adopt_source(c, iid)),
             _ => jraw(404, json!({"ok": false, "error": format!("memory: 未知路由 {m} {path}")})),
         };
     }

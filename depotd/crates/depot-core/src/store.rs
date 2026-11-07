@@ -16,12 +16,19 @@ pub struct Store {
     write: Arc<Mutex<Connection>>,
     /// 只读连接池（WAL 并发读）。
     readers: Vec<Arc<Mutex<Connection>>>,
+    /// 'static 引用（open 时一次性提升；池与进程同寿，守卫可安全跨作用域返回）。
+    /// SAFETY：Arc::into_raw 消费一份 +1 的引用计数且永不归还——引用计数永不
+    /// 归零即 'static 成立；仅本函数单点构造。
+    write_static: &'static Mutex<Connection>,
+    readers_static: Vec<&'static Mutex<Connection>>,
     next_reader: std::sync::atomic::AtomicUsize,
     pub hub_dir: PathBuf,
 }
 
 const SCHEMA_V1: &str = r#"
--- v3 严格化：外键开启；结构对齐 legacy hub.db（Tier 1 数据面），新增 event_log。
+-- v3 严格化：结构对齐 legacy hub.db（Tier 1 数据面），新增 event_log 与
+-- schedule（死表占位：schedule 实际存 config 表，见 tools::get_config）。
+-- legacy `ops` 表由 event_log 替代（迁移器投影历史行）。
 CREATE TABLE IF NOT EXISTS sessions (
   sid TEXT PRIMARY KEY,
   tool TEXT NOT NULL,
@@ -238,6 +245,12 @@ CREATE TABLE IF NOT EXISTS deployments (
   UNIQUE(item_kind, item_name, target_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_migrations_src ON migrations(src_tool, src_sid);
+CREATE INDEX IF NOT EXISTS idx_migrations_dst ON migrations(dst_tool, dst_sid);
+CREATE INDEX IF NOT EXISTS idx_migrations_lid ON migrations(lid);
+CREATE INDEX IF NOT EXISTS idx_memory_items_tool ON memory_items(source_tool, kind, scope);
+CREATE INDEX IF NOT EXISTS idx_memory_deploy_item ON memory_deployments(item_id);
+
 CREATE TABLE IF NOT EXISTS ledger (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ts TEXT NOT NULL,
@@ -293,12 +306,20 @@ impl Store {
             .execute_batch(SCHEMA_V1)
             .map_err(CoreError::from)?;
         let mut readers = Vec::new();
+        let mut readers_static = Vec::new();
         for _ in 0..read_pool_size.max(1) {
-            readers.push(Arc::new(Mutex::new(Self::open_conn(db_path, true)?)));
+            let r = Arc::new(Mutex::new(Self::open_conn(db_path, true)?));
+            readers_static.push(unsafe { &*Arc::into_raw(r.clone()) });
+            readers.push(r);
         }
+        let write_arc = Arc::new(Mutex::new(write));
+        let write_static: &'static Mutex<Connection> =
+            unsafe { &*Arc::into_raw(write_arc.clone()) };
         Ok(Store {
-            write: Arc::new(Mutex::new(write)),
+            write: write_arc,
             readers,
+            write_static,
+            readers_static,
             next_reader: std::sync::atomic::AtomicUsize::new(0),
             hub_dir: db_path.parent().unwrap_or(Path::new(".")).to_path_buf(),
         })
@@ -354,6 +375,19 @@ impl Store {
             .next_reader
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Arc::clone(&self.readers[i % self.readers.len()])
+    }
+
+    /// 'static 只读连接引用（守卫可跨作用域返回，无需 unsafe）。
+    pub fn read_static(&self) -> &'static Mutex<Connection> {
+        let i = self
+            .next_reader
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.readers_static[i % self.readers_static.len()]
+    }
+
+    /// 'static 写连接引用。
+    pub fn write_static(&self) -> &'static Mutex<Connection> {
+        self.write_static
     }
 
     /// 停机：checkpoint 收回 WAL（评审 M6）。

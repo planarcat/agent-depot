@@ -64,19 +64,41 @@ pub fn query(
     limit: usize,
     offset: usize,
 ) -> Result<(usize, Vec<serde_json::Value>)> {
+    query_filtered(conn, module, status, q, None, None, limit, offset)
+}
+
+/// 全参版（target_id/since 过滤 + target_name/source_name join，对位 Python query_ops）。
+pub fn query_filtered(
+    conn: &Connection,
+    module: Option<&str>,
+    status: Option<&str>,
+    q: Option<&str>,
+    target_id: Option<i64>,
+    since: Option<&str>,
+    limit: usize,
+    offset: usize,
+) -> Result<(usize, Vec<serde_json::Value>)> {
+    // 列名一律 e. 前缀（join targets/sources 后 kind/target_id 会歧义）
     let mut where_clauses: Vec<String> = vec![];
     if let Some(m) = module.filter(|m| !m.is_empty() && *m != "all") {
-        where_clauses.push(format!("module = '{}'", m.replace("'", "")));
+        where_clauses.push(format!("e.module = '{}'", m.replace("'", "")));
     }
     if let Some(st) = status.filter(|s| !s.is_empty() && *s != "all") {
-        where_clauses.push(format!("outcome = '{}'", st.replace("'", "")));
+        where_clauses.push(format!("e.outcome = '{}'", st.replace("'", "")));
     }
     if let Some(qs) = q.filter(|s| !s.is_empty()) {
         let esc = qs.replace("'", "").replace('%', "");
         where_clauses.push(format!(
-            "(IFNULL(item_name,'') LIKE '%{}%' OR kind LIKE '%{}%' OR IFNULL(reason,'') LIKE '%{}%' OR IFNULL(payload,'') LIKE '%{}%')",
+            "(IFNULL(e.item_name,'') LIKE '%{}%' OR e.kind LIKE '%{}%' OR IFNULL(e.reason,'') LIKE '%{}%' OR IFNULL(e.payload,'') LIKE '%{}%')",
             esc, esc, esc, esc
         ));
+    }
+    if let Some(tid) = target_id {
+        where_clauses.push(format!("e.target_id = {tid}"));
+    }
+    if let Some(sv) = since.filter(|s| !s.is_empty()) {
+        let esc = sv.replace('\'', "");
+        where_clauses.push(format!("e.ts >= '{esc}'"));
     }
     let where_sql = if where_clauses.is_empty() {
         String::new()
@@ -85,14 +107,20 @@ pub fn query(
     };
     let total: usize = conn
         .query_row(
-            &format!("SELECT COUNT(*) FROM event_log {}", where_sql),
+            &format!("SELECT COUNT(*) FROM event_log e {}", where_sql),
             [],
             |r| r.get(0),
         )
         .map_err(CE::from)?;
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT id, ts, module, actor, kind, item_kind, item_name, item_version, source_id, target_id, outcome, error_code, reason, payload FROM event_log {} ORDER BY id DESC LIMIT ?1 OFFSET ?2",
+            "SELECT e.id, e.ts, e.module, e.actor, e.kind, e.item_kind, e.item_name, \
+             e.item_version, e.source_id, e.target_id, e.outcome, e.error_code, e.reason, e.payload, \
+             t.name, s.name \
+             FROM event_log e \
+             LEFT JOIN targets t ON t.id = e.target_id \
+             LEFT JOIN sources s ON s.id = e.source_id \
+             {} ORDER BY e.id DESC LIMIT ?1 OFFSET ?2",
             where_sql
         ))
         .map_err(CE::from)?;
@@ -117,6 +145,8 @@ pub fn query(
                 "reason": r.get::<_, Option<String>>(12)?,
                 "detail": payload,
                 "extra": extra.get("extra").cloned().unwrap_or(serde_json::json!({})),
+                "target_name": r.get::<_, Option<String>>(14)?,
+                "source_name": r.get::<_, Option<String>>(15)?,
             }))
         })
         .map_err(CE::from)?;

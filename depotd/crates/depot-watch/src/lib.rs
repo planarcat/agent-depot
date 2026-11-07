@@ -72,6 +72,7 @@ pub struct Watcher {
     rev: AtomicU64,
     events: AtomicU64,
     resyncs: AtomicU64,
+    failed_watches: AtomicU64,
     backend: &'static str,
     debouncer: Mutex<Option<Debouncer<notify::RecommendedWatcher, RecommendedCache>>>,
 }
@@ -89,6 +90,7 @@ impl Watcher {
             rev: AtomicU64::new(0),
             events: AtomicU64::new(0),
             resyncs: AtomicU64::new(0),
+            failed_watches: AtomicU64::new(0),
             backend: "notify",
             debouncer: Mutex::new(None),
         })
@@ -139,9 +141,11 @@ impl Watcher {
             seen
         };
         let me = Arc::clone(self);
+        let failed_counter = Arc::clone(&me);
         let mut guard = self.debouncer.lock().unwrap();
         match new_debouncer(DEBOUNCE, None, move |events| me.on_events(events)) {
             Ok(mut d) => {
+                let mut failed = 0usize;
                 for p in &paths {
                     let mode = if p.is_dir() {
                         RecursiveMode::Recursive
@@ -149,13 +153,21 @@ impl Watcher {
                         // 文件根：监控父目录（非递归）
                         match p.parent() {
                             Some(parent) => {
-                                let _ = d.watch(parent, RecursiveMode::NonRecursive);
+                                if d.watch(parent, RecursiveMode::NonRecursive).is_err() {
+                                    failed += 1;
+                                }
                                 continue;
                             }
                             None => continue,
                         }
                     };
-                    let _ = d.watch(p, mode);
+                    if d.watch(p, mode).is_err() {
+                        failed += 1; // watch 描述符耗尽等：该根从此无事件
+                    }
+                }
+                if failed > 0 {
+                    tracing::error!("watcher 注册失败 {} 个根（将仅靠 manifest 兜底轮询）", failed);
+                    failed_counter.failed_watches.store(failed as u64, Ordering::Relaxed);
                 }
                 *guard = Some(d);
             }
@@ -320,7 +332,8 @@ impl Watcher {
             "watched": watched,
             "fds": 0,
             "subs": self.subscriber_count(),
-            "degraded": false,
+            "degraded": self.failed_watches.load(Ordering::Relaxed) > 0,
+            "failed_watches": self.failed_watches.load(Ordering::Relaxed),
         })
     }
 

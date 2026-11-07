@@ -1098,24 +1098,10 @@ pub fn dep_stale(conn: &Connection, name: &str, dep: &Value, target: Option<&Val
                 .or_else(|| t.get("format_key").and_then(|f| f.as_str()).map(|s| s.to_string()))
                 .unwrap_or_else(|| "mcpServers".into());
             let Some(mut data) = data else { return false };
-            let mut ok = true;
-            let mut cursor: *mut serde_json::Value = &mut data;
-            for part in fmt_key.split('.') {
-                let c: &mut serde_json::Value = unsafe { &mut *cursor };
-                match c.get_mut(part) {
-                    Some(v) if v.is_object() => cursor = v as *mut serde_json::Value,
-                    _ => {
-                        ok = false;
-                        break;
-                    }
-                }
-            }
-            if ok {
-                let c: &serde_json::Value = unsafe { &*cursor };
-                let found = c.get(name).cloned();
-                if let Some(v) = found {
-                    return v != cfg;
-                }
+            // 与 lib.rs section_get 同口径的下钻（无 unsafe）
+            let section = crate::section_get(&mut data, &fmt_key);
+            if let Some(v) = section.get(name) {
+                return *v != cfg;
             }
         } else {
             let text = std::fs::read_to_string(&path).unwrap_or_default();

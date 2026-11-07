@@ -645,16 +645,38 @@ fn materialize(
     }
     let _ = std::fs::create_dir_all(&tmp);
     let mut written = BTreeMap::new();
+    let mut failed_files: Vec<String> = Vec::new();
+    let expected = files
+        .keys()
+        .filter(|rel| prefix.is_empty() || rel.starts_with(&prefix))
+        .count();
     for (rel, _blob) in &files {
         if !prefix.is_empty() && !rel.starts_with(&prefix) {
             continue;
         }
         let rel_short = if prefix.is_empty() { rel.as_str() } else { &rel[prefix.len()..] };
-        let Some(data) = gitsrc::show_bytes(&cache, commit, rel) else { continue };
+        let Some(data) = gitsrc::show_bytes(&cache, commit, rel) else {
+            failed_files.push(rel_short.to_string());
+            continue;
+        };
         let target = tmp.join(rel_short);
-        if fsutil::atomic_write_bytes(&target, &data).is_ok() {
-            written.insert(rel_short.to_string(), fsutil::sha256_bytes(&data));
+        match fsutil::atomic_write_bytes(&target, &data) {
+            Ok(()) => {
+                written.insert(rel_short.to_string(), fsutil::sha256_bytes(&data));
+            }
+            Err(e) => failed_files.push(format!("{rel_short}: {e}")),
         }
+    }
+    // 半装守卫：成功数 < 期望数 → 不换目录、不返回残缺树（否则 registry 记错误
+    // hash，之后每次同步都 conflict-local-modified）
+    if written.len() < expected {
+        let _ = fsutil::safe_rm(&tmp, hub);
+        return Err(format!(
+            "物化不完整：{}/{} 文件写入成功；失败：{}",
+            written.len(),
+            expected,
+            failed_files.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+        ));
     }
     if dest.is_dir() {
         let vroot = depot_core::paths::versions_root(hub, KIND, name);
@@ -1437,10 +1459,29 @@ pub fn sync_binding_full(conn: &Connection, hub: &Path, b: &Value, force: bool) 
     let binding_id = b["id"].as_i64().unwrap_or(0);
     let dir_id = b["dir_id"].as_i64().unwrap_or(0);
     let target_id = b["target_id"].as_i64().unwrap_or(0);
-    let excluded: BTreeSet<String> = b["excluded"]
-        .as_array()
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
-        .unwrap_or_default();
+    // excluded 是 JSON 字符串列：解析失败 = 数据损坏，拒绝同步（空集会让用户
+    // 明确排除的条目被强制分发——越权写入）
+    let excluded: BTreeSet<String> = match b["excluded"] {
+        Value::String(ref raw) => match serde_json::from_str::<Vec<String>>(raw) {
+            Ok(list) => list.into_iter().collect(),
+            Err(e) => {
+                let _ = events::append(conn, &Event { module: MODULE,
+                    actor: "local", kind: "binding:sync", subject: None,
+                    outcome: "failed", error_code: None,
+                    extra: json!({"binding": binding_id,
+                        "reason": format!("excluded 数据损坏：{e}")}),
+                    item_version: None, source_id: None,
+                    item_kind: None, item_name: None, target_id: None,
+                });
+                return json!({"added": 0, "updated": 0, "skipped": 0, "conflicts": 0,
+                    "failed": 1, "removed": 0,
+                    "error": format!("excluded 数据损坏：{e}")});
+            }
+        },
+        ref v @ Value::Array(_) => v.as_array().unwrap()
+            .iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect(),
+        _ => BTreeSet::new(),
+    };
     let tkind = target_row(conn, target_id)
         .and_then(|t| t["kind"].as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "skills_dir".into());
@@ -1487,20 +1528,24 @@ pub fn sync_binding_full(conn: &Connection, hub: &Path, b: &Value, force: bool) 
     agg
 }
 
-/// depot-mcp::distribute_mcp 转发（运行时依赖注入，避免 crate 间环）。
-static mut MCP_DISTRIBUTE: Option<fn(&Connection, &[String], &[i64], bool, bool) -> Vec<Value>> = None;
+/// depot-mcp::distribute_mcp 转发（运行时注入，避免 crate 间环）。
+/// SAFETY：OnceLock 单次写入；仅在 router 构建期 set、请求期只读——
+/// 未注入时记录 error 日志并返回空结果（不做静默假成功之外的事）。
+static MCP_DISTRIBUTE: std::sync::OnceLock<
+    fn(&Connection, &[String], &[i64], bool, bool) -> Vec<Value>,
+> = std::sync::OnceLock::new();
 
 pub fn set_mcp_distribute(f: fn(&Connection, &[String], &[i64], bool, bool) -> Vec<Value>) {
-    unsafe {
-        MCP_DISTRIBUTE = Some(f);
-    }
+    let _ = MCP_DISTRIBUTE.set(f);
 }
 
 fn depot_mcp_distribute(conn: &Connection, names: &[String], tids: &[i64], dry: bool, force: bool) -> Vec<Value> {
-    let f = unsafe { MCP_DISTRIBUTE };
-    match f {
+    match MCP_DISTRIBUTE.get() {
         Some(f) => f(conn, names, tids, dry, force),
-        None => vec![],
+        None => {
+            tracing::error!("MCP 分发函数未注入（router 未初始化？）：mcp 通道绑定同步跳过");
+            vec![]
+        }
     }
 }
 

@@ -65,7 +65,7 @@ pub fn normalize_config(cfg: &serde_json::Value, name: &str) -> Option<serde_jso
 
 /// 嵌套取 section（Python _section_get 口径）：途中层缺失/非 dict → 替换为 {}，
 /// 末层保证是 dict（spec_mcp 钉现状：非 dict 层静默替换）。
-fn section_get<'a>(
+pub(crate) fn section_get<'a>(
     data: &'a mut serde_json::Value, key_path: &str,
 ) -> &'a mut serde_json::Map<String, serde_json::Value> {
     let mut cur: &mut serde_json::Value = data;
@@ -706,14 +706,15 @@ pub fn verify_config(cfg: &serde_json::Value) -> serde_json::Value {
         if cmd.is_empty() {
             return serde_json::json!({"ok": false, "error": "缺少 command", "transport": "stdio"});
         }
+        // 无 shell 探测（cmd 可能来自远程源的 mcp.json，不可信——禁止内插进 sh -c）
         let executable = if cmd.contains('/') {
             std::path::Path::new(cmd).exists()
         } else {
-            std::process::Command::new("sh")
-                .arg("-c").arg(format!("command -v {cmd} >/dev/null 2>&1"))
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
+            let path = std::env::var("PATH").unwrap_or_default();
+            std::env::split_paths(&path).any(|dir| {
+                let p = dir.join(cmd);
+                p.is_file() && std::fs::metadata(&p).map(|m| !m.is_dir()).unwrap_or(false)
+            })
         };
         if !executable {
             return serde_json::json!({"ok": false, "error": format!("命令不可执行：{cmd}"),

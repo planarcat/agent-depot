@@ -163,6 +163,10 @@ pub fn update_manual(conn: &Connection, hub: &Path, name: &str, files: &serde_js
     fsutil::copy_dir_all(&dest, &snap).map_err(|e| CoreError::io("快照失败", e))?;
     if let Some(obj) = files.as_object() {
         for (rel, val) in obj {
+            // 路径穿越门禁（与 create_manual 同一道闸；Python mod_skills._safe_rel 对位）
+            if !safe_rel(rel) {
+                return ok_err(&format!("非法文件路径：{}", rel.chars().take(60).collect::<String>()));
+            }
             let p = dest.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
             match val.as_str() {
                 None => { if p.exists() { fs::remove_file(&p).map_err(|e| CoreError::io("删文件", e))?; } }
