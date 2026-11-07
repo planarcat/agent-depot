@@ -48,3 +48,97 @@
 
 > 出处：`~/Documents/灵创引擎/Docs/AI开发质量体系-落地方指南.md`（本仓为其适配落地，逐条实测记录见 `VERIFICATION.md`）。
 
+## 工作区常驻规则（自动推送 / 视觉路径记忆 / 接口快照 · 2026-11-06）
+
+> 本节与工作区根 `AGENTS.md` 同文；**改动以根为准**，本副本保证在 cwd 内可读。
+
+> 不靠用户提示词：agent 自主决定截图 / 看画面时同样生效。
+
+本会话**第一次为了看画面 / 截图而打开网页、应用、报表或跑出图命令前**：
+
+1. 若尚未 Read `visual-route-memory`，先 Read 它的 `SKILL.md` 全文。
+2. 按技能里的索引，只读命中的**那一个**画面文件，不整目录读。
+3. 只复用操作手法；本次判定与结论一律现做，不写回卡片。
+
+规则挂「动作」不挂「措辞」——不看用户说了什么，只看是不是要调画面。卡片落本工作区（位置由技能正文 / 工作区配置定），是操作手册，不是测试档案。
+
+**接口快照（`api-snapshot`）同理**：本会话第一次调接口拿到响应（或用户贴了接口 / 入参 / 返回数据）需要留存时：
+
+1. 若尚未 Read `api-snapshot`，先 Read 它的 `SKILL.md` 全文。
+2. 按它的 `_index.md` 只定位需要的那一份快照，不整目录读；大文件用脚本按字段取。
+3. 当场落盘、必脱敏、不覆盖历史。
+
+两条都挂「动作」不挂「措辞」，只指路不复制正文。
+
+## 开发收尾：自动推送判定（2026-11-06）
+
+> 不等用户说「生成 commit」，**不问要不要推**。
+
+在开发分支上完成较完整功能后，由 agent 自行判定：
+
+1. Read `generate-commit` 的 `SKILL.md` 全文，按「自动推送时机」判定是否形成功能闭环。
+2. 闭环 → 推送前核验 → 按**该仓仓库文档**规定的目标分支推送；文档没写就停下问，不猜。
+3. 未闭环 → 只本地 commit，汇报写「未推：功能未闭环 + 缺什么」。
+4. 频次：一个需求**默认 1 次**、最多 2 次、**同一天 ≤1 次**；两次之间须有新的可验收状态变化。
+5. 用户说「只提交 / 先别推」→ 只 commit。
+6. 主分支 / 测试分支禁止直推（只经 PR/MR）；不 `--force`。
+> 推送途中遇冲突：一律自己解决（按 `generate-commit` 的取舍优先级），不问、不停、不讨论；动了本需求行为须同步回 dev。仅身份 / 权限 / 网络这类做不了的才如实汇报。
+
+## 工作记录：自动落盘（2026-11-06 · 不问、不等口令）
+
+> 挂「动作」不挂「措辞」：完成一段可归属的工作（提交 / 推送 / 阶段收尾 / 用户要总结）就落盘，**不等用户说「记一下」，不问要不要记**。
+
+1. Read 公司库 `日报采集共写`（`report-pipeline`）全文，按其落点与共写规则写入 `Reports/daily_work/YYYY-MM-DD/【需求id_标题】.md`（目录不存在就建，不用问）；只更新自己会话块，每条工作节点带 `[HH:MM]`。
+2. **对话里列清单、表格、总结都不算记录** —— 必须落盘，并在汇报里给文件路径。落点以 `工作区配置.json` 的 `paths.dailyReport` 为准。
+3. **用户说「不要汇报 / 别总结 / 安静点」＝ 只减少对话输出，落盘照做**；不得就「要不要记」提问。
+4. **禁止**把「日报没写」列进遗留 / 待办，禁止反问「是不是漏了最重要的事」；发现没写就当场补，不列欠账。
+5. 素材从本会话已有上下文取（提交、对话、测试输出），**不要求开发过程额外配合**（日报零注入原则）。
+
+
+
+
+
+<!-- gitnexus:start -->
+# GitNexus — Code Intelligence
+
+This project is indexed by GitNexus as **agent-depot** (2253 symbols, 7546 relationships, 196 execution flows).
+
+> Index stale? Run `node .gitnexus/run.cjs analyze --index-only` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? Bootstrap with `npx`, `bunx`, or `pnpm dlx` — e.g. `bunx gitnexus@latest analyze` (npm 11 npx crash; #1939).
+
+## Always Do
+
+- **MUST run impact before editing.** Use `impact({target: "symbolName", direction: "upstream"})` or `node .gitnexus/run.cjs impact "symbolName" --direction upstream --repo .`; report callers, processes, and risk. Never substitute grep for graph analysis.
+- **MUST analyze graph changes before committing.** Use `detect_changes({scope: "all"})` (MCP) or `node .gitnexus/run.cjs detect-changes --scope all --repo .` (CLI fallback). `partial: true` or `truncated: true` is not a clean check — a zero means unseen, not unaffected; re-run it. For regression review: `detect_changes({scope: "compare", base_ref: "main"})` or `node .gitnexus/run.cjs detect-changes --scope compare --base-ref "main" --repo .`.
+- MUST warn on HIGH/CRITICAL `risk` pre-edit; never use `riskSharedAxes` to waive a HIGH/CRITICAL `risk` warning. Compare File/symbol: MCP File omits axes; Graph-RAG expands File.
+- **MUST treat `risk: UNKNOWN` as unresolved, not as low.** An empty caller set is not evidence the symbol is unused — it can also mean the callers are not resolvable by the index (plain-object property access, dynamic dispatch, cross-language calls). `impact` pairs `UNKNOWN` with a `riskNote` saying so. Confirm with a text search before treating the symbol as safe to change or delete; do not proceed on the strength of a zero.
+- **MUST use `query({search_query: "concept"})` for concepts/flows, `context({name: "symbolName"})` for a named symbol, or `impact` for blast radius, on read-only callers, dependencies, imports, or execution flow.** Graph first; text search only for empty/`UNKNOWN`/literals.
+- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
+
+## Never Do
+
+- NEVER edit a function, class, or method before MCP/CLI impact analysis.
+- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis, and never read `UNKNOWN` as an all-clear — it means the walk could not answer, which is the one verdict that requires confirming by other means.
+- NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
+- NEVER commit before MCP/CLI graph change analysis.
+
+## Resources
+
+| Resource | Use for |
+| --- | --- |
+| `gitnexus://repo/agent-depot/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/agent-depot/clusters` | All functional areas |
+| `gitnexus://repo/agent-depot/processes` | All execution flows |
+| `gitnexus://repo/agent-depot/process/{name}` | Step-by-step execution trace |
+
+## CLI
+
+| Task | Read this skill file |
+| --- | --- |
+| Understand architecture / "How does X work?" | `.claude/skills/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus-debugging/SKILL.md` |
+| Rename / extract / split / refactor | `.claude/skills/gitnexus-refactoring/SKILL.md` |
+| Tools, resources, schema reference | `.claude/skills/gitnexus-guide/SKILL.md` |
+| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus-cli/SKILL.md` |
+
+<!-- gitnexus:end -->

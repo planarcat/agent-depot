@@ -117,12 +117,10 @@ def backup_file(path, backup_dir=None):
 
 
 def safe_rm(path):
-    """仅允许删除 hub 自管目录内的路径（防御纵深；尊重 AGENT_HUB_DIR 沙箱）。"""
+    """仅允许删除 hub 自管目录内的路径（防御纵深；目录由 hub.paths 统一解析）。"""
+    from hub import paths
     real = os.path.realpath(path)
-    allowed_roots = [os.path.realpath(os.path.expanduser("~/.agent/hub"))]
-    env_dir = os.environ.get("AGENT_HUB_DIR")
-    if env_dir:
-        allowed_roots.append(os.path.realpath(os.path.expanduser(env_dir)))
+    allowed_roots = [os.path.realpath(paths.hub_dir())]
     if not any(real.startswith(r + os.sep) or real == r for r in allowed_roots):
         raise PermissionError("refuse to remove outside hub dir: %s" % path)
     if os.path.isdir(real):

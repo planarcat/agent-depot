@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 连接融合 v2 —— 目录区 / 工具区 / 条目区（默认隐藏）</title>
+<style>
+:root {
+  --c-ink: #171d1f; --c-ink-2: #3c4447; --c-ink-3: #5b6669; --c-ink-4: #8a9497;
+  --c-bg: #f2f4f4; --c-surface: #f9fafa; --c-surface-2: #ffffff;
+  --c-line: #d9dedf; --c-line-soft: #e6eaeb; --c-rail: #f4f3f0;
+  --c-accent: #0d6a63; --c-accent-strong: #0a544e; --c-accent-soft: #eaf2f1;
+  --c-accent-line: #bfd6d2; --c-on-accent: #ffffff;
+  --c-err: #a03d2e; --c-err-soft: #f8ece9; --c-err-line: #f0c8bf;
+  --c-ok: #1a7f4b;
+  --c-t-agents: #4a7d8c; --c-t-claude: #d97757; --c-t-pi: #6f8a4f;
+  --c-t-wb: #4a7d8c; --c-t-zcode: #9a6b3f;
+  --fs-xs: 10px; --fs-s: 11px; --fs-md: 12px; --fs-body: 13px; --fs-m: 14px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px;
+  --tcard: 136px;
+  --r-xs: 6px; --r-s: 4px; --r-m: 8px; --r-l: 12px;
+  --t-quick: 150ms cubic-bezier(.2,.6,.3,1); --t-base: 250ms cubic-bezier(.2,.6,.3,1);
+  --sh-hover: 0 4px 12px rgba(23,29,31,.08), 0 1px 2px rgba(23,29,31,.04);
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--c-bg); color: var(--c-ink); font-family: var(--font-sans);
+  font-size: var(--fs-body); padding: var(--sp-4); }
+button { font-family: var(--font-sans); }
+.tool-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block;
+  vertical-align: -1px; }
+.dot--agents { background: var(--c-t-agents); } .dot--claude { background: var(--c-t-claude); }
+.dot--pi { background: var(--c-t-pi); } .dot--wb { background: var(--c-t-wb); }
+.dot--zcode { background: var(--c-t-zcode); }
+.topbar { display: flex; align-items: center; gap: var(--sp-4); background: var(--c-surface-2);
+  border: 1px solid var(--c-line); border-radius: var(--r-l); padding: var(--sp-2) var(--sp-4); }
+.topbar b { font-size: var(--fs-l); }
+.topbar nav { display: flex; gap: var(--sp-3); color: var(--c-ink-3); }
+.topbar nav .on { color: var(--c-accent); font-weight: 600; }
+.topbar .engine { margin-left: auto; font-size: var(--fs-s); color: var(--c-ok); }
+.layout { display: flex; gap: var(--sp-3); margin-top: var(--sp-3); align-items: flex-start; }
+.leftcol { flex: 1; min-width: 0; }
+.srcrow { display: flex; gap: var(--sp-3); align-items: stretch; }
+.group { border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-surface);
+  padding: var(--sp-2); width: 170px; flex: none; display: flex; flex-direction: column; }
+.group .nm { font-weight: 600; }
+.group .meta { font-family: var(--font-mono); font-size: var(--fs-s); color: var(--c-ink-4);
+  margin: var(--sp-1) 0; }
+.group .d { font-size: var(--fs-s); color: var(--c-ink-4); line-height: 1.5; }
+.group .acts { margin-top: auto; padding-top: var(--sp-2); display: flex; flex-direction: column;
+  gap: var(--sp-1); }
+.btn { border: 1px solid var(--c-line); background: var(--c-surface-2); color: var(--c-ink);
+  border-radius: var(--r-xs); font-size: var(--fs-s); padding: 4px 10px; cursor: pointer;
+  text-align: center; transition: background var(--t-quick); }
+.btn:hover { background: var(--c-surface); }
+.btn.sm { padding: 3px 9px; width: auto; }
+.btn.danger { color: var(--c-err); border-color: var(--c-err-line); background: var(--c-err-soft); }
+.grid { display: flex; gap: var(--sp-3); }
+.tcard { width: var(--tcard); border: 1px solid var(--c-line); border-radius: var(--r-m);
+  background: var(--c-surface-2); position: relative; cursor: pointer; padding: var(--sp-2);
+  transition: transform var(--t-quick), box-shadow var(--t-quick), opacity var(--t-base); }
+.tcard:hover { transform: translateY(-2px); box-shadow: var(--sh-hover); z-index: 5; }
+.tcard.is-focus { box-shadow: 0 0 0 2px var(--c-accent); }
+.tcard.is-lit { box-shadow: 0 0 0 1.5px var(--c-accent); transform: translateY(-2px); }
+.tcard.is-dim { opacity: .35; }
+.cnt { display: inline-flex; min-width: 28px; height: 28px; border-radius: var(--r-xs);
+  border: 1px solid var(--c-line); background: var(--c-surface);
+  align-items: center; justify-content: center; font-family: var(--font-mono);
+  font-size: var(--fs-md); font-weight: 600; color: var(--c-accent); }
+.cnt.ink { color: var(--c-ink-2); }
+.chip { width: 44px; height: 44px; border-radius: var(--r-m); margin: var(--sp-2) auto 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: var(--fs-m); font-weight: 600; background: #3c4447; }
+.chip.ve { background: var(--c-t-claude); }
+.chip.agents { background: var(--c-t-agents); }
+.chip.claude { background: var(--c-t-claude); }
+.chip.pi { background: var(--c-t-pi); }
+.chip.wb { background: var(--c-t-wb); }
+.chip.zc { background: var(--c-t-zcode); }
+.tnm { font-size: var(--fs-body); font-weight: 600; text-align: center; margin-top: var(--sp-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tcard__tag { position: absolute; left: var(--sp-2); bottom: var(--sp-1);
+  display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap;
+  font-size: var(--fs-s); font-weight: 600; color: var(--c-accent); }
+.tcard__tag .tool-dot { width: 7px; height: 7px; }
+.tcard__tag .plus { color: var(--c-ink-4); font-weight: 400; }
+.tcard__tag .back { color: var(--c-ink-3); font-weight: 400; }
+.stats { display: flex; gap: var(--sp-4); margin: var(--sp-3) 0; align-items: center; }
+.stats b { font-size: 16px; margin-right: 4px; }
+.stats .muted { color: var(--c-ink-3); }
+.focus { border: 1px solid var(--c-accent-line); border-radius: var(--r-m);
+  background: var(--c-surface-2); padding: var(--sp-3); margin: var(--sp-3) 0; }
+.focus h3 { font-size: var(--fs-m); margin-bottom: var(--sp-1); }
+.focus .p { font-size: var(--fs-s); color: var(--c-ink-4); font-family: var(--font-mono);
+  margin-bottom: var(--sp-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.focus .sec { font-size: var(--fs-s); font-weight: 600; color: var(--c-ink-3);
+  margin: var(--sp-2) 0 var(--sp-1); }
+.focus .hint { color: var(--c-ink-4); font-size: var(--fs-body); line-height: 1.6; }
+.frow { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--c-line-soft); border-radius: var(--r-xs); margin-bottom: var(--sp-1); }
+.frow .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.frow .badge { font-size: var(--fs-xs); color: var(--c-ink-4); border: 1px solid var(--c-line);
+  border-radius: var(--r-s); padding: 0 5px; flex: none; }
+.frow .st { font-size: var(--fs-xs); flex: none; }
+.frow .st.ok { color: var(--c-ok); } .frow .st.pz { color: var(--c-warn); }
+.pills { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
+.toolsrow { margin-top: var(--sp-3); }
+.toolsrow .rl { font-size: var(--fs-s); font-weight: 600; color: var(--c-ink-3); margin-bottom: var(--sp-2); }
+.toolsrow .rl small { color: var(--c-ink-4); font-weight: 400; }
+.ipanel { width: 380px; flex: none; align-self: stretch; border: 1px solid var(--c-line);
+  border-radius: var(--r-l); background: var(--c-surface-2); overflow: hidden;
+  display: none; flex-direction: column; min-height: 480px; }
+.ipanel.is-in { display: flex; animation: slidein var(--t-base); }
+@keyframes slidein { from { opacity: 0; transform: translateX(12px); } }
+.iph { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--c-line); background: var(--c-surface); }
+.iph b { font-size: var(--fs-body); }
+.iph .cnt { margin-left: auto; font-size: var(--fs-s); color: var(--c-ink-4); }
+.iph .x { border: 0; background: none; color: var(--c-ink-4); font-size: var(--fs-m);
+  cursor: pointer; line-height: 1; }
+.ipsearch { margin: var(--sp-2) var(--sp-3) 0; border: 1px solid var(--c-line);
+  border-radius: var(--r-m); background: var(--c-surface); padding: var(--sp-1) var(--sp-2);
+  color: var(--c-ink-4); font-size: var(--fs-s); }
+.ipitems { flex: 1; overflow-y: auto; padding: var(--sp-2) var(--sp-3); }
+.ipi { border: 1px solid var(--c-line-soft); border-radius: var(--r-m);
+  background: var(--c-surface); padding: var(--sp-2) var(--sp-2); margin-bottom: var(--sp-1); }
+.ipi .ttl { font-weight: 600; font-size: var(--fs-body); }
+.ipi .sb { font-size: var(--fs-s); color: var(--c-ink-4); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ipi .fl { display: flex; gap: var(--sp-1); margin-top: var(--sp-1); flex-wrap: wrap; align-items: center; }
+.ipi .fl .lb { font-size: var(--fs-xs); color: var(--c-ink-4); }
+.ipi .fl .fb { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--c-line);
+  border-radius: 999px; padding: 1px 7px 1px 5px; font-size: var(--fs-xs); color: var(--c-ink-2); }
+.ipi .fl .fb .rm { color: var(--c-err); cursor: pointer; font-weight: 600; }
+.ipempty { padding: var(--sp-4); text-align: center; color: var(--c-ink-4); }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <b>Agent Depot</b>
+  <nav><span>会话</span><span>记忆</span><span class="on">Skills</span><span>MCP</span><span>台账</span><span>统计</span><span>设置</span></nav>
+  <span class="engine">引擎 casr · 已连接</span>
+</div>
+
+<div class="layout">
+  <div class="leftcol">
+    <div class="srcrow">
+      <div class="group">
+        <div class="nm">本地</div>
+        <div class="meta">3 源 · 52 条</div>
+        <div class="d">默认目录 + 已链接目录；目录内条目变化实时同步</div>
+        <div class="acts"><button class="btn">目录管理</button><button class="btn">新建</button><button class="btn">导入</button></div>
+      </div>
+      <div class="grid" id="dircards"></div>
+      <div class="group">
+        <div class="nm">远程仓库</div>
+        <div class="meta">1 源 · 9 条</div>
+        <div class="d">Git 仓库拉取，只读跟随上游</div>
+        <div class="acts"><button class="btn">添加仓库</button><button class="btn">全部拉取</button></div>
+      </div>
+      <div class="grid" id="repocards"></div>
+    </div>
+
+    <div class="stats">
+      <span><b>61</b>条目 · 全部来源</span><span class="muted"><b>52</b>本地</span>
+      <span><b>10</b>远程拉取</span><span><b>88</b>已部署到工具</span><span class="muted"><b>394</b>待更新 / 待安装</span>
+    </div>
+
+    <div class="focus" id="focus" hidden></div>
+
+    <div class="toolsrow">
+      <div class="rl">工具目标 <small>样式同目录卡 · 卡上 ⇐ 为已接入的源 · 点击卡片管理接入与安装</small></div>
+      <div class="grid" id="toolcards"></div>
+    </div>
+  </div>
+
+  <div class="ipanel" id="ipanel">
+    <div class="iph">
+      <b id="ip-title">条目</b>
+      <span class="cnt" id="ip-cnt"></span>
+      <button class="x" id="ip-close" title="关闭">✕</button>
+    </div>
+    <div class="ipsearch">搜索条目…</div>
+    <div class="ipitems" id="ip-items"></div>
+  </div>
+</div>
+
+<script>
+/* ==== 数据 ==== */
+const DIRS = [
+  { id: 'd-def', name: '默认目录', n: 16, chip: '默认', binds: [] },
+  { id: 'd-ag', name: 'agent-skills', n: 17, chip: 'AG', binds: ['pi'] },
+  { id: 'd-li', name: 'lingchuang-skills', n: 11, chip: 'LI', binds: ['pi'] },
+];
+const REPOS = [
+  { id: 'r-ve', name: 'Vercel Skills', n: 9, chip: 'VE', binds: ['agents'] },
+];
+const TOOLS = [
+  { id: 'agents', name: 'Agents', chipCls: 'agents', dot: 'dot--agents', path: '~/.agents/skills 共享' },
+  { id: 'claude', name: 'Claude Code', chipCls: 'claude', dot: 'dot--claude', path: '~/.claude/skills' },
+  { id: 'pi', name: 'Pi-Agent', chipCls: 'pi', dot: 'dot--pi', path: '~/.pi/agent/skills' },
+  { id: 'workbuddy', name: 'WorkBuddy', chipCls: 'wb', dot: 'dot--wb', path: '~/.workbuddy/skills' },
+  { id: 'zcode', name: 'ZCode', chipCls: 'zc', dot: 'dot--zcode', path: '~/.zcode/skills' },
+];
+let BINDS = [
+  { s: 'd-ag', t: 'pi' },
+  { s: 'd-li', t: 'pi' },
+  { s: 'r-ve', t: 'agents' },
+];
+const ITEMS = [
+  { id: 'i1', dir: 'd-ag', name: 'agent-html-skills', desc: '单文件 HTML 产物工具集（19 个子技能）…' },
+  { id: 'i2', dir: 'd-ag', name: 'api-snapshot', desc: '接口调用快照留存…' },
+  { id: 'i3', dir: 'd-ag', name: 'capturing-takeaways', desc: '把对话里值得长期记住的结论沉淀进知识库…' },
+  { id: 'i4', dir: 'd-ag', name: 'change-advice', desc: '给出修改方案、改动点和风险分析…' },
+  { id: 'i5', dir: 'd-ag', name: 'design-guardrails', desc: 'Mandatory design guardrails for any UI work…' },
+  { id: 'i6', dir: 'd-ag', name: 'development-guardrails', desc: 'Mandatory guardrails before editing source code…' },
+  { id: 'i7', dir: 'd-ag', name: 'full-code-review', desc: '代码审查（智能分级 L0–L3）…' },
+  { id: 'i8', dir: 'd-ag', name: 'generate-commit', desc: '生成通俗易懂的 commit message 并提交…' },
+  { id: 'i9', dir: 'd-li', name: '界面审查', desc: '界面 UI&UX 审查，两段式…' },
+  { id: 'i10', dir: 'd-li', name: '日报撰写', desc: '按技术部《日/周报填写规范》…' },
+  { id: 'i11', dir: 'd-def', name: 'scratch-note', desc: '默认目录里的临时条目…' },
+];
+let MANUAL = [
+  { item: 'i2', tool: 'agents' },
+];
+const T = id => TOOLS.find(t => t.id === id) || { id, name: id, dot: '' };
+const D = id => DIRS.concat(REPOS).find(d => d.id === id) || null;
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(m) { const t = document.getElementById('toast') || (() => {
+    const d = document.createElement('div'); d.id = 'toast';
+    d.style.cssText = 'position:fixed;right:24px;bottom:24px;z-index:99;background:var(--c-surface-2);border-radius:var(--r-m);box-shadow:var(--sh-float);padding:8px 12px';
+    document.body.appendChild(d); return d; })();
+  t.textContent = m; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 2600); }
+
+/* 跟随关系（item×tool） */
+let FOLLOWS = [];
+DIRS.forEach(d => (d.binds || []).forEach(tid =>
+  ITEMS.filter(it => it.dir === d.id).forEach(it => FOLLOWS.push({ item: it.id, tool: tid, via: 'dir:' + d.id }))));
+MANUAL.forEach(m => FOLLOWS.push({ item: m.item, tool: m.tool, via: 'manual' }));
+const followsOf = itemId => FOLLOWS.filter(f => f.item === itemId);
+function toolItemCount(tid) {
+  let n = 0;
+  DIRS.forEach(d => { if ((d.binds || []).includes(tid)) n += d.n; });
+  REPOS.forEach(r => { if ((r.binds || []).includes(tid)) n += r.n; });
+  return n;
+}
+const ALLSRC = () => [...DIRS, ...REPOS];
+
+/* ==== 状态 ==== */
+let focus = null;   // {kind:'dir'|'tool'|'repo', id} | null
+
+function focusCls(kind, id) {
+  if (!focus) return '';
+  if (focus.kind === kind) return focus.id === id ? 'is-focus' : 'is-dim';
+  if (focus.kind === 'tool') return BINDS.find(b => b.t === focus.id && b.s === id) ? 'is-lit' : 'is-dim';
+  return BINDS.find(b => b.s === focus.id && b.t === id) ? 'is-lit' : 'is-dim';
+}
+function renderCards() {
+  document.getElementById('dircards').innerHTML = DIRS.map(d => {
+    const dots = (d.binds || []).map(tid => `<span class="tool-dot ${T(tid).dot}"></span>`).join('');
+    return `<div class="tcard ${focusCls('dir', d.id)}" data-focus="dir:${d.id}">
+      <span class="cnt">${d.n}</span>
+      <div class="chip">${d.chip}</div>
+      <div class="tnm">${d.name}</div>
+      ${(d.binds || []).length ? `<span class="tcard__tag"><span class="arr">→</span>${dots}</span>` : ''}
+    </div>`;
+  }).join('');
+  document.getElementById('repocards').innerHTML = REPOS.map(r => {
+    const dots = (r.binds || []).map(tid => `<span class="tool-dot ${T(tid).dot}"></span>`).join('');
+    return `<div class="tcard ${focusCls('repo', r.id)}" data-focus="repo:${r.id}">
+      <span class="cnt ink">${r.n}</span>
+      <div class="chip ve">${r.chip}</div>
+      <div class="tnm">${r.name}</div>
+      ${(r.binds || []).length ? `<span class="tcard__tag"><span class="back">⇐</span>${dots}</span>` : ''}
+    </div>`;
+  }).join('');
+  document.getElementById('toolcards').innerHTML = TOOLS.map(t => {
+    const n = toolItemCount(t.id);
+    const srcs = ALLSRC().filter(s => BINDS.find(b => b.s === s.id && b.t === t.id));
+    const dots = srcs.map(() => `<span class="tool-dot dot--agents" style="opacity:.55"></span>`).join('');
+    return `<div class="tcard ${focusCls('tool', t.id)}" data-focus="tool:${t.id}">
+      <span class="cnt ink">${n}</span>
+      <div class="chip ${t.chipCls}">${t.name.slice(0, 2).toUpperCase()}</div>
+      <div class="tnm">${t.name}</div>
+      ${srcs.length ? `<span class="tcard__tag"><span class="back">⇐</span>${dots}</span>` : ''}
+    </div>`;
+  }).join('');
+  wireCards();
+}
+function wireCards() {
+  document.querySelectorAll('[data-focus]').forEach(c => c.onclick = (e) => {
+    const [kind, id] = c.dataset.focus.split(':');
+    if (focus && focus.kind === kind && focus.id === id) focus = null;
+    else focus = { kind, id };
+    renderCards(); renderFocus(); renderItemsPanel();
+  });
+}
+
+/* ==== 管理面板 ==== */
+function renderFocus() {
+  const host = document.getElementById('focus');
+  if (!focus) { host.hidden = true; return; }
+  host.hidden = false;
+  if (focus.kind === 'dir') {
+    const d = DIRS.find(x => x.id === focus.id);
+    const bs = (d.binds || []).map(tid => T(tid));
+    const un = TOOLS.filter(t => !(d.binds || []).includes(t.id));
+    host.innerHTML = `
+      <h3>目录 · ${d.name}</h3>
+      <div class="p">${d.n} 个 skill · 已连接 ${bs.length} 个工具</div>
+      <div class="sec">整源跟随（绑定）</div>
+      ${bs.map(t => `<div class="frow"><span class="tool-dot ${t.dot}"></span><span class="nm">${t.name}</span>
+          <span class="st ok">● 跟随中</span>
+          <button class="btn sm danger" data-unbind="${t.id}">断开</button></div>`).join('')
+        || '<div class="note" style="color:var(--c-ink-4);font-size:var(--fs-s)">尚未连接工具 · 点下方「连接更多工具」</div>'}
+      <div class="sec">连接更多工具</div>
+      <div class="pills">${un.map(t => `<button class="btn sm" data-bind="${t.id}" style="width:auto">＋ ${t.name}</button>`).join('')}</div>
+      <div class="sec">说明</div>
+      <div class="hint">整源跟随：目录内全部条目（含新增）自动同步到该工具；条目区的「经目录」跟随点由此产生。点右上 ✕ 收起条目区。</div>`;
+    host.querySelectorAll('[data-bind]').forEach(b => b.onclick = () => {
+      d.binds.push(b.dataset.bind);
+      toast(`已连接 → ${T(b.dataset.bind).name} · 全量同步 ${d.n} 个 skill`);
+      renderCards(); renderFocus(); renderItemsPanel();
+    });
+    host.querySelectorAll('[data-unbind]').forEach(b => b.onclick = () => {
+      d.binds = d.binds.filter(x => x !== b.dataset.unbind);
+      toast(`已断开 ⇄ ${T(b.dataset.unbind).name}（文件保留）`);
+      renderCards(); renderFocus(); renderItemsPanel();
+    });
+    return;
+  }
+  if (focus.kind === 'repo') {
+    const r = REPOS.find(x => x.id === focus.id);
+    const bs = (r.binds || []).map(tid => T(tid));
+    const un = TOOLS.filter(t => !(r.binds || []).includes(t.id));
+    host.innerHTML = `
+      <h3>远仓 · ${r.name}</h3>
+      <div class="p">已拉取 ${r.n} 条 · 已连接 ${bs.length} 个工具</div>
+      <div class="sec">整源跟随（绑定）</div>
+      ${bs.map(t => `<div class="frow"><span class="tool-dot ${t.dot}"></span><span class="nm">${t.name}</span>
+          <span class="st ok">● 跟随中</span>
+          <button class="btn sm danger" data-unbind="${t.id}">断开</button></div>`).join('')
+        || '<div class="note" style="color:var(--c-ink-4);font-size:var(--fs-s)">尚未连接工具</div>'}
+      <div class="sec">连接更多工具</div>
+      <div class="pills">${un.map(t => `<button class="btn sm" data-bind="${t.id}" style="width:auto">＋ ${t.name}</button>`).join('')}</div>
+      <div class="sec">说明</div>
+      <div class="hint">远仓绑定同步的是「已拉取到本地库」的条目；上游更新 → 拉取 → 自动跟随分发。点右上 ✕ 收起条目区。</div>`;
+    host.querySelectorAll('[data-bind]').forEach(b => b.onclick = () => {
+      r.binds.push(b.dataset.bind);
+      toast(`已连接 → ${T(b.dataset.bind).name}`); renderCards(); renderFocus();
+    });
+    host.querySelectorAll('[data-unbind]').forEach(b => b.onclick = () => {
+      r.binds = r.binds.filter(x => x !== b.dataset.unbind);
+      toast(`已断开 ⇄ ${T(b.dataset.unbind).name}（文件保留）`);
+      renderCards(); renderFocus();
+    });
+    return;
+  }
+  const t = T(focus.id);
+  const srcs = ALLSRC().filter(s => BINDS.find(b => b.s === s.id && b.t === t.id));
+  const un = ALLSRC().filter(s => !BINDS.find(b => b.s === s.id && b.t === t.id));
+  const folItems = ITEMS.filter(it => followsOf(it.id).find(f => f.tool === t.id));
+  host.innerHTML = `
+    <h3>工具 · ${t.name}</h3>
+    <div class="p">${t.path} · 接收 ${toolItemCount(t.id)} 条</div>
+    <div class="sec">已接入的源（整源跟随）</div>
+    ${srcs.map(s => `<div class="frow"><span class="badge">${s.kind}</span><span class="nm">${s.name}</span>
+        <span class="st ok">● ${s.n} 条</span>
+        <button class="btn sm danger" data-unsrc="${s.id}">断开</button></div>`).join('')
+      || '<div class="note" style="color:var(--c-ink-4);font-size:var(--fs-s)">尚未接入源</div>'}
+    <div class="sec">接入更多源</div>
+    <div class="pills">${un.map(s => `<button class="btn sm" data-addsrc="${s.id}" style="width:auto">＋ ${s.name}</button>`).join('')}</div>
+    <div class="sec">跟随中的条目（${folItems.length}）</div>
+    <div style="font-size:var(--fs-s);color:var(--c-ink-2);line-height:1.8">${folItems.map(i => '· ' + i.name).join('<br>') || '—'}</div>
+    <div class="sec">说明</div>
+    <div class="hint">断开源 = 解除整源跟随（工具内文件保留）；条目的单条跟随在其条目区行内管理。点右上 ✕ 收起条目区。</div>`;
+  host.querySelectorAll('[data-unsrc]').forEach(b => b.onclick = () => {
+    BINDS = BINDS.filter(x => !(b.dataset.unsrc === x.s && t.id === x.t));
+    toast(`已断开源（文件保留）`); renderCards(); renderFocus(); renderItemsPanel();
+  });
+  host.querySelectorAll('[data-addsrc]').forEach(b => b.onclick = () => {
+    BINDS.push({ s: b.dataset.addsrc, t: t.id });
+    toast(`已接入 ${S(b.dataset.addsrc).name} · 全量同步`); renderCards(); renderFocus(); renderItemsPanel();
+  });
+}
+
+/* ==== 条目区面板 ==== */
+function ipRow(it) {
+  const fs = followsOf(it.id);
+  const d = D(it.dir);
+  const fl = fs.map(f => {
+    const viaDir = f.via.startsWith('dir:');
+    const src = viaDir ? ALLSRC().find(s => s.id === f.via.slice(4)) : null;
+    return `<span class="fb"><span class="tool-dot ${T(f.tool).dot}"></span>${T(f.tool).name}
+      ${viaDir ? `<span style="color:var(--c-ink-4)">经 ${src ? esc(src.name) : ''}</span>`
+               : `<span class="rm" data-rm="${it.id}|${f.tool}">移除</span>`}</span>`;
+  }).join('') || '<span class="lb">未跟随</span>';
+  return `<div class="ipi">
+    <div class="ttl">${it.name}</div>
+    <div class="sb">${d ? d.name : ''} · ${esc(it.desc)}</div>
+    <div class="fl"><span class="lb">跟随</span>${fl}</div>
+  </div>`;
+}
+function renderItemsPanel() {
+  const panel = document.getElementById('ipanel');
+  if (!focus) { panel.classList.remove('is-in'); return; }
+  panel.classList.add('is-in');
+  const title = document.getElementById('ip-title');
+  const cnt = document.getElementById('ip-cnt');
+  const host = document.getElementById('ip-items');
+  if (focus.kind === 'dir') {
+    const d = DIRS.find(x => x.id === focus.id);
+    const list = ITEMS.filter(it => it.dir === d.id);
+    title.textContent = `目录 · ${d.name}`;
+    cnt.textContent = `${list.length} 条`;
+    host.innerHTML = list.map(ipRow).join('') || '<div class="ipempty">目录为空</div>';
+  } else if (focus.kind === 'tool') {
+    const list = itemsOfTool(focus.id);
+    title.textContent = `工具 · ${T(focus.id).name}`;
+    cnt.textContent = `${list.length} 条`;
+    host.innerHTML = list.map(it => {
+      const f = followsOf(it.id).find(x => x.tool === focus.id);
+      const viaDir = f && f.via.startsWith('dir:');
+      const src = viaDir ? ALLSRC().find(s => s.id === f.via.slice(4)) : null;
+      return `<div class="ipi">
+        <div class="ttl">${it.name}</div>
+        <div class="sb">${it.desc}</div>
+        <div class="fl"><span class="lb">来自</span>
+          <span class="fb">${src ? esc(src.name) : '单条跟随'}</span>
+          ${viaDir ? '' : `<span class="fb"><span class="rm" data-rm="${it.id}">移除跟随</span></span>`}</div>
+      </div>`;
+    }).join('') || '<div class="ipempty">该工具还没有条目</div>';
+    host.querySelectorAll('[data-rm]').forEach(x => x.onclick = () => {
+      FOLLOWS = FOLLOWS.filter(f => !(f.item === x.dataset.rm && f.tool === focus.id && f.via === 'manual'));
+      toast('已移除单条跟随'); renderItemsPanel(); renderCards();
+    });
+  } else {
+    const r = REPOS.find(x => x.id === focus.id);
+    title.textContent = `远仓 · ${r.name}`;
+    cnt.textContent = `${r.n} 条`;
+    host.innerHTML = `<div class="ipempty">该远仓已拉取 ${r.n} 条（原型未逐条建模）</div>`;
+  }
+}
+document.getElementById('ip-close').onclick = () => { focus = null; renderCards(); renderFocus(); renderItemsPanel(); };
+
+renderCards(); renderFocus(); renderItemsPanel();
+</script>
+</body>
+</html>

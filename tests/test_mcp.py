@@ -91,11 +91,13 @@ class McpFlow(unittest.TestCase):
         # force 覆盖 + 备份存在
         res2 = M.distribute_mcp(self.store, ["remote-api"], [self.tj], force=True)
         self.assertEqual(res2[0]["status"], "ok", res2)
-        backups = [f for _r, _d, fs in os.walk(os.path.join(TMP, ".hub-backup")) for f in fs] \
-            if os.path.isdir(os.path.join(TMP, ".hub-backup")) else []
-        # backup path recorded in deployment detail
         dep = M._deployment(self.store, "remote-api", self.tj)
-        self.assertTrue(dep and json.loads(dep["detail"]).get("backup"))
+        backup_rel = json.loads(dep["detail"]).get("backup")
+        self.assertTrue(backup_rel)
+        # 备份内容 = 被覆盖前的用户自有版本（死断言修复：算出来就要 assert）
+        backup_full = os.path.join(TMP, backup_rel) if not os.path.isabs(backup_rel) else backup_rel
+        self.assertTrue(os.path.isfile(backup_full), backup_rel)
+        self.assertIn("user-own", open(backup_full).read())
 
     def test_06_toml_distribute(self):
         t = M.add_target(self.store, "fake-codex", "mcp_toml", "codex", self.codex_toml)

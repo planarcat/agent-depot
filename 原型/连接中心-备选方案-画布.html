@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 连接中心 备选方案 ×4（规则 / 拖拽 / 轨道 / 活动流）</title>
+<style>
+:root {
+  --c-ink: #171d1f; --c-ink-2: #3c4447; --c-ink-3: #5b6669; --c-ink-4: #8a9497;
+  --c-bg: #f2f4f4; --c-surface: #f9fafa; --c-surface-2: #ffffff;
+  --c-line: #d9dedf; --c-line-soft: #e6eaeb; --c-rail: #f4f3f0;
+  --c-accent: #0d6a63; --c-accent-strong: #0a544e; --c-accent-soft: #eaf2f1;
+  --c-accent-line: #bfd6d2; --c-on-accent: #ffffff;
+  --c-err: #a03d2e; --c-err-soft: #f8ece9; --c-err-line: #f0c8bf;
+  --c-ok: #1a7f4b; --c-warn: #8a6d1f; --c-warn-soft: #f6f1e2;
+  --fs-xs: 10px; --fs-s: 11px; --fs-md: 12px; --fs-body: 13px; --fs-m: 14px; --fs-l: 16px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px;
+  --r-xs: 6px; --r-s: 4px; --r-m: 8px; --r-l: 12px;
+  --t-quick: 150ms cubic-bezier(.2,.6,.3,1); --t-base: 250ms cubic-bezier(.2,.6,.3,1);
+  --sh-hover: 0 4px 12px rgba(23,29,31,.08); --sh-float: 0 12px 32px rgba(23,29,31,.14);
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--c-bg); color: var(--c-ink); font-family: var(--font-sans);
+  font-size: var(--fs-body); padding: var(--sp-5); }
+h1 { font-size: 20px; font-weight: 600; }
+.sub { color: var(--c-ink-3); margin-top: var(--sp-1); line-height: 1.6; }
+.style { background: var(--c-surface-2); border: 1px solid var(--c-line);
+  border-radius: var(--r-l); padding: var(--sp-4); margin-top: var(--sp-5); }
+.style > h2 { font-size: var(--fs-l); font-weight: 600; }
+.style > h2 .tag { font-size: 10px; color: var(--c-accent); background: var(--c-accent-soft);
+  border-radius: 4px; padding: 2px 8px; margin-left: var(--sp-2); vertical-align: 2px; }
+.style > .fit { color: var(--c-ink-3); font-size: var(--fs-s); margin: var(--sp-1) 0 var(--sp-3); }
+.demo { border: 1px solid var(--c-line); border-radius: var(--r-m);
+  background: var(--c-surface); padding: var(--sp-3); }
+.annotate { margin-top: var(--sp-3); border-top: 1px solid var(--c-line-soft);
+  padding-top: var(--sp-2); display: grid; gap: var(--sp-1); }
+.annotate b { font-size: var(--fs-s); color: var(--c-accent); }
+.annotate span { font-size: var(--fs-s); color: var(--c-ink-3); }
+.tool-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+.dot--pi { background: #6f8a4f; } .dot--codex { background: #171d1f; }
+.dot--claude { background: #d97757; } .dot--p4 { background: #4a7d8c; }
+.dot--p5 { background: #9a6b3f; }
+.btn { border: 1px solid var(--c-line); background: var(--c-surface-2); color: var(--c-ink);
+  border-radius: var(--r-xs); font-size: var(--fs-s); font-family: var(--font-sans);
+  padding: 4px 10px; cursor: pointer; transition: background var(--t-quick); }
+.btn:hover { background: var(--c-surface); }
+.btn.primary { background: var(--c-accent); border-color: var(--c-accent); color: #fff; }
+.toast { position: fixed; right: var(--sp-5); bottom: var(--sp-5); z-index: 90;
+  background: var(--c-surface-2); border-radius: var(--r-m); box-shadow: var(--sh-float);
+  padding: var(--sp-2) var(--sp-3); font-size: var(--fs-body); display: none; }
+
+/* ==== E 规则卡 ==== */
+.rule { border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-surface-2);
+  padding: var(--sp-3); margin-bottom: var(--sp-2); }
+.rule .sentence { font-size: var(--fs-body); line-height: 1.6; }
+.rule .sentence b { color: var(--c-accent); font-weight: 600; }
+.rule .sentence .kw { background: var(--c-accent-soft); color: var(--c-accent-strong);
+  border-radius: 4px; padding: 1px 6px; font-weight: 600; font-size: var(--fs-s); }
+.rule .meta { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2);
+  font-size: var(--fs-s); color: var(--c-ink-4); }
+.rule .meta .sp { flex: 1; }
+.switch { width: 34px; height: 20px; border-radius: 999px; background: var(--c-line);
+  border: 0; cursor: pointer; position: relative; transition: background var(--t-quick); }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff; transition: left var(--t-quick); }
+.switch.on { background: var(--c-accent); }
+.switch.on::after { left: 16px; }
+.newrule { border: 1.5px dashed var(--c-accent-line); border-radius: var(--r-m);
+  padding: var(--sp-3); background: var(--c-surface); }
+.newrule .steps { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  font-size: var(--fs-body); }
+.newrule select { height: 30px; border: 1px solid var(--c-line); border-radius: var(--r-xs);
+  background: var(--c-surface-2); font-family: var(--font-sans); font-size: var(--fs-body);
+  color: var(--c-ink); }
+.arrow-kw { color: var(--c-accent); font-weight: 600; }
+
+/* ==== F 双栏拖拽 ==== */
+.pools { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); }
+.pool { border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-surface);
+  padding: var(--sp-2); min-height: 240px; }
+.pool .ph { font-size: var(--fs-s); font-weight: 600; color: var(--c-ink-3);
+  padding: var(--sp-1) var(--sp-2); }
+.pcard { border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-surface-2);
+  padding: var(--sp-2) var(--sp-3); margin: var(--sp-1) var(--sp-2); cursor: grab;
+  font-size: var(--fs-body); display: flex; align-items: center; gap: var(--sp-2);
+  transition: box-shadow var(--t-quick), border-color var(--t-quick); }
+.pcard:hover { box-shadow: var(--sh-hover); }
+.pcard.dragging { opacity: .5; }
+.pcard .nm { font-weight: 600; flex: 1; }
+.pcard .binds { display: flex; gap: 4px; }
+.pcard.tgt.drop-hl { border-color: var(--c-accent); background: var(--c-accent-soft); }
+.poolnote { font-size: var(--fs-s); color: var(--c-ink-4); padding: var(--sp-1) var(--sp-2); }
+
+/* ==== G 中心轨道 ==== */
+.orbit-wrap { display: flex; gap: var(--sp-4); }
+.orbit-pick { width: 210px; display: flex; flex-direction: column; gap: var(--sp-1); }
+.orbit-pick .oitem { border: 1px solid var(--c-line); border-radius: var(--r-m);
+  background: var(--c-surface-2); padding: var(--sp-1) var(--sp-2); font-size: var(--fs-body);
+  cursor: pointer; }
+.orbit-pick .oitem.is-on { border-color: var(--c-accent); background: var(--c-accent-soft);
+  font-weight: 600; color: var(--c-accent); }
+.orbit { position: relative; width: 380px; height: 380px; border-radius: 50%; flex: none;
+  background: radial-gradient(circle, var(--c-surface-2) 34%, var(--c-surface) 100%);
+  border: 1px solid var(--c-line); }
+.orbit .center { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 132px; text-align: center; background: var(--c-accent); color: var(--c-on-accent);
+  border-radius: var(--r-m); padding: var(--sp-2); font-size: var(--fs-body); font-weight: 600; }
+.orbit .center small { display: block; font-weight: 400; opacity: .85; font-size: var(--fs-xs); }
+.sat { position: absolute; width: 110px; margin-left: -55px; margin-top: -24px; text-align: center;
+  cursor: pointer; z-index: 2; }
+.sat .bub { border: 1px solid var(--c-line); background: var(--c-surface-2);
+  border-radius: var(--r-m); padding: var(--sp-1) var(--sp-2); font-size: var(--fs-s);
+  transition: box-shadow var(--t-quick), background var(--t-quick); }
+.sat.bound .bub { border-color: var(--c-accent); background: var(--c-accent-soft); font-weight: 600;
+  color: var(--c-accent); }
+.sat:hover .bub { box-shadow: var(--sh-hover); }
+.orbit svg { position: absolute; inset: 0; pointer-events: none; }
+
+/* ==== H 活动流 ==== */
+.health { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-3); }
+.hcard { border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-surface-2);
+  padding: var(--sp-2) var(--sp-3); min-width: 150px; }
+.hcard .nm { font-weight: 600; font-size: var(--fs-body); display: flex; align-items: center;
+  gap: var(--sp-1); }
+.hcard .st { font-size: var(--fs-s); margin-top: 2px; }
+.hcard .st.ok { color: var(--c-ok); } .hcard .st.fl { color: var(--c-err); }
+.feed { border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-surface);
+  max-height: 260px; overflow-y: auto; }
+.ev { display: flex; gap: var(--sp-2); padding: var(--sp-1) var(--sp-3); font-size: var(--fs-s);
+  border-bottom: 1px solid var(--c-line-soft); align-items: baseline; }
+.ev:last-child { border-bottom: 0; }
+.ev .t { font-family: var(--font-mono); color: var(--c-ink-4); flex: none; }
+.ev .k { flex: none; font-weight: 600; }
+.ev .k.sync { color: var(--c-accent); } .ev .k.fail { color: var(--c-err); }
+.ev .k.bind { color: var(--c-ok); }
+</style>
+</head>
+<body>
+<h1>原型 · 连接中心 备选方案 ×4</h1>
+<p class="sub">接续此前的矩阵 / 四风格 / 磁贴变体 / 上下点亮——四个**方向互补**的新方案，全部可交互。同一份数据：3 目录 + 1 远仓 ⇄ 5 工具。</p>
+
+<!-- ============ E 自动化规则风 ============ -->
+<section class="style">
+  <h2>E · 自动化规则风<span class="tag">绑定 = 一句可读的规则</span></h2>
+  <p class="fit">把每条绑定渲染成一句自然语言规则：「当 [源] 内容变化时 → 自动同步到 [目标]（复制）」。心智最清晰——绑定即自动化规则，暂停 = 规则停用。[＋ 新规则] 三步内建规则。</p>
+  <div class="demo">
+    <div id="rules"></div>
+    <div class="newrule">
+      <div class="steps">
+        <b style="color:var(--c-accent)">＋ 新规则</b>
+        <span>当</span>
+        <select id="er-src"></select>
+        <span class="arrow-kw">内容变化时 → 自动同步到</span>
+        <select id="er-tgt"></select>
+        <span>（</span><select id="er-mode"><option>复制</option><option>软链接</option></select><span>）</span>
+        <button class="btn primary" id="er-go">创建规则并立即同步</button>
+      </div>
+    </div>
+  </div>
+  <div class="annotate">
+    <b>规则语言</b><span>开关 = 暂停/恢复；[立即同步] 手动触发；删除规则保留工具内文件</span>
+    <b>试一下</b><span>改选源/目标/模式 → 创建规则 → 规则卡出现并可开关</span>
+  </div>
+</section>
+
+<!-- ============ F 双栏拖拽 ============ -->
+<section class="style">
+  <h2>F · 双栏拖拽<span class="tag">直接操纵 · 拖卡建连</span></h2>
+  <p class="fit">左栏源池、右栏工具池：**把源卡拖到工具卡上**即建连（拖到已连工具 = 断开）。最直接的实体操作，双栏各自成池便于浏览。</p>
+  <div class="demo">
+    <div class="pools">
+      <div class="pool" id="f-src"><div class="ph">源 · 目录 / 远程仓库（拖我 →）</div></div>
+      <div class="pool" id="f-tgt"><div class="ph">工具目标（拖到卡片上建连 / 再拖一次断开）</div></div>
+    </div>
+  </div>
+  <div class="annotate">
+    <b>操作</b><span>拖「源」卡 → 落到右栏某工具卡上 = 建连（工具卡 ⇐ 计数 +1）；再拖一次 = 断开</span>
+    <b>辅助</b><span>源卡上显示它已连接的工具色点（与线上目录卡一致）；工具卡显示接收的源数量</span>
+  </div>
+</section>
+
+<!-- ============ G 中心轨道 ============ -->
+<section class="style">
+  <h2>G · 中心轨道（驾驶舱）<span class="tag">空间化 · 一源多工具最直观</span></h2>
+  <p class="fit">选中一个源居于中心，工具排布在轨道环上：已连接 = 实心药丸 + 连线，未连接 = 幽灵占位。点幽灵 = 建连、点实心 = 断开。一眼看清「这个源覆盖了哪些工具」。</p>
+  <div class="demo">
+    <div class="orbit-wrap">
+      <div class="orbit-pick" id="g-pick"></div>
+      <div class="orbit" id="g-orbit"></div>
+    </div>
+  </div>
+  <div class="annotate">
+    <b>操作</b><span>左侧选源（切中心）→ 点轨道上的幽灵工具 = 建连、点实心 = 断开；连线实时重画</span>
+    <b>动效</b><span>建连 = 连线从中心生长 + 药丸变实；断开 = 线淡出；无接线的方向暗示扩展空间</span>
+  </div>
+</section>
+
+<!-- ============ H 活动流 ============ -->
+<section class="style">
+  <h2>H · 活动流（运维视角）<span class="tag">绑定健康 + 同步时间线</span></h2>
+  <p class="fit">绑定以「健康卡」呈现（每工具：已接源数 / 最近同步），下方是同步活动流时间线。适合绑定数量多之后的日常运维；建连/断开仍走其它方案，此处专注「看得见在发生什么」。</p>
+  <div class="demo">
+    <div class="health" id="h-health"></div>
+    <div class="feed" id="h-feed"></div>
+    <div style="margin-top:var(--sp-2)"><button class="btn" id="h-sim">模拟一次自动同步</button></div>
+  </div>
+  <div class="annotate">
+    <b>定位</b><span>作为其它方案的附属页签（连接中心 → 「活动」）：不承担建连，专注健康与回放</span>
+    <b>试一下</b><span>点「模拟一次自动同步」→ 时间线推入新事件 + 健康卡更新</span>
+  </div>
+</section>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ==== 共享数据 ==== */
+const TOOLS = [
+  { id: 'pi', name: 'Pi-Agent', dot: 'dot--pi', path: '~/.pi/agent/skills' },
+  { id: 'codex', name: 'Codex CLI', dot: 'dot--codex', path: '~/.agents/skills 共享' },
+  { id: 'claude', name: 'Claude Code', dot: 'dot--claude', path: '~/.claude/skills' },
+  { id: 'workbuddy', name: 'WorkBuddy', dot: 'dot--p4', path: '~/.workbuddy/skills' },
+  { id: 'zcode', name: 'ZCode', dot: 'dot--p5', path: '~/.zcode/skills' },
+];
+const SRCS = [
+  { id: 'd-ag', kind: '目录', name: 'agent-skills', n: 17 },
+  { id: 'd-li', kind: '目录', name: 'lingchuang-skills', n: 11 },
+  { id: 'd-def', kind: '目录', name: '默认目录', n: 16 },
+  { id: 'r-ve', kind: '远仓', name: 'Vercel Skills', n: 9 },
+];
+let BINDS = [
+  { s: 'd-ag', t: 'pi', mode: '复制', on: true },
+  { s: 'd-li', t: 'pi', mode: '复制', on: true },
+  { s: 'r-ve', t: 'codex', mode: '复制', on: true },
+];
+const T = id => TOOLS.find(t => t.id === id);
+const S = id => SRCS.find(s => s.id === id);
+const isBound = (s, t) => BINDS.find(b => b.s === s && b.t === t && b.on);
+function toast(m) { const t = document.getElementById('toast');
+  t.textContent = m; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 2600); }
+
+/* ==== E 自动化规则 ==== */
+(function () {
+  const host = document.getElementById('rules');
+  const srcSel = document.getElementById('er-src');
+  const tgtSel = document.getElementById('er-tgt');
+  srcSel.innerHTML = SRCS.map(s => `<option value="${s.id}">${s.name}（${s.kind} · ${s.n}）</option>`).join('');
+  tgtSel.innerHTML = TOOLS.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+  function render() {
+    host.innerHTML = BINDS.map((b, i) => {
+      const s = S(b.s), t = T(b.t);
+      return `<div class="rule">
+        <div class="sentence">当 <b>${s.name}</b>（${s.kind} · ${s.n} 个 skill）<span class="kw">内容变化</span>
+          时 <span class="arrow-kw">→</span> 自动同步到 <b>${t.name}</b>（<span class="kw">${b.mode}</span>）</div>
+        <div class="meta">
+          <button class="switch ${b.on ? 'on' : ''}" data-tg="${i}" title="${b.on ? '暂停规则' : '恢复规则'}"></button>
+          <span>${b.on ? '规则启用 · 持续跟随' : '已暂停 · 不自动同步'}</span>
+          <span class="sp"></span>
+          <button class="btn sm" data-sync="${i}">立即同步</button>
+          <button class="btn sm" data-del="${i}">删除规则</button>
+        </div>
+      </div>`;
+    }).join('') || '<div class="note">还没有规则</div>';
+    host.querySelectorAll('[data-tg]').forEach(b => b.onclick = () => {
+      BINDS[Number(b.dataset.tg)].on = !BINDS[Number(b.dataset.tg)].on; render();
+    });
+    host.querySelectorAll('[data-sync]').forEach(b => b.onclick = () => {
+      toast(`已同步：${S(BINDS[Number(b.dataset.sync)].s).name} → ${T(BINDS[Number(b.dataset.sync)].t).name}`); });
+    host.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+      const b2 = BINDS.splice(Number(b.dataset.del), 1)[0];
+      toast(`已删除规则（${S(b2.s).name} ⇄ ${T(b2.t).name} · 文件保留）`); render(); });
+  }
+  document.getElementById('er-go').onclick = () => {
+    const s = srcSel.value, t = tgtSel.value, mode = document.getElementById('er-mode').value;
+    if (isBound(s, t)) { toast('该规则已存在'); return; }
+    BINDS.push({ s, t, mode, on: true });
+    toast(`规则已创建 · 全量同步 ${S(s).n} 个 skill 到 ${T(t).name}`); render();
+  };
+  render();
+})();
+
+/* ==== F 双栏拖拽 ==== */
+(function () {
+  const srcPool = document.getElementById('f-src');
+  const tgtPool = document.getElementById('f-tgt');
+  function render() {
+    srcPool.querySelectorAll('.pcard').forEach(x => x.remove());
+    tgtPool.querySelectorAll('.pcard').forEach(x => x.remove());
+    SRCS.forEach(s => {
+      const bound = BINDS.filter(b => b.s === s.id && b.on);
+      const el = document.createElement('div');
+      el.className = 'pcard src'; el.draggable = true; el.dataset.s = s.id;
+      el.innerHTML = `<span class="nm">${s.name}</span>
+        <span class="binds">${bound.map(b => `<span class="tool-dot ${T(b.t).dot}"></span>`).join('') || '<span class="note">未连接</span>'}</span>`;
+      el.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', s.id); el.classList.add('dragging'); });
+      el.addEventListener('dragend', () => el.classList.remove('dragging'));
+      srcPool.appendChild(el);
+    });
+    TOOLS.forEach(t => {
+      const bs = BINDS.filter(b => b.t === t.id && b.on);
+      const el = document.createElement('div');
+      el.className = 'pcard tgt'; el.dataset.t = t.id;
+      el.innerHTML = `<span class="tool-dot ${t.dot}"></span><span class="nm">${t.name}</span>
+        <span class="note" style="margin-left:auto">⇐ ${bs.length} 源</span>`;
+      el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('drop-hl'); });
+      el.addEventListener('dragleave', () => el.classList.remove('drop-hl'));
+      el.addEventListener('drop', e => {
+        e.preventDefault(); el.classList.remove('drop-hl');
+        const sid = e.dataTransfer.getData('text/plain');
+        if (!sid) return;
+        const exist = BINDS.find(b => b.s === sid && b.t === t.id && b.on);
+        if (exist) {
+          BINDS = BINDS.filter(b => b !== exist);
+          toast(`已断开 ${S(sid).name} ⇄ ${t.name}（文件保留）`);
+        } else {
+          BINDS.push({ s: sid, t: t.id, mode: '复制', on: true });
+          toast(`已连接 ${S(sid).name} → ${t.name} · 全量同步 ${S(sid).n} 个`);
+        }
+        render();
+      });
+      tgtPool.appendChild(el);
+    });
+  }
+  render();
+})();
+
+/* ==== G 中心轨道 ==== */
+(function () {
+  const pick = document.getElementById('g-pick');
+  const orbit = document.getElementById('g-orbit');
+  let center = 'd-ag';
+  function render() {
+    pick.innerHTML = SRCS.map(s => `<div class="oitem ${s.id === center ? 'is-on' : ''}" data-id="${s.id}">
+      ${s.name} <span class="note">· ${s.n}</span></div>`).join('');
+    pick.querySelectorAll('.oitem').forEach(o => o.onclick = () => { center = o.dataset.id; render(); });
+    orbit.querySelectorAll('.center,.sat').forEach(x => x.remove());
+    orbit.querySelectorAll('line').forEach(x => x.remove());
+    const sats = TOOLS.map((tool, i) => {
+      const angle = (i / TOOLS.length) * Math.PI * 2 - Math.PI / 2;
+      const R = 148;
+      return { tool, bound: isBound(center, tool.id),
+        x: 190 + Math.cos(angle) * R - 55, y: 190 + Math.sin(angle) * R - 22,
+        lx: 190 + Math.cos(angle) * 62, ly: 190 + Math.sin(angle) * 62 };
+    });
+    const svgNS = 'http://www.w3.org/2000/svg';
+    let svg = orbit.querySelector('svg');
+    if (!svg) { svg = document.createElementNS(svgNS, 'svg');
+      svg.setAttribute('width', '380'); svg.setAttribute('height', '380'); orbit.prepend(svg); }
+    sats.filter(x => x.bound).forEach(x => {
+      const l = document.createElementNS(svgNS, 'line');
+      l.setAttribute('x1', '190'); l.setAttribute('y1', '190');
+      l.setAttribute('x2', x.lx); l.setAttribute('y2', x.ly);
+      l.setAttribute('stroke', 'var(--c-accent)'); l.setAttribute('stroke-width', '1.5');
+      l.setAttribute('opacity', '.5');
+      svg.appendChild(l);
+    });
+    orbit.insertAdjacentHTML('beforeend',
+      `<div class="center">${S(center).name}<small>${S(center).n} 个 skill · 变化自动同步</small></div>`);
+    sats.forEach(x => {
+      const el = document.createElement('div');
+      el.className = 'sat' + (x.bound ? ' bound' : '');
+      el.style.left = x.x + 'px'; el.style.top = x.y + 'px';
+      el.innerHTML = `<div class="bub"><span class="tool-dot ${x.tool.dot}"></span> ${x.tool.name}
+        <div style="font-size:10px;color:var(--c-ink-4)">${x.bound ? '已连接 · 点击断开' : '点击连接'}</div></div>`;
+      el.onclick = () => {
+        if (x.bound) {
+          BINDS = BINDS.filter(b => !(b.s === center && b.t === x.tool.id));
+          toast(`已断开 ${S(center).name} ⇄ ${x.tool.name}`); render();
+        } else {
+          BINDS.push({ s: center, t: x.tool.id, mode: '复制', on: true });
+          toast(`已连接 ${S(center).name} → ${x.tool.name} · 全量同步 ${S(center).n} 个`); render();
+        }
+      };
+      orbit.appendChild(el);
+    });
+  }
+  render();
+})();
+
+/* ==== H 活动流 ==== */
+(function () {
+  const feed = document.getElementById('h-feed');
+  const health = document.getElementById('h-health');
+  let EVENTS = [
+    { t: '17:41:02', k: 'sync', m: 'agent-skills → Pi-Agent（updated 1 · skipped 16）' },
+    { t: '17:40:58', k: 'sync', m: 'lingchuang-skills → Pi-Agent（skipped 11）' },
+    { t: '17:29:59', k: 'bind', m: '新建绑定：lingchuang-skills ⇄ Pi-Agent（copy · 初始 11）' },
+    { t: '17:29:58', k: 'bind', m: '新建绑定：agent-skills ⇄ Pi-Agent（copy · 初始 17）' },
+    { t: '17:12:19', k: 'fail', m: '同步失败：默认目录 → Claude Code（目标只读）· 将自动重试' },
+  ];
+  function render() {
+    health.innerHTML = TOOLS.map(t => {
+      const n = BINDS.filter(b => b.t === t.id && b.on).length;
+      return `<div class="hcard"><div class="nm"><span class="tool-dot ${t.dot}"></span>${t.name}</div>
+        <div class="st ${n ? 'ok' : 'fl'}">${n ? `● ${n} 个源 · 持续跟随` : '○ 无绑定'}</div>
+        <div class="note">最近：${n ? '17:41' : '—'}</div></div>`;
+    }).join('');
+    feed.innerHTML = EVENTS.map(e =>
+      `<div class="ev"><span class="t">${e.t}</span><span class="k ${e.k}">${{sync:'同步',fail:'失败',bind:'建连'}[e.k]}</span><span>${e.m}</span></div>`).join('');
+  }
+  document.getElementById('h-sim').onclick = () => {
+    const now = new Date();
+    const t = [now.getHours(), now.getMinutes(), now.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
+    EVENTS.unshift({ t, k: 'sync', m: 'agent-skills → Pi-Agent（skipped 17）' });
+    render();
+    toast('已推入一次同步事件');
+  };
+  render();
+})();
+</script>
+</body>
+</html>

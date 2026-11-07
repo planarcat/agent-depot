@@ -11,6 +11,7 @@ import json
 import os
 import sqlite3
 import time
+from urllib.parse import quote
 
 from .store import Store, now_iso
 from . import tools_registry
@@ -784,23 +785,53 @@ def _classify_wb_line(o):
     return (role, txt, "text")
 
 
+def _wb_session_meta(base):
+    """读取 WorkBuddy 主库 sessions 表：{sessionId: {title, custom_title, cwd, ...}}。
+
+    WorkBuddy 界面上的任务名（如「F3173-工厂-产品数据支撑」）只存在这张表里：
+    JSONL 的 ai-title 是模型早先补写的草稿标题，常缺失或滞后，缺了就只剩工作空间路径。
+    库在 projects 的上一级（~/.workbuddy/workbuddy.db），被 WorkBuddy 占用时只读打开，
+    失败就返回空表——标题退化为 JSONL 规则，采集本身不受影响。
+    """
+    base = base.rstrip(os.sep)
+    db_path = os.path.join(os.path.dirname(base), "workbuddy.db")
+    if not os.path.isfile(db_path):
+        db_path = os.path.join(base, "workbuddy.db")
+    if not os.path.isfile(db_path):
+        return {}
+    try:
+        conn = sqlite3.connect("file:%s?mode=ro" % quote(db_path), uri=True, timeout=2)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT id,title,custom_title,cwd,created_at,updated_at FROM sessions"
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return {}
+    return {r["id"]: dict(r) for r in rows}
+
+
 class WorkBuddyScanner:
     """WorkBuddy 会话：<root>/<project>/<uuid>.jsonl（自有 JSONL 格式，追加式）。
 
-    标题行 {"type":"ai-title","aiTitle":...,"sessionId":...} 优先作为会话标题。
+    每个 JSONL 对应工作空间里的一个任务（也有独立任务）；标题优先取主库
+    sessions 表的 custom_title / title，JSONL 的 ai-title 与首条用户消息只作兜底。
     """
 
     def __init__(self, tool_id=None, root=None):
         self.tool = tool_id or "workbuddy"
         self.root = _expand_root(root)
 
-    def sources(self):
-        base = (self.root or os.environ.get("HUB_WORKBUDDY_PROJECTS")
+    def _base(self):
+        return (self.root or os.environ.get("HUB_WORKBUDDY_PROJECTS")
                 or os.path.expanduser("~/.workbuddy/projects"))
-        return sorted(glob.glob(os.path.join(base, "*", "*.jsonl")))
+
+    def sources(self):
+        return sorted(glob.glob(os.path.join(self._base(), "*", "*.jsonl")))
 
     def scan(self, store: Store):
         stats = {"tool": self.tool, "files": 0, "new_messages": 0, "new_sessions": 0}
+        meta_map = _wb_session_meta(self._base())
         for path in self.sources():
             stats["files"] += 1
             key = "%s:%s" % (self.tool, path)
@@ -815,6 +846,7 @@ class WorkBuddyScanner:
 
             sid = os.path.splitext(os.path.basename(path))[0]
             proj = os.path.basename(os.path.dirname(path))
+            meta = meta_map.get(sid) or {}
             with open(path, "rb") as f:
                 f.seek(cur["offset_bytes"])
                 chunk = f.read()
@@ -829,9 +861,10 @@ class WorkBuddyScanner:
             session_touched = False
             user_candidates = []
             seq = cur["msg_seq"]
-            started_at = updated_at = None
+            started_at = None
             custom_title = None
             last_ts = None
+            title_hit = False
             for line in lines:
                 line = line.strip()
                 if not line:
@@ -848,7 +881,10 @@ class WorkBuddyScanner:
                         started_at = ts
                 typ = o.get("type")
                 if typ == "ai-title":
-                    custom_title = o.get("aiTitle") or o.get("title") or custom_title
+                    t = o.get("aiTitle") or o.get("title")
+                    if t and t != custom_title:
+                        custom_title = t
+                        title_hit = True
                 if o.get("cwd"):
                     proj = o["cwd"]
                 cls = _classify_wb_line(o)
@@ -863,16 +899,40 @@ class WorkBuddyScanner:
                     stats["new_messages"] += 1
                     session_touched = True
 
-            if session_touched or cur["offset_bytes"] == 0:
-                title = (custom_title or _pick_title(user_candidates)
-                         or "(%s) %s" % (self.tool, _clean_title(proj)))
-                if started_at is None:
-                    started_at = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mtime))
+            # 标题优先级：主库用户改名 > 主库任务名 > JSONL ai-title > 首条用户消息 > 工作空间路径。
+            # 主库任务名才是 WorkBuddy 界面里每个会话（任务）的名字；JSONL 的 ai-title
+            # 常缺失/滞后，只作兜底，否则整列只会重复显示工作空间。
+            prev = store.session(sid)
+            db_custom = _clean_title(meta.get("custom_title"))
+            db_title = _clean_title(meta.get("title"))
+            picked = _pick_title(user_candidates)
+            if db_custom:
+                title, title_source = db_custom, "custom-title"
+            elif db_title:
+                title, title_source = db_title, "session-title"
+            elif custom_title:
+                title, title_source = custom_title, "ai-title"
+            elif picked:
+                title, title_source = picked, "first-user"
+            elif prev and prev.get("title") and prev.get("title_source") not in (None, "", "fallback"):
+                # 增量扫描只读到追加的正文、没读到标题行：沿用已有标题，别退回工作空间路径
+                title, title_source = prev["title"], prev["title_source"]
+            else:
+                title, title_source = "(%s) %s" % (self.tool, _clean_title(proj)), "fallback"
+
+            proj = meta.get("cwd") or proj
+            started_at = (_wb_ts(meta.get("created_at")) or started_at
+                          or time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(mtime)))
+            updated = max([x for x in (_wb_ts(meta.get("updated_at")), last_ts) if x],
+                          default=now_iso())
+
+            title_changed = not prev or prev.get("title") != title
+            if session_touched or cur["offset_bytes"] == 0 or title_hit or title_changed:
                 store.upsert_session(sid, self.tool, (title or "")[:200], proj, path,
-                                     started_at, last_ts or now_iso(),
-                                     "ai-title" if custom_title else "first-user")
-                stats["new_sessions"] += 1
-                store.bump_msg_count(sid)
+                                     started_at, updated, title_source)
+                if session_touched or cur["offset_bytes"] == 0:
+                    stats["new_sessions"] += 1
+                    store.bump_msg_count(sid)
             store.set_cursor(key, consumed, seq, mtime, size)
         store.commit()
         return stats

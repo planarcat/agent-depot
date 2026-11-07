@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 目录 ↔ 工具 直连（绑定同步）</title>
+<style>
+/* ==== Design Tokens（与 web/tokens.css 同源，2026-10-31） ==== */
+:root {
+  --c-ink: #171d1f; --c-ink-2: #3c4447; --c-ink-3: #5b6669; --c-ink-4: #8a9497;
+  --c-bg: #f2f4f4; --c-surface: #f9fafa; --c-surface-2: #ffffff;
+  --c-line: #d9dedf; --c-line-soft: #e6eaeb; --c-rail: #f4f3f0;
+  --c-accent: #0d6a63; --c-accent-strong: #0a544e; --c-accent-soft: #eaf2f1;
+  --c-accent-line: #bfd6d2; --c-on-accent: #ffffff;
+  --c-err: #a03d2e; --c-err-soft: #f8ece9; --c-err-line: #f0c8bf;
+  --c-ok: #1a7f4b; --c-ok-soft: #e9f4ee;
+  --c-warn: #8a6d1f; --c-warn-soft: #f6f1e2;
+  --c-t-claude: #d97757; --c-t-codex: #171d1f; --c-t-opencode: #7c5cff;
+  --c-t-p4: #4a7d8c; --c-t-p5: #9a6b3f; --c-t-p7: #a35d7a;
+  --fs-xs: 10px; --fs-s: 11px; --fs-md: 12px; --fs-body: 13px; --fs-m: 14px;
+  --fs-l: 16px; --fs-xl: 20px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+  --tcard: 136px;
+  --r-xs: 6px; --r-s: 4px; --r-m: 8px; --r-l: 12px;
+  --z-dropdown: 40; --z-modal: 50; --z-modal-top: 55; --z-toast: 60;
+  --t-quick: 150ms cubic-bezier(.2,.6,.3,1); --t-base: 250ms cubic-bezier(.2,.6,.3,1);
+  --sh-hover: 0 4px 12px rgba(23,29,31,.08), 0 1px 2px rgba(23,29,31,.04);
+  --sh-active: 0 0 0 1.5px var(--c-accent);
+  --sh-float: 0 12px 32px rgba(23,29,31,.14), 0 2px 6px rgba(23,29,31,.06);
+  --input-h: 35px;
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--c-bg); color: var(--c-ink); font-family: var(--font-sans);
+  font-size: var(--fs-body); padding: var(--sp-5); }
+h1 { font-size: var(--fs-xl); font-weight: 600; }
+.sub { color: var(--c-ink-3); font-size: var(--fs-body); margin-top: var(--sp-1); }
+.note { color: var(--c-ink-4); font-size: var(--fs-s); }
+.mono { font-family: var(--font-mono); }
+
+/* ==== 画布布局：横向滚动的编号屏幕 ==== */
+.canvas { display: flex; gap: var(--sp-5); align-items: flex-start;
+  padding: var(--sp-5) 0 var(--sp-6); overflow-x: auto; }
+.screen { background: var(--c-surface-2); border: 1px solid var(--c-line);
+  border-radius: var(--r-l); padding: var(--sp-4); flex: none; width: 560px; }
+.screen h2 { font-size: var(--fs-l); font-weight: 600; margin-bottom: var(--sp-1); }
+.screen h2 .no { display: inline-flex; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--c-accent); color: var(--c-on-accent); font-size: var(--fs-s);
+  align-items: center; justify-content: center; margin-right: var(--sp-2); vertical-align: 2px; }
+.screen .why { color: var(--c-ink-3); font-size: var(--fs-s); margin-bottom: var(--sp-3); }
+.annotate { margin-top: var(--sp-3); border-top: 1px solid var(--c-line-soft);
+  padding-top: var(--sp-2); display: grid; gap: var(--sp-1); }
+.annotate b { font-size: var(--fs-s); color: var(--c-accent); font-weight: 600; }
+.annotate span { font-size: var(--fs-s); color: var(--c-ink-3); }
+
+/* ==== 分组面板与卡片（对齐线上 .srcgroup / .tcard） ==== */
+.stage { background: var(--c-surface); border: 1px solid var(--c-line);
+  border-radius: var(--r-m); padding: var(--sp-3); display: flex; gap: var(--sp-3);
+  overflow: hidden; }
+.srcgroup { background: var(--c-surface); border: 1px solid var(--c-line);
+  border-radius: var(--r-m); padding: var(--sp-3); width: 170px; flex: none;
+  display: flex; flex-direction: column; }
+.srcgroup .nm { font-weight: 600; font-size: var(--fs-m); }
+.srcgroup .meta { font-family: var(--font-mono); font-size: var(--fs-s);
+  color: var(--c-ink-4); margin-top: var(--sp-1); }
+.srcgroup .d { font-size: var(--fs-s); color: var(--c-ink-4); margin-top: var(--sp-1); line-height: 1.5; }
+.srcgroup .acts { margin-top: auto; padding-top: var(--sp-2); display: flex; gap: var(--sp-1); }
+.grid { display: flex; gap: var(--sp-3); }
+.tcard { width: var(--tcard); border: 1px solid var(--c-line); border-radius: var(--r-m);
+  background: var(--c-surface-2); padding: var(--sp-2); cursor: pointer; position: relative;
+  transition: box-shadow var(--t-quick), transform var(--t-quick); }
+.tcard:hover { box-shadow: var(--sh-hover); transform: translateY(-2px); z-index: 10; }
+.tcard.is-on { box-shadow: var(--sh-active); }
+.cnt { display: inline-flex; min-width: 28px; height: 28px; border-radius: var(--r-xs);
+  border: 1px solid var(--c-line); background: var(--c-surface);
+  align-items: center; justify-content: center; font-family: var(--font-mono);
+  font-size: var(--fs-md); color: var(--c-ink-2); }
+.chip { display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; border-radius: var(--r-m); font-weight: 600;
+  font-size: var(--fs-md); color: #fff; }
+.chip.muted { background: var(--c-ink-2); }
+.tcard .nm { font-size: var(--fs-body); margin-top: var(--sp-2); text-align: center; }
+.tcard .inner { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
+/* 新增：目录卡「→ 已连接工具」标记 */
+.linked { position: absolute; right: var(--sp-2); bottom: var(--sp-2);
+  display: inline-flex; align-items: center; gap: 3px; }
+.linked .dot { width: 8px; height: 8px; border-radius: 50%; }
+.linked .arr { color: var(--c-accent); font-size: var(--fs-s); font-weight: 600; }
+
+/* ==== 按钮 / 输入 ==== */
+.btn { border: 1px solid var(--c-line); background: var(--c-surface-2); color: var(--c-ink);
+  border-radius: var(--r-xs); font-size: var(--fs-s); font-family: var(--font-sans);
+  padding: 4px 10px; cursor: pointer; transition: background var(--t-quick); }
+.btn:hover { background: var(--c-surface); }
+.btn.primary { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+.btn.primary:hover { background: var(--c-accent-strong); }
+.btn.danger { color: var(--c-err); border-color: var(--c-err-line); background: var(--c-err-soft); }
+.btn.sm { padding: 3px 8px; }
+
+/* ==== 弹窗（对齐 .hub-modal） ==== */
+.overlay { position: fixed; inset: 0; background: rgba(23,29,31,.4); z-index: var(--z-modal);
+  display: none; align-items: flex-start; justify-content: center; padding-top: 9vh; }
+.overlay.is-in { display: flex; }
+.hub-modal { background: var(--c-surface); border-radius: var(--r-l); box-shadow: var(--sh-float);
+  width: 560px; max-width: 94vw; max-height: 82vh; overflow-y: auto;
+  border-radius: var(--r-l); overflow: hidden; }
+.hub-modal__head { display: flex; align-items: center; justify-content: space-between;
+  padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--c-line-soft); }
+.hub-modal__title { font-weight: 600; font-size: var(--fs-m); }
+.hub-modal__x { border: 0; background: none; color: var(--c-ink-4); font-size: var(--fs-l); cursor: pointer; }
+.hub-modal__body { padding: var(--sp-4); }
+.hub-modal__sub { font-size: var(--fs-s); color: var(--c-ink-3); line-height: 1.55; margin-bottom: var(--sp-3); }
+.hub-modal__foot { display: flex; justify-content: flex-end; gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--c-line-soft); }
+
+/* ==== 目录列表（目录管理弹窗 v2） ==== */
+.dirlist { border: 1px solid var(--c-line); border-radius: var(--r-m); overflow: hidden;
+  background: var(--c-surface); max-height: 300px; overflow-y: auto; }
+.dirlist__row { display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--c-line-soft); }
+.dirlist__row:last-child { border-bottom: 0; }
+.dirlist__nm { font-weight: 600; font-size: var(--fs-body); flex: none; }
+.dirlist__meta { flex: 1; min-width: 0; font-size: var(--fs-s); color: var(--c-ink-4);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dirlist__meta.center { text-align: right; flex: 0 1 auto; max-width: 45%; }
+.tchip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--c-line);
+  border-radius: 999px; padding: 1px 8px 1px 5px; font-size: var(--fs-s); color: var(--c-ink-2);
+  background: var(--c-surface-2); }
+.tchip .dot { width: 7px; height: 7px; border-radius: 50%; }
+.dirlist__foot { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-3); }
+.dirlist__hint { font-size: var(--fs-s); color: var(--c-ink-4); }
+
+/* ==== 目标选择（对齐 MV.targetPicker） ==== */
+.targets { border: 1px solid var(--c-line); border-radius: var(--r-m); overflow: hidden;
+  background: var(--c-surface); margin-top: var(--sp-2); }
+.tgt { display: flex; align-items: center; gap: var(--sp-2); width: 100%; text-align: left;
+  padding: var(--sp-2) var(--sp-3); border: 0; border-bottom: 1px solid var(--c-line-soft);
+  background: transparent; cursor: pointer; font-family: var(--font-sans);
+  transition: background var(--t-quick); }
+.tgt:hover { background: var(--c-surface-2); }
+.tgt:last-child { border-bottom: 0; }
+.tgt .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.tgt .box { width: 16px; height: 16px; border-radius: var(--r-xs); border: 2px solid var(--c-line);
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  color: transparent; font-size: var(--fs-s); }
+.tgt.is-on .box { background: var(--c-accent); border-color: var(--c-accent); color: #fff; }
+.tgt.is-on .nm2 { color: var(--c-accent); font-weight: 600; }
+.tgt .nm2 { font-size: var(--fs-body); color: var(--c-ink); flex: none; }
+.tgt .path { flex: 1; min-width: 0; font-size: var(--fs-s); color: var(--c-ink-4);
+  font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.share { font-size: var(--fs-xs); color: var(--c-warn); background: var(--c-warn-soft);
+  border-radius: var(--r-s); padding: 1px 6px; flex: none; }
+
+/* ==== 写入方式 / 冲突策略 互斥按钮 ==== */
+.seg { display: inline-flex; border: 1px solid var(--c-line); border-radius: var(--r-xs);
+  overflow: hidden; }
+.seg button { border: 0; background: var(--c-surface-2); padding: 5px 14px; cursor: pointer;
+  font-size: var(--fs-s); font-family: var(--font-sans); color: var(--c-ink-2); }
+.seg button.is-on { background: var(--c-accent-soft); color: var(--c-accent); font-weight: 600; }
+.frow { display: flex; align-items: center; gap: var(--sp-3); margin: var(--sp-3) 0; }
+.frow label { font-size: var(--fs-s); color: var(--c-ink-2); width: 84px; flex: none; }
+
+/* ==== toast ==== */
+.toast { position: fixed; right: var(--sp-5); bottom: var(--sp-5); z-index: var(--z-toast);
+  background: var(--c-surface-2); border-radius: var(--r-m); box-shadow: var(--sh-float);
+  padding: var(--sp-2) var(--sp-3); font-size: var(--fs-body); display: flex; gap: var(--sp-2);
+  align-items: center; opacity: 0; transform: translateY(8px);
+  transition: opacity var(--t-base), transform var(--t-base); pointer-events: none; }
+.toast.is-in { opacity: 1; transform: none; }
+.toast .tick { color: var(--c-ok); font-weight: 600; }
+
+/* ==== 台账示意 ==== */
+.ledger { border: 1px solid var(--c-line); border-radius: var(--r-m); overflow: hidden;
+  font-family: var(--font-mono); font-size: var(--fs-s); }
+.ledger .lr { display: flex; gap: var(--sp-2); padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--c-line-soft); background: var(--c-surface); }
+.ledger .lr:last-child { border-bottom: 0; }
+.ledger .t { color: var(--c-ink-4); flex: none; }
+.ledger .ok { color: var(--c-ok); flex: none; }
+.ledger .a { color: var(--c-ink-2); flex: none; }
+</style>
+</head>
+<body>
+<h1>原型 · 目录 ↔ 工具 直连（绑定同步）</h1>
+<p class="sub">目录与工具建立持久连接：建连即全量同步 · 目录内容变化实时跟随 · 冲突停手 · 全程台账。<span class="note">拆解文档：Plans/目录连接工具/需求拆解.md · 2026-10-31</span></p>
+
+<div class="canvas">
+
+  <!-- ① 目录卡连接标记 -->
+  <section class="screen">
+    <h2><span class="no">①</span>Skills 页 · 目录卡显示连接标记</h2>
+    <p class="why">已连接工具的目录卡在数量角标旁出现「→ + 工具色点」，一眼看出哪些目录在自动同步。</p>
+    <div class="stage">
+      <div class="srcgroup">
+        <div class="nm">本地</div>
+        <div class="meta">3 源 · 44 条</div>
+        <div class="d">默认目录 + 已链接目录；目录内条目变化实时同步</div>
+        <div class="acts"><button class="btn">目录管理</button><button class="btn">新建</button><button class="btn">导入</button></div>
+      </div>
+      <div class="grid">
+        <div class="tcard"><span class="cnt">16</span>
+          <div class="inner"><span class="chip muted">默认</span></div>
+          <div class="nm">默认</div>
+        </div>
+        <div class="tcard is-on" onclick="openConnect()">
+          <span class="cnt">17</span>
+          <div class="inner"><span class="chip muted">AG</span></div>
+          <div class="nm">agent-skills</div>
+          <span class="linked" title="已连接：Claude Code · ZCode"><span class="arr">→</span>
+            <span class="dot" style="background:var(--c-t-claude)"></span>
+            <span class="dot" style="background:var(--c-t-p5)"></span></span>
+        </div>
+        <div class="tcard">
+          <span class="cnt">11</span>
+          <div class="inner"><span class="chip muted">LI</span></div>
+          <div class="nm">lingchuang-skills</div>
+          <span class="linked" title="已连接：Trae CN"><span class="arr">→</span>
+            <span class="dot" style="background:var(--c-t-p7)"></span></span>
+        </div>
+      </div>
+    </div>
+    <div class="annotate">
+      <b>→ 色点 = 已连接的目标工具</b><span>悬停显示「已连接：Claude Code · ZCode」；点击卡片仍为筛选条目，不改变语义</span>
+      <b>连接入口有两个</b><span>目录卡（快捷）与「目录管理」弹窗（管理全量），同一能力同一弹窗</span>
+    </div>
+  </section>
+
+  <!-- ② 目录管理 v2 -->
+  <section class="screen">
+    <h2><span class="no">②</span>目录管理 · 每个目录的连接一览</h2>
+    <p class="why">在既有目录管理弹窗里，每行目录直接看到「已连接到哪些工具」，并可暂停 / 断开 / 追加。</p>
+    <div class="stage" style="display:block">
+      <div class="hub-modal" style="box-shadow:none; width:100%">
+        <div class="hub-modal__head"><span class="hub-modal__title">目录管理</span><button class="hub-modal__x">×</button></div>
+        <div class="hub-modal__body">
+          <div class="hub-modal__sub">Skills 与 MCP 共用目录池：链接的目录原地挂进 hub（不复制），目录内条目变化实时同步。建立「连接」后，目录内容将自动同步到所选工具。</div>
+          <div class="dirlist">
+            <div class="dirlist__row" style="color:var(--c-ink-3)">
+              <span class="dirlist__nm" style="color:var(--c-ink-3);font-weight:400">默认目录</span>
+              <span class="dirlist__meta">registry/skills · registry/mcp · 16 条</span>
+              <span class="tchip" style="color:var(--c-ink-4)">内置</span>
+            </div>
+            <div class="dirlist__row">
+              <span class="dirlist__nm">agent-skills</span>
+              <span class="dirlist__meta">~/Documents/Projects/@planarcat/agent-skills · 17 skill</span>
+              <span class="tchip"><span class="dot" style="background:var(--c-t-claude)"></span>Claude Code</span>
+              <span class="tchip"><span class="dot" style="background:var(--c-t-p5)"></span>ZCode</span>
+              <button class="btn sm" onclick="toast('已暂停 agent-skills ⇄ 全部工具的自动同步')">暂停</button>
+              <button class="btn sm" onclick="openDisconnect()">断开</button>
+              <button class="btn sm primary" onclick="openConnect()">连接工具…</button>
+            </div>
+            <div class="dirlist__row">
+              <span class="dirlist__nm">lingchuang-skills</span>
+              <span class="dirlist__meta">~/Documents/Projects/@planarcat/lingchuang-skills · 11 skill</span>
+              <span class="tchip"><span class="dot" style="background:var(--c-t-p7)"></span>Trae CN</span>
+              <button class="btn sm">暂停</button>
+              <button class="btn sm">断开</button>
+              <button class="btn sm primary" onclick="openConnect()">连接工具…</button>
+            </div>
+          </div>
+          <div class="dirlist__foot">
+            <button class="btn primary" disabled>选择目录…</button>
+            <span class="dirlist__hint">弹出 macOS 文件夹选择器，选中即链接</span>
+          </div>
+        </div>
+        <div class="hub-modal__foot"><button class="btn primary">完成</button></div>
+      </div>
+    </div>
+    <div class="annotate">
+      <b>连接是目录级的</b><span>目录里现有与未来的 skills 都跟随；不需要按条目勾选</span>
+      <b>暂停 ≠ 断开</b><span>暂停只停自动同步（可恢复）；断开解除关系（默认保留工具内文件，可选清理受管文件）</span>
+    </div>
+  </section>
+
+  <!-- ③ 连接工具弹窗 -->
+  <section class="screen">
+    <h2><span class="no">③</span>连接工具 · 选择目标与策略</h2>
+    <p class="why">建连 = 立即把目录内全部 skills 同步过去；此后目录变化自动跟随。冲突与写入方式在这里一次定清。</p>
+    <div class="stage" style="display:block">
+      <div class="hub-modal" style="box-shadow:none; width:100%">
+        <div class="hub-modal__head"><span class="hub-modal__title">连接工具 · agent-skills（17 个 skill）</span><button class="hub-modal__x" onclick="closeAll()">×</button></div>
+        <div class="hub-modal__body">
+          <div class="hub-modal__sub">建立连接后：目录内全部 skills 立即同步到所选工具；此后目录内容变化（外部改 / hub 内改 / 增删）自动跟随更新，全程记入台账。</div>
+          <div class="frow"><label>同步到</label><span class="note">勾选目标目录；共享目录会同时作用于列出的多个工具</span></div>
+          <div class="targets" id="targets">
+            <button class="tgt" onclick="tog(this)"><span class="box">✓</span><span class="dot" style="background:var(--c-t-claude)"></span><span class="nm2">Claude Code</span><span class="path">~/.claude/skills</span></button>
+            <button class="tgt is-on" onclick="tog(this)"><span class="box">✓</span><span class="dot" style="background:var(--c-t-codex)"></span><span class="nm2">Codex CLI</span><span class="path">~/.agents/skills</span><span class="share">共享 · OpenCode 同目录</span></button>
+            <button class="tgt is-on" onclick="tog(this)"><span class="box">✓</span><span class="dot" style="background:var(--c-t-opencode)"></span><span class="nm2">OpenCode</span><span class="path">~/.agents/skills</span><span class="share">共享 · Codex 同目录</span></button>
+            <button class="tgt" onclick="tog(this)"><span class="box">✓</span><span class="dot" style="background:var(--c-t-p4)"></span><span class="nm2">WorkBuddy</span><span class="path">~/.workbuddy/skills</span></button>
+            <button class="tgt" onclick="tog(this)"><span class="box">✓</span><span class="dot" style="background:var(--c-t-p7)"></span><span class="nm2">Trae CN</span><span class="path">~/.trae-cn/skills</span></button>
+          </div>
+          <div class="frow" style="margin-top:var(--sp-4)"><label>写入方式</label>
+            <span class="seg"><button class="is-on">直接复制</button><button>软链接（M2）</button></span>
+            <span class="note">两种表示互斥，切换时自动清理旧表示（先备份）</span></div>
+          <div class="frow"><label>同名冲突</label>
+            <span class="seg"><button class="is-on">跳过并报告</button><button>覆盖（先备份）</button></span>
+            <span class="note">目标里已有、但不是 hub 落的内容 → 停手保护</span></div>
+        </div>
+        <div class="hub-modal__foot">
+          <button class="btn" onclick="closeAll()">取消</button>
+          <button class="btn primary" onclick="doConnect()">连接并同步 17 个 skill</button>
+        </div>
+      </div>
+    </div>
+    <div class="annotate">
+      <b>绑定对象是「目标目录」</b><span>Codex 与 OpenCode 共享 ~/.agents/skills——连接其一 = 两边同时生效，UI 以「共享」徽标明示</span>
+      <b>主按钮计数跟随勾选</b><span>「连接并同步 N 个 skill」的 N 是目录内条目数，勾选变化时同步更新</span>
+    </div>
+  </section>
+
+  <!-- ④ 同步反馈 -->
+  <section class="screen">
+    <h2><span class="no">④</span>同步反馈 · toast 与台账</h2>
+    <p class="why">建连与每次自动同步都可见：toast 报结果，台账留明细。同步失败时目录卡出现黄点，悬停看原因。</p>
+    <div class="stage" style="display:block">
+      <div class="toast is-in" style="position:static; opacity:1; transform:none; pointer-events:auto">
+        <span class="tick">✓</span><span><b>agent-skills → Codex CLI</b>：3 更新 · 1 新增 · 1 冲突跳过</span>
+      </div>
+      <div style="height:var(--sp-3)"></div>
+      <div class="ledger">
+        <div class="lr"><span class="t">15:42:11</span><span class="ok">ok</span><span class="a">binding:sync</span><span>agent-skills → ~/.agents/skills（updated 3 · added 1 · conflict 1）</span></div>
+        <div class="lr"><span class="t">15:42:11</span><span class="ok">ok</span><span class="a">binding:sync</span><span>agent-skills → ~/.claude/skills（updated 3 · added 1）</span></div>
+        <div class="lr"><span class="t">15:40:02</span><span class="ok">ok</span><span class="a">binding:bind</span><span>agent-skills ⇄ ~/.agents/skills（copy · 初始同步 17）</span></div>
+      </div>
+      <div style="height:var(--sp-3)"></div>
+      <div class="hub-modal__sub" style="margin:0">
+        <b style="color:var(--c-warn)">失败态：</b>上次同步失败时，目录卡色点变黄 + 悬停显示原因（目标只读 / 磁盘满 / 权限）；下次目录变化自动重试。
+      </div>
+    </div>
+    <div class="annotate">
+      <b>幂等</b><span>内容没变的目标自动跳过，反复触发不产生副作用</span>
+      <b>只动自己的</b><span>删除传播按「托管清单」执行——hub 没落过的文件一个不碰</span>
+    </div>
+  </section>
+
+</div>
+
+<!-- 断开确认（子对话框层级） -->
+<div class="overlay" id="ov-disconnect" style="z-index:var(--z-modal-top)">
+  <div class="hub-modal" style="width:440px">
+    <div class="hub-modal__head"><span class="hub-modal__title">断开连接 · agent-skills ⇄ ZCode</span><button class="hub-modal__x" onclick="hide('ov-disconnect')">×</button></div>
+    <div class="hub-modal__body">
+      <div class="hub-modal__sub">断开后目录变化不再同步到该工具。</div>
+      <div class="frow"><label style="width:auto; display:flex; gap:var(--sp-2); align-items:center; color:var(--c-ink); font-size:var(--fs-body)">
+        <input type="checkbox" id="ck-clean"> 同时清理该工具内的受管文件（17 个目录；只删 hub 落过的）</label></div>
+      <div class="hub-modal__sub" style="color:var(--c-ink-4)">不勾选 = 工具内文件原样保留，仅解除自动同步。</div>
+    </div>
+    <div class="hub-modal__foot">
+      <button class="btn" onclick="hide('ov-disconnect')">取消</button>
+      <button class="btn danger" onclick="hide('ov-disconnect'); toast('已断开 agent-skills ⇄ ZCode')">断开连接</button>
+    </div>
+  </div>
+</div>
+
+<!-- 连接弹窗（可直接交互的浮层版） -->
+<div class="overlay" id="ov-connect">
+  <div class="hub-modal">
+    <div class="hub-modal__head"><span class="hub-modal__title">连接工具 · agent-skills（17 个 skill）</span><button class="hub-modal__x" onclick="closeAll()">×</button></div>
+    <div class="hub-modal__body">
+      <div class="hub-modal__sub">建立连接后：目录内全部 skills 立即同步到所选工具；此后目录内容变化自动跟随更新，全程记入台账。</div>
+      <div class="targets">
+        <button class="tgt is-on" onclick="tog(this)"><span class="box">✓</span><span class="dot" style="background:var(--c-t-claude)"></span><span class="nm2">Claude Code</span><span class="path">~/.claude/skills</span></button>
+        <button class="tgt" onclick="tog(this)"><span class="box">✓</span><span class="dot" style="background:var(--c-t-codex)"></span><span class="nm2">Codex CLI</span><span class="path">~/.agents/skills</span><span class="share">共享 · OpenCode 同目录</span></button>
+        <button class="tgt" onclick="tog(this)"><span class="box">✓</span><span class="dot" style="background:var(--c-t-opencode)"></span><span class="nm2">OpenCode</span><span class="path">~/.agents/skills</span><span class="share">共享 · Codex 同目录</span></button>
+        <button class="tgt" onclick="tog(this)"><span class="box">✓</span><span class="dot" style="background:var(--c-t-p4)"></span><span class="nm2">WorkBuddy</span><span class="path">~/.workbuddy/skills</span></button>
+      </div>
+      <div class="frow" style="margin-top:var(--sp-4)"><label>写入方式</label>
+        <span class="seg"><button class="is-on">直接复制</button><button>软链接（M2）</button></span></div>
+      <div class="frow"><label>同名冲突</label>
+        <span class="seg"><button class="is-on">跳过并报告</button><button>覆盖（先备份）</button></span></div>
+    </div>
+    <div class="hub-modal__foot">
+      <button class="btn" onclick="closeAll()">取消</button>
+      <button class="btn primary" id="btn-go" onclick="doConnect()">连接并同步 1 个 skill 集</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><span class="tick">✓</span><span id="toast-msg"></span></div>
+
+<script>
+function tog(btn) { btn.classList.toggle('is-on');
+  const n = document.querySelectorAll('#ov-connect .tgt.is-on').length;
+  document.getElementById('btn-go').textContent = '连接并同步 ' + (n ? n : 0) + ' 个目标'; }
+function openConnect() { document.getElementById('ov-connect').classList.add('is-in'); }
+function openDisconnect() { document.getElementById('ov-disconnect').classList.add('is-in'); }
+function hide(id) { document.getElementById(id).classList.remove('is-in'); }
+function closeAll() { hide('ov-connect'); }
+function toast(msg) { const t = document.getElementById('toast');
+  document.getElementById('toast-msg').textContent = msg;
+  t.classList.add('is-in'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('is-in'), 3200); }
+function doConnect() { closeAll(); toast('已连接 agent-skills → 2 个目标 · 初始同步 17 · 台账已记录'); }
+</script>
+</body>
+</html>

@@ -21,6 +21,7 @@ import tempfile
 import time
 import unittest
 import urllib.request
+import urllib.parse
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 import socket
@@ -642,6 +643,154 @@ class V4Test(HubSandbox, unittest.TestCase):
         self.assertEqual(s, 200)
         s, d = req("GET", "/api/skills/sources")
         self.assertFalse(any(x["id"] == sid for x in d["sources"]))
+
+
+class LocalDirsHttp(HubSandbox, unittest.TestCase):
+    """本地目录路由（/api/local-dirs）：链接 / 列表 / 移除 + 目录过滤（2026-10-31）。
+
+    创建路由已随「取消创建」口径移除；POST /api/local-dirs/pick 弹系统级
+    osascript 窗口，依赖人工交互，不进自动化判据。
+    """
+
+    def test_l01_link_list_delete(self):
+        ext = os.path.join(self.__class__.tmp, "ext-l01")
+        os.makedirs(ext)
+        s, d = req("POST", "/api/local-dirs/link", {"path": ext, "name": "http-dir"})
+        self.assertEqual(s, 200)
+        self.assertTrue(d["ok"], d)
+        self.assertEqual(d["origin"], "linked")
+        did = d["id"]
+        # 重复链接同路径 → 400
+        s, d = req("POST", "/api/local-dirs/link", {"path": ext})
+        self.assertEqual(s, 400)
+        s, d = req("GET", "/api/local-dirs")
+        row = [x for x in d["dirs"] if x["id"] == did][0]
+        self.assertEqual(row["counts"], {"skills": 0, "mcp": 0})
+        # 删除 + 磁盘保留
+        root = row["path"]
+        s, d = req("DELETE", "/api/local-dirs/%d" % did)
+        self.assertEqual(s, 200)
+        self.assertTrue(os.path.isdir(root))
+        # 非法 id → 400
+        s, _ = req("DELETE", "/api/local-dirs/abc")
+        self.assertEqual(s, 400)
+
+    def test_l02_link_scan_and_dir_filter(self):
+        ext = os.path.join(self.__class__.tmp, "ext-http")
+        os.makedirs(os.path.join(ext, "http-skill"))
+        with open(os.path.join(ext, "http-skill", "SKILL.md"), "w") as f:
+            f.write("---\nname: http-skill\nversion: 2.0\n---\nbody")
+        s, d = req("POST", "/api/local-dirs/link", {"path": ext})
+        self.assertEqual(s, 200)
+        self.assertTrue(d["ok"], d)
+        self.assertEqual(d["added"], 1, d)
+        did = d["id"]
+        # 缺省名 = 链接目录自身的目录名
+        self.assertEqual(d["name"], "ext-http")
+        # 目录过滤：HTTP 路由口径
+        s, d = req("GET", "/api/skills/items?source=manual&dir=%d" % did)
+        self.assertEqual(s, 200)
+        self.assertIn("http-skill", [it["name"] for it in d["items"]])
+        s, d = req("GET", "/api/skills/items?source=manual&dir=default")
+        self.assertNotIn("http-skill", [it["name"] for it in d["items"]])
+        # 链接不存在的路径 → 400
+        s, d = req("POST", "/api/local-dirs/link", {"path": os.path.join(self.__class__.tmp, "nope")})
+        self.assertEqual(s, 400)
+
+    def test_l05_container_layout_discovery(self):
+        """容器目录自动发现：A/b/skills、A/c/mcp 子文件夹一起登记/统计/同步
+        （用户口径 2026-11-05：关联目录下若干子 skills/mcp 文件夹全量链接）。"""
+        A = os.path.join(self.__class__.tmp, "ext-container")
+        for sub in ("b/skills/foo", "b/skills/bar"):
+            os.makedirs(os.path.join(A, sub))
+            with open(os.path.join(A, sub, "SKILL.md"), "w") as f:
+                f.write("---\nname: %s\n---\nbody" % os.path.basename(sub))
+        os.makedirs(os.path.join(A, "c", "mcp"))
+        with open(os.path.join(A, "c", "mcp", "demo.json"), "w") as f:
+            f.write('{"command": "demo-cmd"}')
+        s, d = req("POST", "/api/local-dirs/link", {"path": A, "name": "ext-container"})
+        self.assertEqual(s, 200)
+        self.assertTrue(d["ok"], d)
+        self.assertEqual(d["added"], 3, d)          # 两个 skill + 一个 mcp
+        did = d["id"]
+        # 布局与聚合计数
+        s, d = req("GET", "/api/local-dirs")
+        row = [x for x in d["dirs"] if x["id"] == did][0]
+        self.assertEqual(row["counts"], {"skills": 2, "mcp": 1}, row)
+        self.assertEqual(sorted(row["layout"]["skills"]), ["b/skills"], row["layout"])
+        self.assertEqual(row["layout"]["mcp"], ["c/mcp"], row["layout"])
+        # 绑定 → 所有子 skills 文件夹的条目一起同步
+        tgt = os.path.join(self.__class__.tmp, "container-tgt")
+        os.makedirs(tgt)
+        s, d = req("POST", "/api/skills/targets",
+                   {"name": "container-tgt", "kind": "skills_dir", "path": tgt})
+        tid = d["id"]
+        s, d = req("POST", "/api/skills/dir-bindings", {"dir_id": did, "target_ids": [tid]})
+        self.assertEqual(s, 200)
+        self.assertTrue(d["ok"], d)
+        self.assertTrue(os.path.isfile(os.path.join(tgt, "foo", "SKILL.md")))
+        self.assertTrue(os.path.isfile(os.path.join(tgt, "bar", "SKILL.md")))
+        # 新增子集合文件夹 → 下一次读取自动发现
+        os.makedirs(os.path.join(A, "d", "skills", "baz"))
+        with open(os.path.join(A, "d", "skills", "baz", "SKILL.md"), "w") as f:
+            f.write("---\nname: baz\n---\nbody")
+        s, d = req("GET", "/api/local-dirs")
+        row = [x for x in d["dirs"] if x["id"] == did][0]
+        self.assertEqual(row["counts"]["skills"], 3, row)
+        self.assertIn("d/skills", row["layout"]["skills"], row["layout"])
+
+    def test_l06_plain_dir_regression(self):
+        """回归：目录自身即条目根（普通模式）——layout 为空、一级扫描不变。"""
+        P = os.path.join(self.__class__.tmp, "ext-plain2")
+        os.makedirs(os.path.join(P, "plain-skill"))
+        with open(os.path.join(P, "plain-skill", "SKILL.md"), "w") as f:
+            f.write("---\nname: plain-skill\n---\nbody")
+        # 普通子目录（无 SKILL.md）不算条目，也不触发容器模式
+        os.makedirs(os.path.join(P, "docs"))
+        s, d = req("POST", "/api/local-dirs/link", {"path": P, "name": "ext-plain2"})
+        self.assertTrue(d["ok"], d)
+        self.assertEqual(d["added"], 1, d)
+        s, d = req("GET", "/api/local-dirs")
+        row = [x for x in d["dirs"] if x["name"] == "ext-plain2"][0]
+        self.assertIsNone(row["layout"], row)
+        self.assertEqual(row["counts"], {"skills": 1, "mcp": 0}, row)
+
+    def test_l04_dir_bindings_http(self):
+        """目录 ↔ 工具 绑定路由：建连即同步 / 暂停 / 断开保留（2026-10-31 拆解 M1）。"""
+        s, d = req("GET", "/api/local-dirs")
+        did = [x for x in d["dirs"] if x["name"] == "ext-http"][0]["id"]
+        # 建连（skills_dir 目标：l02 已链接的 ext-http 自身当目标目录，文件落回无妨）
+        tgt = os.path.join(self.__class__.tmp, "bind-tgt")
+        os.makedirs(tgt)
+        s, d = req("POST", "/api/skills/targets",
+                   {"name": "bind-tgt", "kind": "skills_dir", "path": tgt})
+        self.assertEqual(s, 200)
+        tid = d["id"]
+        s, d = req("POST", "/api/skills/dir-bindings",
+                   {"dir_id": did, "target_ids": [tid]})
+        self.assertEqual(s, 200)
+        self.assertTrue(d["ok"], d)
+        res = d["results"][0]
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(res["added"], 1, res)          # http-skill 同步过去
+        self.assertTrue(os.path.isfile(os.path.join(tgt, "http-skill", "SKILL.md")))
+        # 清单
+        s, d = req("GET", "/api/skills/dir-bindings")
+        row = [x for x in d["bindings"] if x["dir_id"] == did and x["target_id"] == tid][0]
+        bid = row["id"]
+        self.assertTrue(row["enabled"])
+        self.assertIsNotNone(row["last_sync_at"])
+        # 暂停 → 恢复
+        s, d = req("PATCH", "/api/skills/dir-bindings/%d" % bid, {"enabled": False})
+        self.assertEqual(s, 200)
+        s, d = req("GET", "/api/skills/dir-bindings")
+        self.assertFalse([x for x in d["bindings"] if x["id"] == bid][0]["enabled"])
+        # 断开（保留文件）
+        s, d = req("DELETE", "/api/skills/dir-bindings/%d" % bid)
+        self.assertEqual(s, 200)
+        self.assertTrue(os.path.isfile(os.path.join(tgt, "http-skill", "SKILL.md")))
+        s, d = req("GET", "/api/skills/dir-bindings")
+        self.assertFalse(any(x["dir_id"] == did for x in d["bindings"]))
 
 
 

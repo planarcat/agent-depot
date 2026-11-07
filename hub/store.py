@@ -1,6 +1,6 @@
 """SQLite-backed store for Agent Depot.
 
-Database location: ~/.agent/hub/hub.db
+Database location: ~/.agent-depot/hub.db（开发版 ~/.agent-depot-dev/hub.db）
 Tables: sessions, messages, cursor (per-source incremental state),
 ledger (audit trail of every operation), config (key-value).
 """
@@ -11,7 +11,9 @@ import sqlite3
 import threading
 import time
 
-HUB_DIR = os.environ.get("AGENT_HUB_DIR") or os.path.expanduser("~/.agent/hub")
+from hub import paths
+
+HUB_DIR = paths.hub_dir()
 DB_PATH = os.path.join(HUB_DIR, "hub.db")
 
 SCHEMA = """
@@ -24,7 +26,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   started_at TEXT,
   updated_at TEXT,
   msg_count INTEGER DEFAULT 0,
-  title_source TEXT,                 -- custom-title | first-user | slug | fallback
+  title_source TEXT,                 -- custom-title | session-title | ai-title | first-user | slug | fallback
   starred INTEGER DEFAULT 0          -- 收藏标记
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_tool ON sessions(tool);
@@ -75,9 +77,24 @@ class Store:
     def __init__(self, db_path=None):
         os.makedirs(HUB_DIR, exist_ok=True)
         self.lock = threading.RLock()
-        self.db = sqlite3.connect(db_path or DB_PATH, check_same_thread=False)
+        self.db = sqlite3.connect(db_path or DB_PATH, check_same_thread=False, timeout=15)
         self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA busy_timeout=15000")   # 写者短暂重叠时等待而非秒退（2026-10-31）
         self.db.row_factory = sqlite3.Row
+        if os.environ.get("HUB_SQL_TRACE"):
+            # 诊断开关（2026-10-31 追查「写挂起/database is locked」）：每条语句+毫秒时间戳落盘，
+            # 挂起后看文件末尾即知卡在哪条查询。常态关闭，无性能代价。
+            trace_path = os.path.join(HUB_DIR, "sql-trace.log")
+            tfile = open(trace_path, "a", encoding="utf-8")
+
+            def _trace(sql):
+                try:
+                    tfile.write("%s :: %s\n" % (now_iso(), " ".join(str(sql).split())))
+                    tfile.flush()
+                except Exception:
+                    pass
+
+            self.db.set_trace_callback(_trace)
         self.db.executescript(SCHEMA)
         # migrate older DBs: add starred column if missing
         cols = [r[1] for r in self.db.execute("PRAGMA table_info(sessions)").fetchall()]
@@ -331,7 +348,7 @@ def lineage_info(store: Store, tool, sid):
 
 
 # ====================================================================
-# Memory region (记忆区): hub.db + ~/.agent/hub/memory/*.md 双写
+# Memory region (记忆区): hub.db + <应用文件夹>/memory/*.md 双写
 # ====================================================================
 import textwrap
 

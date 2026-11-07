@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 条目列表样式 4 方案对比（可交互）</title>
+<style>
+:root {
+  --c-ink: #171d1f; --c-ink-2: #3c4447; --c-ink-3: #5b6669; --c-ink-4: #8a9497;
+  --c-bg: #f2f4f4; --c-surface: #f9fafa; --c-surface-2: #ffffff;
+  --c-line: #d9dedf; --c-line-soft: #e6eaeb; --c-rail: #f4f3f0;
+  --c-accent: #0d6a63; --c-accent-strong: #0a544e; --c-accent-soft: #eaf2f1;
+  --c-accent-line: #bfd6d2;
+  --c-ok: #1a7f4b; --c-ok-soft: #e8f4ee; --c-warn: #8a6d1f; --c-warn-soft: #f6f1e2;
+  --c-t-agents: #4a7d8c; --c-t-claude: #d97757; --c-t-pi: #6f8a4f;
+  --c-t-wb: #4a7d8c; --c-t-zcode: #9a6b3f; --c-t-codex: #2f6f6f;
+  --fs-xs: 10px; --fs-s: 11px; --fs-md: 12px; --fs-body: 13px; --fs-m: 14px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+  --r-xs: 6px; --r-m: 8px; --r-l: 12px;
+  --t-quick: 150ms cubic-bezier(.2,.6,.3,1);
+  --sh-hover: 0 4px 12px rgba(23,29,31,.08);
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--c-bg); color: var(--c-ink); font-family: var(--font-sans);
+  font-size: var(--fs-body); padding: var(--sp-4); }
+h1 { font-size: 16px; margin-bottom: 4px; }
+.lead { font-size: var(--fs-s); color: var(--c-ink-3); margin-bottom: var(--sp-2); line-height: 1.7; }
+.lead b { color: var(--c-ink); }
+.toolbar { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-4); }
+.btn { border: 1px solid var(--c-line); background: var(--c-surface-2); border-radius: var(--r-xs);
+  font-size: var(--fs-s); padding: 4px 10px; cursor: pointer; }
+.btn.primary { background: var(--c-accent); border-color: var(--c-accent); color: #fff; }
+.board { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: var(--sp-4); }
+section h2 { font-size: var(--fs-body); margin-bottom: 2px; }
+section .desc { font-size: var(--fs-s); color: var(--c-ink-3); margin-bottom: var(--sp-2); min-height: 32px; }
+
+/* ==== 共享面板骨架 ==== */
+.panel { border: 1px solid var(--c-accent-line); border-radius: var(--r-l);
+  background: var(--c-surface-2); overflow: hidden; }
+.ph { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--c-line); background: var(--c-surface); }
+.ph b { font-size: var(--fs-body); }
+.ph .ops { margin-left: auto; display: flex; gap: var(--sp-1); }
+.ph .x { border: 0; background: none; color: var(--c-ink-4); font-size: var(--fs-m); cursor: pointer; }
+.pstat { display: flex; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--c-line-soft); min-height: 46px; }
+.pstat .txt { font-size: var(--fs-s); color: var(--c-ink-3); line-height: 1.6; }
+.pill { padding: 3px 10px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 600; flex: none; }
+.pill.ok { background: var(--c-ok-soft); color: var(--c-ok); }
+.pill.part { background: var(--c-warn-soft); color: var(--c-warn); }
+.pill.off { background: var(--c-rail); color: var(--c-ink-4); }
+.plist { padding: var(--sp-2) var(--sp-3); min-height: 176px; }
+
+/* 工具点：彩=跟随 · 灰=未跟随（本页仅 Claude Code 已连接） */
+.tool-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block;
+  transition: background var(--t-quick); }
+.d-codex { background: var(--c-t-codex); } .d-agents { background: var(--c-t-agents); }
+.d-claude { background: var(--c-t-claude); } .d-pi { background: var(--c-t-pi); }
+.d-wb { background: var(--c-t-wb); } .d-zcode { background: var(--c-t-zcode); }
+.dot-off { background: var(--c-line); }
+.tag-skill { color: var(--c-accent); } .tag-mcp { color: var(--c-ink-3); }
+.restline { font-size: var(--fs-xs); color: var(--c-ink-4); padding: var(--sp-1) 0; }
+
+/* 排除态行：整行降对比 */
+.is-off-row { opacity: .45; }
+
+/* ==== 方案 A · 分组卡片式 ==== */
+.a-group { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-2) 0 var(--sp-1); }
+.a-group:first-child { margin-top: 0; }
+.a-group .lab { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .04em; color: var(--c-ink-3); }
+.a-group .n { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--c-accent);
+  border: 1px solid var(--c-accent-line); border-radius: var(--r-xs); padding: 0 6px; }
+.a-group .tick { width: 3px; height: 12px; border-radius: 2px; background: var(--c-accent); }
+.a-group.mcp .tick { background: var(--c-ink-3); }
+.a-row { display: flex; align-items: center; gap: var(--sp-2); background: var(--c-surface);
+  border: 1px solid var(--c-line-soft); border-radius: var(--r-m); padding: 7px var(--sp-2);
+  margin-bottom: 6px; cursor: pointer; transition: box-shadow var(--t-quick), transform var(--t-quick), opacity var(--t-quick); }
+.a-row:hover { box-shadow: var(--sh-hover); transform: translateY(-1px); }
+.a-row .td { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.a-row.skill .td { background: var(--c-accent); } .a-row.mcp .td { background: var(--c-ink-3); }
+.a-row .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.a-row .dots { display: inline-flex; gap: 5px; padding: 4px 8px; background: var(--c-rail);
+  border-radius: 999px; flex: none; }
+.a-row .dots .tool-dot { width: 7px; height: 7px; }
+
+/* ==== 方案 B · 紧凑表格 ==== */
+.b-head { display: grid; grid-template-columns: 44px 1fr 96px; gap: var(--sp-2);
+  font-size: var(--fs-xs); font-weight: 700; color: var(--c-ink-4); letter-spacing: .04em;
+  padding: 2px var(--sp-1); border-bottom: 1px solid var(--c-line); }
+.b-group { font-size: var(--fs-xs); font-weight: 700; color: var(--c-ink-3); letter-spacing: .04em;
+  padding: var(--sp-2) var(--sp-1) 2px; }
+.b-group span { color: var(--c-accent); font-family: var(--font-mono); font-weight: 600; margin-left: 4px; }
+.b-row { display: grid; grid-template-columns: 44px 1fr 96px; gap: var(--sp-2); align-items: center;
+  padding: 5px var(--sp-1); border-bottom: 1px solid var(--c-line-soft); cursor: pointer;
+  transition: background var(--t-quick), opacity var(--t-quick); }
+.b-row:nth-child(odd of .b-row) { background: rgba(244,243,240,.55); }
+.b-row:hover { background: var(--c-accent-soft); }
+.b-row .tp { font-family: var(--font-mono); font-size: var(--fs-xs); }
+.b-row .nm { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.b-row .dots { display: inline-flex; gap: 6px; }
+.b-row .dots .tool-dot { width: 7px; height: 7px; }
+
+/* ==== 方案 C · 标签流 ==== */
+.c-group { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-2) 0 var(--sp-1); }
+.c-group:first-child { margin-top: 0; }
+.c-group .lab { font-size: var(--fs-xs); font-weight: 700; color: var(--c-ink-3); letter-spacing: .04em; }
+.c-group .rule { flex: 1; height: 1px; background: var(--c-line); }
+.c-group .n { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--c-ink-4); }
+.c-flow { display: flex; flex-wrap: wrap; gap: 6px; }
+.c-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--c-line-soft);
+  background: var(--c-surface); border-radius: 999px; padding: 5px 10px 5px 8px; cursor: pointer;
+  transition: border-color var(--t-quick), background var(--t-quick), opacity var(--t-quick); }
+.c-chip:hover { border-color: var(--c-accent-line); background: var(--c-accent-soft); }
+.c-chip .nm { font-size: var(--fs-s); }
+.c-chip .dots { display: inline-flex; gap: 3px; }
+.c-chip .dots .tool-dot { width: 6px; height: 6px; }
+
+/* ==== 方案 D · 左轨树式 ==== */
+.d-group { border-left: 3px solid var(--c-accent); padding-left: var(--sp-2); margin-top: var(--sp-2); }
+.d-group:first-child { margin-top: 0; }
+.d-group.mcp { border-left-color: var(--c-ink-3); }
+.d-group .lab { font-size: var(--fs-xs); font-weight: 700; color: var(--c-ink-3); letter-spacing: .04em; }
+.d-row { display: flex; align-items: center; gap: var(--sp-2); padding: 6px var(--sp-2);
+  border-bottom: 1px solid var(--c-line-soft); cursor: pointer;
+  transition: background var(--t-quick), opacity var(--t-quick); }
+.d-row:last-child { border-bottom: 0; }
+.d-row:hover { background: var(--c-accent-soft); }
+.d-row .chk { width: 13px; height: 13px; border-radius: 4px; border: 2px solid var(--c-line); flex: none;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 9px; color: transparent;
+  transition: background var(--t-quick), border-color var(--t-quick); }
+.d-row.on .chk { background: var(--c-accent); border-color: var(--c-accent); color: #fff; }
+.d-row .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.d-row .dots { display: inline-flex; gap: 5px; flex: none; }
+.d-row .dots .tool-dot { width: 7px; height: 7px; }
+
+#toast { position: fixed; right: 24px; bottom: 24px; z-index: 99; background: var(--c-surface-2);
+  border: 1px solid var(--c-line); border-radius: var(--r-m); box-shadow: 0 8px 24px rgba(23,29,31,.14);
+  padding: 8px 12px; font-size: var(--fs-s); max-width: 420px; display: none; }
+</style>
+</head>
+<body>
+<h1>条目列表样式 · 4 方案对比（可交互）</h1>
+<p class="lead">场景：lingchuang-skills → Claude Code。四个方案<b>共享同一份状态</b>——在任一方案里点击条目，
+  切换其对 Claude Code 的跟随（排除/恢复/单条重连/全不选即断开），操作结果会在四种样式里同步呈现，便于对比同一操作的不同表达。<br>
+  点态语义：彩 = 跟随中 · 灰 = 未跟随；排除的条目整行降对比。</p>
+<div class="toolbar">
+  <button class="btn primary" id="reset">恢复初始（完整跟随）</button>
+  <span style="font-size:var(--fs-xs);color:var(--c-ink-4)">快捷链路：点条目排除 → 全不选断开 → 点条目单条重连 → 全选拉回完整跟随</span>
+</div>
+
+<div class="board">
+
+  <section>
+    <h2>方案 A · 分组卡片式</h2>
+    <p class="desc">条目为独立小卡片，工具状态收进右侧胶囊托盘。排除的条目整行变淡。</p>
+    <div class="panel">
+      <div class="ph"><b>lingchuang-skills</b><span class="ops"><button class="btn" data-act="all">全选</button><button class="btn" data-act="none">全不选</button><span class="x">✕</span></span></div>
+      <div class="pstat"><span class="pill ok" data-slot="pill"></span><span class="txt" data-slot="txt"></span></div>
+      <div class="plist" data-slot="list" data-variant="a"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>方案 B · 紧凑表格</h2>
+    <p class="desc">固定三列网格 + 斑马纹，类型列等宽对齐；密度最高，工具点纵向成列。</p>
+    <div class="panel">
+      <div class="ph"><b>lingchuang-skills</b><span class="ops"><button class="btn" data-act="all">全选</button><button class="btn" data-act="none">全不选</button><span class="x">✕</span></span></div>
+      <div class="pstat"><span class="pill ok" data-slot="pill"></span><span class="txt" data-slot="txt"></span></div>
+      <div class="plist" data-slot="list" data-variant="b"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>方案 C · 标签流</h2>
+    <p class="desc">条目压成胶囊标签自动换行，跟随中的工具点排前面；整颗胶囊即点击目标。</p>
+    <div class="panel">
+      <div class="ph"><b>lingchuang-skills</b><span class="ops"><button class="btn" data-act="all">全选</button><button class="btn" data-act="none">全不选</button><span class="x">✕</span></span></div>
+      <div class="pstat"><span class="pill ok" data-slot="pill"></span><span class="txt" data-slot="txt"></span></div>
+      <div class="plist" data-slot="list" data-variant="c"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>方案 D · 左轨树式</h2>
+    <p class="desc">分组用彩色左轨划分，勾选框回归——跟随中打勾、排除即取消勾选，语义最直白。</p>
+    <div class="panel">
+      <div class="ph"><b>lingchuang-skills</b><span class="ops"><button class="btn" data-act="all">全选</button><button class="btn" data-act="none">全不选</button><span class="x">✕</span></span></div>
+      <div class="pstat"><span class="pill ok" data-slot="pill"></span><span class="txt" data-slot="txt"></span></div>
+      <div class="plist" data-slot="list" data-variant="d"></div>
+    </div>
+  </section>
+
+</div>
+<div id="toast"></div>
+
+<script>
+/* ==== 共享状态 ==== */
+const ITEMS = [
+  { name: '界面审查', type: 'skill', on: true },
+  { name: '日报撰写', type: 'skill', on: true },
+  { name: 'kb-mcp', type: 'mcp', on: true },
+];
+const TOOLS = [
+  { id: 'codex', cls: 'd-codex' }, { id: 'agents', cls: 'd-agents' },
+  { id: 'claude', cls: 'd-claude' }, { id: 'pi', cls: 'd-pi' },
+  { id: 'wb', cls: 'd-wb' }, { id: 'zcode', cls: 'd-zcode' },
+];
+const onCount = () => ITEMS.filter(i => i.on).length;
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function toast(m) {
+  const t = document.getElementById('toast');
+  t.textContent = m; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 2600);
+}
+
+function toggle(name) {
+  const it = ITEMS.find(i => i.name === name);
+  if (it.on) {
+    it.on = false;
+    toast(onCount() ? `「${name}」已停止跟随 Claude Code（工具内已装文件保留）`
+      : '全部条目已排除，连接已移除（工具内已安装文件保留）');
+  } else if (onCount() === 0) {
+    ITEMS.forEach(i => i.on = (i.name === name));
+    toast(`已连接「${name}」→ Claude Code（仅此条目跟随，其余已排除）`);
+  } else {
+    it.on = true;
+    toast(`「${name}」已恢复跟随 Claude Code`);
+  }
+  renderAll();
+}
+function setAll(on) {
+  ITEMS.forEach(i => i.on = on);
+  toast(on ? '已恢复完整跟随' : '全部条目已排除，连接已移除（工具内已安装文件保留）');
+  renderAll();
+}
+
+/* ==== 渲染 ==== */
+const claudeDot = it => `<span class="tool-dot d-claude${it.on ? '' : ' dot-off'}" title="Claude Code：${it.on ? '跟随中' : '未跟随'}"></span>`;
+const offDots = () => TOOLS.filter(t => t.id !== 'claude')
+  .map(t => `<span class="tool-dot ${t.cls} dot-off" title="${t.id}：未连接"></span>`).join('');
+/* 跟随中的工具点排前面，灰点靠后 */
+const dotsHtml = it => (it.on ? claudeDot(it) + offDots() : offDots() + claudeDot(it));
+
+const RENDER = {
+  a(list) {
+    const group = (lab, cls, items) => items.length ? `
+      <div class="a-group ${cls}"><span class="tick"></span><span class="lab">${lab}</span><span class="n">${items.length}</span></div>` +
+      items.map(it => `
+      <div class="a-row ${it.type} ${it.on ? '' : 'is-off-row'}" data-name="${esc(it.name)}">
+        <span class="td"></span><span class="nm">${esc(it.name)}</span>
+        <span class="dots">${dotsHtml(it)}</span></div>`).join('') : '';
+    list.innerHTML =
+      group('SKILLS', 'skill', ITEMS.filter(i => i.type === 'skill')) +
+      group('MCP', 'mcp', ITEMS.filter(i => i.type === 'mcp'));
+  },
+  b(list) {
+    const group = (lab, items) => items.length ? `
+      <div class="b-group">${lab}<span>· ${items.length}</span></div>` +
+      items.map(it => `
+      <div class="b-row ${it.on ? '' : 'is-off-row'}" data-name="${esc(it.name)}">
+        <span class="tp ${it.type === 'skill' ? 'tag-skill' : 'tag-mcp'}">${it.type}</span>
+        <span class="nm">${esc(it.name)}</span>
+        <span class="dots">${dotsHtml(it)}</span></div>`).join('') : '';
+    list.innerHTML =
+      `<div class="b-head"><span>类型</span><span>条目</span><span>工具跟随</span></div>` +
+      group('SKILLS', ITEMS.filter(i => i.type === 'skill')) +
+      group('MCP', ITEMS.filter(i => i.type === 'mcp'));
+  },
+  c(list) {
+    const group = (lab, items) => items.length ? `
+      <div class="c-group"><span class="lab">${lab}</span><span class="rule"></span><span class="n">${items.length}</span></div>
+      <div class="c-flow">` +
+      items.map(it => `
+      <span class="c-chip ${it.on ? '' : 'is-off-row'}" data-name="${esc(it.name)}">
+        <span class="nm">${esc(it.name)}</span>
+        <span class="dots">${dotsHtml(it)}</span></span>`).join('') + `</div>` : '';
+    list.innerHTML =
+      group('SKILLS', ITEMS.filter(i => i.type === 'skill')) +
+      group('MCP', ITEMS.filter(i => i.type === 'mcp'));
+  },
+  d(list) {
+    const group = (lab, cls, items) => items.length ? `
+      <div class="d-group ${cls}">
+      <div class="lab">${lab} · ${items.length}</div>` +
+      items.map(it => `
+      <div class="d-row ${it.on ? 'on' : 'is-off-row'}" data-name="${esc(it.name)}">
+        <span class="chk">✓</span><span class="nm">${esc(it.name)}</span>
+        <span class="dots">${dotsHtml(it)}</span></div>`).join('') + `</div>` : '';
+    list.innerHTML =
+      group('SKILLS', 'skill', ITEMS.filter(i => i.type === 'skill')) +
+      group('MCP', 'mcp', ITEMS.filter(i => i.type === 'mcp'));
+  },
+};
+
+function renderAll() {
+  const n = onCount();
+  const stat = n === ITEMS.length
+    ? { cls: 'pill ok', label: '完整跟随', txt: `全部 ${ITEMS.length} 条跟随中 —— 目录内变化实时同步到工具；点条目可排除。` }
+    : n > 0
+    ? { cls: 'pill part', label: `部分跟随 ${n}/${ITEMS.length}`, txt: '勾选/点亮要跟随的条目，取消即排除（工具内保留已装文件）；全部排除 = 断开。' }
+    : { cls: 'pill off', label: '未连接', txt: '连接已移除，工具内已安装文件保留；点任一条目即单条重连。' };
+  document.querySelectorAll('[data-slot="pill"]').forEach(el => { el.className = stat.cls; el.textContent = stat.label; });
+  document.querySelectorAll('[data-slot="txt"]').forEach(el => { el.textContent = stat.txt; });
+  document.querySelectorAll('[data-slot="list"]').forEach(list => {
+    RENDER[list.dataset.variant](list);
+  });
+}
+
+/* ==== 事件：条目点击 + 全选/全不选（面板头）+ 顶部重置 ==== */
+document.querySelectorAll('[data-slot="list"]').forEach(list => {
+  list.addEventListener('click', e => {
+    const el = e.target.closest('[data-name]');
+    if (el) toggle(el.dataset.name);
+  });
+});
+document.querySelectorAll('[data-act]').forEach(b => {
+  b.onclick = () => setAll(b.dataset.act === 'all');
+});
+document.getElementById('reset').onclick = () => { setAll(true); toast('已恢复初始（完整跟随）'); };
+renderAll();
+</script>
+</body>
+</html>

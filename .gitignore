@@ -14,3 +14,7 @@ reports/
 # 本地 agent 工具状态（记忆/运行产物），不进公开仓
 .workbuddy/
 .zwork/
+
+# 接口快照 / 视觉路径卡：可能含真实数据与内部地址，不进仓
+Docs/API快照/
+Docs/视觉路径卡/

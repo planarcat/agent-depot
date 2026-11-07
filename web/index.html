@@ -19,8 +19,9 @@
     <nav class="mod-nav" id="mod-nav" data-testid="mod-nav"><span class="mod-nav__ind" aria-hidden="true"></span>
       <button data-view="sessions" data-testid="nav-sessions" class="is-on">会话</button>
       <button data-view="memory" data-testid="nav-memory">记忆</button>
-      <button data-view="skills" data-testid="nav-skills">Skills</button>
-      <button data-view="mcp" data-testid="nav-mcp">MCP</button>
+      <button data-view="connect" data-testid="nav-connect">Skills / MCP</button>
+      <button data-view="skills" data-testid="nav-skills" hidden>Skills</button>
+      <button data-view="mcp" data-testid="nav-mcp" hidden>MCP</button>
       <button data-view="ops" data-testid="nav-ops">台账</button>
       <span class="mod-nav__sep"></span>
       <button data-view="stats" data-testid="stats-open" id="stats-open">统计</button>
@@ -36,16 +37,18 @@
   <div class="view is-active" id="view-sessions">
   <div class="sess">
 
-    <!-- 顶部：ADE 工具卡片网格（进入某个工具的会话视图后整块收起） -->
-    <section class="sess-tools" id="sess-tools">
-      <div class="sess-tools__in">
-        <div class="sess-tools__h" hidden>
-          <h2>ADE 工具 <span class="sess-tools__n">· <b id="sess-tools-count">0</b></span></h2>
+    <!-- 顶部：可折叠头部（对齐 记忆/Skills/MCP，用户指令 2026-10-19）——详细=工具分组卡片，简略=64px chip 条 -->
+    <div class="hdr" id="sess-hdr">
+      <section class="sess-tools" id="sess-top">
+        <div class="sess-tools__in">
+          <div class="sess-tools__h" hidden>
+            <h2>ADE 工具 <span class="sess-tools__n">· <b id="sess-tools-count">0</b></span></h2>
+          </div>
+          <div class="srcgroups" id="tool-cards" data-testid="tool-cards"></div>
         </div>
-        <div class="tgrid" id="tool-cards" data-testid="tool-cards"></div>
-        <div class="sess-tools__more"><button id="sess-tools-toggle" hidden></button></div>
-      </div>
-    </section>
+      </section>
+      <div class="cbar-host" id="sess-bar" hidden></div>
+    </div>
 
     <div class="sess__main">
       <!-- 工具侧边栏：进入工具视图后出现（返回全部 + 各工具切换） -->
@@ -53,19 +56,17 @@
 
       <!-- 会话列表：筛选 + 搜索 + 手风琴列表 + 分页 -->
       <section class="slist" id="sess-listcol">
-        <div class="slist__h">
-          <h2 id="sess-title">全部会话</h2>
-          <span class="slist__n" id="sess-left-count">0</span>
-          <div class="slist__seg" id="filter-seg" data-testid="filter-seg">
-            <button data-filter="all" data-testid="filter-all" class="is-on">全部</button>
-            <button data-filter="starred" data-testid="filter-starred">★ 星标</button>
-          </div>
-        </div>
         <div class="slist__search">
           <label class="ssearch">
-            <span class="ssearch__ic">⌕</span>
+            <span class="ssearch__ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></span>
             <input data-testid="search-input" id="search-input" placeholder="搜索标题 / 消息内容…">
           </label>
+          <!-- 改动：搜索行右侧的「全部」筛选段隐藏。原因：用户多次要求去掉（2026-10-20「这个东西怎么阴魂不散的，我说好几次去掉了」）；
+               回到全部 = 再点一次已选中的工具卡片 / 条头 chip（取消选中），功能不丢；节点与 data-testid 保留，避免判据失效 -->
+          <div class="slist__seg" id="filter-seg" data-testid="filter-seg" hidden style="display:none">
+            <button data-filter="all" data-testid="filter-all" class="is-on">全部</button>
+          </div>
+          <button class="hub-btn btn-sm" id="star-toggle" data-testid="filter-starred" title="只看星标会话"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.6 7-6.2-3.7-6.2 3.7 1.6-7L2 9.2l7.1-.6z"/></svg> 星标</button>
           <div class="search-panel" id="search-panel" data-testid="search-panel" style="display:none"></div>
         </div>
         <div class="nv-list" id="session-rows" data-testid="session-rows">
@@ -79,28 +80,16 @@
         </div>
       </section>
 
-      <!-- 迁移目标面板：展开会话或勾选后从右侧滑出 -->
+      <!-- 目标面板：展开会话或勾选后从右侧滑出。内容由 renderPanel() 用 MV.targetPicker 统一渲染
+           （标题统一「目标」+ SVG 关闭键 + 多选目标行 + [全选|清空] + 主按钮；底部台账按用户指令 2026-10-20 去掉） -->
       <aside class="spanel" id="sess-panel">
-        <div class="spanel__in">
-          <div class="spanel__h">
-            <h3>迁移目标</h3>
-            <button class="spanel__x" id="sess-panel-close" title="收起">×</button>
-          </div>
-          <div class="spanel__sel" id="sess-panel-sel">—</div>
-          <ul class="spanel__targets" id="sess-targets" data-testid="sess-targets"></ul>
-          <div class="spanel__go">
-            <button class="spanel__gobtn" id="sess-migrate-go" disabled>迁移 —</button>
-          </div>
-          <div class="spanel__lin">
-            <h4>最近迁移 · lineage</h4>
-            <div id="mig-list" data-testid="mig-list" class="nv-miglist"></div>
-          </div>
-        </div>
+        <div class="spanel__in" id="sess-panel-in"></div>
       </aside>
     </div>
   </div>
   </div><!-- /view-sessions -->
   <div class="view" id="view-memory"></div>
+  <div class="view" id="view-connect"></div>
   <div class="view" id="view-skills"></div>
   <div class="view" id="view-mcp"></div>
   <div class="view" id="view-ops"></div>
@@ -116,6 +105,9 @@
       <button class="setwin__item" data-pane="tools" data-testid="settings-nav-tools">
         <span class="setwin__label">工具</span>
         <span class="setwin__desc">排序、启停与路径配置</span></button>
+      <button class="setwin__item" data-pane="remotes" data-testid="settings-nav-remotes">
+        <span class="setwin__label">远程仓库</span>
+        <span class="setwin__desc">仓库地址与所属模块</span></button>
       <button class="setwin__item" data-pane="env" data-testid="settings-nav-env">
         <span class="setwin__label">关于</span>
         <span class="setwin__desc">版本与存储位置</span></button>
@@ -132,6 +124,7 @@
       <div class="setwin__body" data-testid="settings-body">
         <div class="setpane is-on" data-pane="modules" id="settings-modules" data-testid="settings-modules"></div>
         <div class="setpane" data-pane="tools" id="settings-tools" data-testid="settings-tools"></div>
+        <div class="setpane" data-pane="remotes" id="settings-remotes" data-testid="settings-remotes"></div>
         <div class="setpane" data-pane="env" id="settings-env" data-testid="settings-env"></div>
       </div>
     </section>
@@ -197,6 +190,7 @@ window.addEventListener('keydown', function (e) {
 </script>
 <script src="/assets/hub-ui.js"></script>
 <script src="/assets/app.js"></script>
+<script src="/assets/views/connect.js"></script>
 <script src="/assets/views/skills.js"></script>
 <script src="/assets/views/mcp.js"></script>
 <script src="/assets/views/memory.js"></script>

@@ -8,7 +8,8 @@ const state = {
   tools: {}, sessions: [], ledger: [], migrations: [], schedule: {},
   memories: [], engine: {}, filter: 'all', selected: new Set(), tab: 'migrate',
   // 会话视图（v0.8 手风琴布局）：工具聚焦 / 迁移面板 / 展开项 / 详情缓存
-  _toolFocus: null, _panelOff: false, _migTarget: null, _toolsOpen: false,
+  _toolFocus: null, _panelOff: false, _migTargets: [],   // 迁移目标支持多选（用户 2026-10-20「多选」）
+  _sessLayout: 'detail', _sessFullH: 0, _sessAnim: false,
   _detailCache: {}, _animateOpen: null,
 };
 window.__hubErrors = [];
@@ -81,7 +82,7 @@ window.MV = (function () {
   // 工具 id → 短名/色块类（工具表在 window.hubApp.state.tool_list；'notes'/'local'/'remote' 是虚拟来源）
   const toolOf = (id) => ((window.hubApp && window.hubApp.state.tool_list) || []).find(t => t.id === id) || {};
   const VIRTUAL = { notes: ['NB', 'chip--accent'], local: ['LO', 'chip--accent'], remote: ['RM', 'chip--muted'],
-    all: ['全', 'chip--accent'], manual: ['LO', 'chip--muted'] };
+    all: ['全', 'chip--accent'], manual: ['手动', 'chip--muted'] };   // 手动来源的短名用中文（原来 LO 看不出含义）
   const short = (id) => (VIRTUAL[id] ? VIRTUAL[id][0] : toolShort(toolOf(id)));
   const cls = (id) => (VIRTUAL[id] ? VIRTUAL[id][1] : toolColorCls(toolOf(id)));
   const chip = (short, cls) => `<span class="mvi__src ${cls || 'chip--muted'}">${esc(short || '')}</span>`;
@@ -91,6 +92,17 @@ window.MV = (function () {
     refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
       + 'stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11A8.5 8.5 0 1 0 12 20.5"/>'
       + '<path d="M20.5 4v7h-7"/></svg>',
+    layout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+      + 'stroke-linecap="round" stroke-linejoin="round"><path d="M8 8l4-4 4 4M8 16l4 4 4-4M4 12h16"/></svg>',
+    edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+      + 'stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/>'
+      + '<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+      + 'stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>'
+      + '<path d="M10 11v6M14 11v6"/></svg>',
+    search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+      + 'stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/>'
+      + '<path d="M16 16l4.5 4.5"/></svg>',
     gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
       + 'stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/>'
       + '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33'
@@ -107,6 +119,34 @@ window.MV = (function () {
     remote: { tint: 'var(--c-tool-p8)', icon: '<path d="M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9"/>' },
     tool: { tint: 'var(--c-tool-p5)', icon: '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.5-.5-.5-2.5z"/>' },
   };
+  /** 卡片左上角的"数量 + 动作"排：数量永远在，动作 hover 才出（Figma 2026-10-17） */
+  function cardHead(s, o, count) {
+    const cntTid = o.cntTestid || (o.prefix ? `${o.prefix}-cnt-${s.id}` : '');
+    // 数量标签：**一直显示**（没有条目就显示 0）。恒为 28×28 正方形（用户指令 2026-10-19），
+    // 分档：1~2 位原字号；3~5 位 is-n3/n4/n5 收字号收字距；≥6 位（十万级）方块放不下精确数，
+    // 改用语义符号 ∞ 代表「更多」，精确数保留在 title 悬浮提示（不丢信息）。
+    const n = (count === 0 || count) ? String(count) : '0';
+    const tip = `${n} 个条目`;
+    const big = n.length >= 6;
+    const shown = big ? '∞' : n;
+    const lenCls = big ? '' : (n.length >= 5 ? ' is-n5' : n.length === 4 ? ' is-n4' : n.length === 3 ? ' is-n3' : '');
+    // 1) 数量标签初始显示（没条目显示 0）
+    // 2) 远仓的 拉取/编辑/删除 初始不显示
+    // 3) 悬停远仓：数量隐藏、三个按钮出现（数量与拉取同一格，交叉淡入，不产生位移）
+    const pull = (s.acts || []).find(a => a.key === 'pull');
+    const others = (s.acts || []).filter(a => a.key !== 'pull').map(a =>
+      `<button class="tcard__act ${a.danger ? 'is-danger' : ''}" data-act="${esc(a.key)}"
+        ${a.testid ? `data-testid="${esc(a.testid)}"` : ''} title="${esc(a.title || a.label)}"
+        aria-label="${esc(a.title || a.label)}">${a.icon || esc(a.label)}</button>`).join('');
+    const first = pull
+      ? `<button class="tcard__pull" data-act="pull" title="拉取（${esc(n)} 个条目）" aria-label="拉取">
+           <span class="tcard__cnt mono${lenCls}" ${cntTid ? `data-testid="${esc(cntTid)}"` : ''}>${esc(shown)}</span>
+           <span class="tcard__pullic">${pull.icon || ''}</span>
+         </button>`
+      : `<span class="tcard__cnt mono${lenCls}" title="${esc(tip)}" ${cntTid ? `data-testid="${esc(cntTid)}"` : ''}>${esc(shown)}</span>`;
+    return `<span class="tcard__acts${pull ? ' has-acts' : ''}">${first}${others}</span>`;
+  }
+
   /** 唯一的来源卡片组件：会话页工具卡 / 记忆来源 / Skills 来源 / MCP 来源都是它 */
   function cardHTML(s, o) {
     o = o || {};
@@ -116,11 +156,13 @@ window.MV = (function () {
       <div class="tcard ${active ? 'is-on' : ''} ${s.off ? 'is-off' : ''}"
            data-src="${esc(s.id)}" title="${esc(s.title || s.name)}"
            ${o.prefix ? `data-testid="${esc(o.prefix)}-card-${esc(s.id)}"` : ''}>
-        <span class="tcard__cnt mono" ${o.prefix ? `data-testid="${esc(o.prefix)}-cnt-${esc(s.id)}"` : ''}>${count === 0 || count ? count : ''}</span>
+        <svg class="stgt-frame" aria-hidden="true"><path class="fr-up" pathLength="1"/><path class="fr-dn" pathLength="1"/></svg>
+        ${cardHead(s, o, count)}
         <button class="tcard__open" aria-label="${esc(s.name)}">
           <span class="tcard__chip ${s.cls || 'chip--muted'}">${esc(s.short || '')}</span>
           <span class="tcard__nm">${esc(s.name)}</span>
         </button>
+        ${s.tag ? `<span class="tcard__tag">${s.tag}</span>` : ''}
       </div>`;
   }
   /** 顶部来源卡片 + 批量按钮 + 统计条 + hint；给 groups 时按来源类型分会话（本地/远程仓库/工具） */
@@ -164,10 +206,13 @@ window.MV = (function () {
         + `${o.bulk ? `<span class="mv-stats__acts">${o.bulk}</span>` : ''}`
         + `${o.hint ? `<span class="mv-hint" title="${esc(o.hint)}">${esc(o.hint)}</span>` : ''}</div>`;
     }
+    // 改动：卡片里补一层像素级描边帧（<svg class="stgt-frame">）。原因：选中动效统一为「描边生长 + 背景扫入」，
+    // 卡片此前只切 border-color，与迁移目标行 / 条头 chip 的观感不一致（2026-10-20）
     const cards = (o.sources || []).map(s => `
       <div class="tcard ${o.activeId === s.id ? 'is-on' : ''} ${s.off ? 'is-off' : ''}"
            data-src="${esc(s.id)}" title="${esc(s.title || s.name)}">
-        <span class="tcard__cnt mono" data-testid="${esc(o.prefix)}-cnt-${esc(s.id)}">${o.counts && o.counts[s.id] != null ? o.counts[s.id] : ''}</span>
+        <svg class="stgt-frame" aria-hidden="true"><path class="fr-up" pathLength="1"/><path class="fr-dn" pathLength="1"/></svg>
+        ${cardHead(s, o, o.counts && o.counts[s.id] != null ? o.counts[s.id] : 0)}
         <button class="tcard__open" aria-label="${esc(s.name)}">
           <span class="tcard__chip ${s.cls || 'chip--muted'}">${esc(s.short || '')}</span>
           <span class="tcard__nm">${esc(s.name)}</span>
@@ -179,6 +224,138 @@ window.MV = (function () {
       <div class="mv-stats">${(o.stats || []).map(x => `<span class="mv-stat ${x.tone === 'warn' ? 'is-warn' : ''}">`
         + `<b>${esc(String(x.n))}</b><span>${esc(x.label)}</span></span>`).join('')}`
       + `${o.hint ? `<span class="mv-hint" title="${esc(o.hint)}">${esc(o.hint)}</span>` : ''}</div>`;
+  }
+
+  /**
+   * 卡片区就地同步：签名（来源 id + 数量）不变时只切 is-on，不重建 DOM。
+   * 原因：重建出来的节点天生就带 is-on，CSS 过渡没有起点，「描边生长 + 背景扫入」放不出来（2026-10-20）
+   * 返回 true = 走了就地分支（调用方不必再绑一次事件）。
+   */
+  function syncCards(host, html, sig, activeId) {
+    if (!host) return false;
+    if (host.dataset.cardsig === sig) {
+      const on = activeId == null ? null : String(activeId);
+      host.querySelectorAll('.tcard[data-src]').forEach(c => {
+        c.classList.toggle('is-on', on != null && String(c.dataset.src) === on);
+      });
+      return true;
+    }
+    host.dataset.cardsig = sig;
+    host.innerHTML = html;
+    HubUI.drawFrames(host);        // 像素级描边路径 + 尺寸随动
+    growIn(host);                  // 重建出来的卡片刻补播一次选中动效
+    return false;
+  }
+
+  /**
+   * 统一「目标选择」组件（用户指令 2026-10-20「将这个组件应用在所有模块」）：
+   *   灰底说明行（已选 N 条 / 当前：…）
+   *   多选行：色点 + 名称 +（可选右侧小注）+ 方形勾
+   *   底部：[全选 | 清空] + 主按钮
+   * o = { prefix, items:[{id,name,dotCls,meta,testid}], chosen:[id], selLine, selLineFn(set),
+   *       goText, goTextFn(set), onChange(ids), onGo(ids) }
+   * 返回 { html, bind(host) }：html 拼进面板骨架，bind 负责就地切类名/文案（不重建 DOM，保住描边动效）。
+   */
+  function targetPicker(o) {
+    const items = o.items || [];
+    const chosen = new Set((o.chosen || []).map(String));
+    const rows = items.map(it => `
+      <li><button class="stgt ${chosen.has(String(it.id)) ? 'is-on' : ''}" data-target="${esc(String(it.id))}"
+          ${it.testid ? `data-testid="${esc(it.testid)}"` : ''} aria-pressed="${chosen.has(String(it.id)) ? 'true' : 'false'}"
+          title="${esc(it.title || it.name)}">
+        <svg class="stgt-frame" aria-hidden="true"><path class="fr-up" pathLength="1"/><path class="fr-dn" pathLength="1"/></svg>
+        <span class="stgt__dot ${it.dotCls || 'tool-dot--local'}"></span>
+        <span class="stgt__txt">
+          <span class="stgt__nm">${esc(it.name)}</span>
+          ${it.sub ? `<span class="stgt__sub">${esc(it.sub)}</span>` : ''}
+        </span>
+        ${it.meta ? `<span class="stgt__radio-note">${esc(it.meta)}</span>` : ''}
+        <span class="stgt__radio"></span>
+      </button></li>`).join('');
+    const html = `
+      <div class="spanel__sel" data-testid="${esc(o.prefix)}-picker-sel">${o.selLine || ''}</div>
+      <ul class="spanel__targets is-multi" data-testid="${esc(o.prefix)}-picker-targets">
+        ${rows || `<li class="stgt__none">没有可选的目标：${esc(o.emptyHint || '先在 设置 → 工具 里接入目标目录')}</li>`}
+      </ul>
+      ${o.extraHTML || ''}
+      <div class="spanel__go">
+        <button class="hub-btn btn-sm spanel__quick" data-testid="${esc(o.prefix)}-picker-quick" ${items.length ? '' : 'disabled'}>全选</button>
+        <button class="spanel__gobtn" data-testid="${esc(o.prefix)}-picker-go" ${chosen.size ? '' : 'disabled'}>${esc(o.goText || '')}</button>
+      </div>`;
+
+    function bind(host) {
+      if (!host) return;
+      const sel = host.querySelector(`[data-testid="${o.prefix}-picker-sel"]`);
+      const quick = host.querySelector(`[data-testid="${o.prefix}-picker-quick"]`);
+      const go = host.querySelector(`[data-testid="${o.prefix}-picker-go"]`);
+      const set = new Set((o.chosen || []).map(String));
+      const allOn = () => items.length > 0 && items.every(i => set.has(String(i.id)));
+      const sync = () => {
+        host.querySelectorAll('.spanel__targets .stgt').forEach(b => {
+          const on = set.has(String(b.dataset.target));
+          b.classList.toggle('is-on', on);
+          b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+        if (quick) quick.textContent = allOn() ? '清空' : '全选';
+        if (sel && o.selLineFn) sel.innerHTML = o.selLineFn(set);
+        if (go) {
+          go.disabled = !set.size;
+          if (o.goTextFn) go.textContent = o.goTextFn(set);
+        }
+        if (o.onChange) o.onChange([...set]);
+      };
+      host.querySelectorAll('.spanel__targets .stgt').forEach(b => {
+        b.onclick = () => {
+          const id = String(b.dataset.target);
+          if (set.has(id)) set.delete(id); else set.add(id);
+          sync();
+        };
+      });
+      if (quick) quick.onclick = () => {
+        const all = allOn();
+        set.clear();
+        if (!all) items.forEach(i => set.add(String(i.id)));
+        sync();
+      };
+      if (go) go.onclick = () => { if (set.size && o.onGo) o.onGo([...set]); };
+      sync();
+      HubUI.drawFrames(host);
+    }
+    return { html, bind };
+  }
+
+  /**
+   * 详细布局左上角的「切换为简略布局」按钮（默认隐形，鼠标进入工具区才浮现）。
+   * 用户指令 2026-10-20：「详细布局时，鼠标悬停工具区，显示切换按钮，左上角」
+   * ＋「取消点击卡片进入简略布局」→ 布局切换收敛到这一枚按钮。
+   */
+  function hdrToggle(hdr, prefix, onToggle) {
+    if (!hdr) return null;
+    let b = hdr.querySelector(`#${prefix}-hdrtoggle`);
+    if (!b) {
+      b = document.createElement('button');
+      b.id = `${prefix}-hdrtoggle`;
+      b.className = 'hdr__toggle';
+      b.innerHTML = ic('layout');
+      hdr.appendChild(b);
+    }
+    b.title = '切换到简略布局';
+    b.setAttribute('aria-label', '切换到简略布局');
+    b.hidden = false;
+    b.onclick = onToggle;
+    return b;
+  }
+
+  /**
+   * 新渲染出来的块里已有 is-on 时，补播一次选中动效。
+   * 原因：新建节点天生带 is-on，CSS 过渡没有起点，「描边生长 + 背景扫入」不会发生（2026-10-20）
+   */
+  function growIn(root) {
+    const on = root && root.querySelector('.is-on');
+    if (!on) return;
+    on.classList.remove('is-on');
+    void on.getBoundingClientRect();   // 强制样式结算：把「未选中」记成过渡起点（同步，不受后续渲染打断）
+    on.classList.add('is-on');         // 同一帧恢复，过渡从起点播到终点
   }
 
   /** 分组折叠：点左侧信息面板切换（按钮点击不触发）；幂等，可反复调用 */
@@ -229,25 +406,61 @@ window.MV = (function () {
       + body + (o.extra || '');
   }
 
+  /**
+   * 横向来源条（Figma 2026-10-17 重构）：点卡片选中来源后，卡片区收成一条 chip 栏——
+   * 分组标题（本地/远程仓库/工具）+ 该组的动作按钮 + 该组来源 chip（色块 + 名称 + 数量），
+   * 末尾一个「⇅」返回卡片网格。
+   */
+  function chipBar(o) {
+    const groups = o.groups || [];
+    const items = o.items || [];
+    const chip = (t) => `
+      <button class="cbar__it ${t.id === o.activeId ? 'is-on' : ''}" data-src="${esc(t.id)}"
+              title="${esc(t.title || t.name)}">
+        <svg class="stgt-frame" aria-hidden="true"><path class="fr-up" pathLength="1"/><path class="fr-dn" pathLength="1"/></svg>
+        <span class="cbar__ic ${t.cls || 'chip--muted'}">${esc(t.short || '')}</span>
+        <span class="cbar__nm">${esc(t.name)}</span>
+        <span class="cbar__n mono">${t.count != null ? t.count : 0}</span>
+      </button>`;
+    return `<div class="cbar">
+      <button class="cbar__back" id="${esc(o.prefix)}-barback" title="切换到详细布局" aria-label="切换到详细布局">${ic('layout')}</button>
+      ${groups.map(gr => {
+        const list = items.filter(t => gr.ids.indexOf(t.id) >= 0);
+        return `<span class="cbar__grp">
+          <span class="cbar__label">${esc(gr.label || '')}</span>
+          ${(gr.actions || []).map(a => `<button class="hub-btn btn-sm" data-gact="${esc(gr.kind)}:${esc(a)}">${esc(a)}</button>`).join('')}
+          ${list.map(chip).join('')}
+        </span>`;
+      }).join('')}
+    </div>`;
+  }
+
   /** 条目行（两行 + 胶囊 + 折叠箭头 + 行内展开体） */
+  /**
+   * 唯一的条目行组件（记忆 / Skills / MCP / 会话共用，用户 2026-10-20「组件：使用同一套组件」）。
+   * variant='session' 时输出 .srow* 类名（会话的历史类名与既有事件绑定保持不变），结构、间距、勾选框、箭头完全同源。
+   * o = { id, testid, chkTestid, sel, open, chipText, chipCls, title, sub, extra, body, attrs, variant }
+   */
   function item(o) {
-    return `
-      <div class="mvi ${o.open ? 'is-open' : ''} ${o.sel ? 'is-sel' : ''}" data-id="${esc(o.id)}"
-           ${o.testid ? `data-testid="${esc(o.testid)}"` : ''}>
-        <div class="mvi__head">
-          <input type="checkbox" class="mvi__chk" ${o.sel ? 'checked' : ''}
-                 ${o.chkTestid ? `data-testid="${esc(o.chkTestid)}"` : ''} aria-label="勾选">
-          ${o.chipText ? chip(o.chipText, o.chipCls) : ''}
-          <span class="mvi__main">
+    const c = (suf) => 'mvi' + suf;
+    const main = `<span class="mvi__main">
             <span class="mvi__title" title="${esc(o.titleTitle || o.title)}">${esc(o.title)}</span>
             <span class="mvi__sub" title="${esc(o.sub || '')}">${esc(o.sub || '')}</span>
-          </span>
-          ${o.meta && !o.open ? `<span class="mvi__meta">${esc(o.meta)}</span>` : ''}
+          </span>`;
+    return `
+      <div class="${c('')} ${o.open ? 'is-open' : ''} ${o.sel ? 'is-sel' : ''}${o.chipText ? ' has-chip' : ''}" data-id="${esc(o.id)}"
+           ${o.testid ? `data-testid="${esc(o.testid)}"` : ''} ${o.attrs || ''}>
+        <div class="${c('__head')}">
+          <input type="checkbox" class="${c('__chk')}" ${o.sel ? 'checked' : ''}
+                 ${o.chkTestid ? `data-testid="${esc(o.chkTestid)}"` : ''} aria-label="勾选">
+          ${o.chipText ? chip(o.chipText, o.chipCls) : ''}
+          ${main}
+          ${o.meta && !o.open ? `<span class="${c('__meta')}">${esc(o.meta)}</span>` : ''}
           ${o.pillText ? pill(o.pillTone, o.pillText) : ''}
           ${o.extra || ''}
-          <button class="mvi__chev" title="${o.open ? '收起' : '展开'}">${SVG_CHEV}</button>
+          <button class="${c('__chev')}" title="${o.open ? '收起' : '展开'}">${SVG_CHEV}</button>
         </div>
-        <div class="mvi__acc"><div class="mvi__accin">${o.open ? (o.body || '<div class="srow__load">加载中…</div>') : ''}</div></div>
+        <div class="${c('__acc')}"><div class="${c('__accin')}">${o.open ? (o.body || '<div class="srow__load">加载中…</div>') : ''}</div></div>
       </div>`;
   }
 
@@ -256,9 +469,12 @@ window.MV = (function () {
     const acts = (o.actions || []).map(a => `<button class="hub-btn btn-sm" data-acc="${esc(a.key)}"
       ${a.testid ? `data-testid="${esc(a.testid)}"` : ''} ${a.disabled ? 'disabled' : ''}
       ${a.title ? `title="${esc(a.title)}"` : ''}>${esc(a.label)}</button>`).join('');
-    return `<div class="mvi__body">
-      <div class="mvi__bh"><span class="mono">${esc(o.meta || '')}</span>
-        <span>· 来源 ${esc(o.source || '')}</span><span class="mvi__bacts">${acts}</span></div>
+    // 元信息行：meta 与 source 都为空时整行省略（MCP 条目元信息已上移行头，2026-10-19）
+    const bh = (o.meta || o.source)
+      ? `<div class="mvi__bh"><span class="mono">${esc(o.meta || '')}</span>`
+        + `<span>· 来源 ${esc(o.source || '')}</span><span class="mvi__bacts">${acts}</span></div>`
+      : '';
+    return `<div class="mvi__body">${bh}
       <pre class="mvi__pre" data-acc-pre>${esc(o.text || '加载中…')}</pre></div>`;
   }
 
@@ -292,13 +508,8 @@ window.MV = (function () {
         <div class="sess__main">
           <aside class="sside" id="${esc(o.prefix)}-side" hidden></aside>
           <section class="slist" id="${esc(o.prefix)}-col">
-            <div class="slist__h">
-              <h2 id="${esc(o.prefix)}-title">${esc(o.title || '')}</h2>
-              <span class="slist__n" id="${esc(o.prefix)}-count"></span>
-              ${o.headExtra || ''}
-            </div>
             <div class="slist__search"><label class="ssearch">
-              <span class="ssearch__ic">⌕</span>
+              <span class="ssearch__ic">${ic('search')}</span>
               <input id="${esc(o.prefix)}-q" placeholder="${esc(o.placeholder || '搜索…')}" value="${esc(o.q || '')}">
             </label></div>
             <div class="nv-list" id="${esc(o.prefix)}-rows"></div>
@@ -313,23 +524,18 @@ window.MV = (function () {
         </div>
       </div>`;
   }
-  return { pill, chip, ic, bindGroups, accBody, card: cardHTML, chev: () => SVG_CHEV, short, cls, top, side, item, ledger,
+  return { pill, chip, ic, head: cardHead, chipBar, syncCards, growIn, hdrToggle, targetPicker, bindGroups, accBody, card: cardHTML, chev: () => SVG_CHEV, short, cls, top, side, item, ledger,
     recentLedger, shell, swap };
 })();
 
 function renderAll() {
-  renderToolGrid(); renderToolSide(); renderFilterSeg(); renderRows();
-  renderMigrations(); renderStatus(); renderSelCount(); renderPanel();
+  renderToolGrid(); renderFilterSeg(); renderRows();
+  renderStatus(); renderSelCount(); renderPanel();
 }
 
 /* ---------- tool rows（右栏：工具列表 + 迁移目标） ---------- */
 /* ---------- 工具卡片网格（会话视图顶部） ---------- */
 const TOOL_CARD_W = 128;      // 卡片宽（= --tcard，稿子 ToolGrid/ToolCard 一致）
-function toolGridCols(box) {
-  const w = box ? box.clientWidth : 0;
-  if (!w) return 6;
-  return Math.max(2, Math.floor((w + 16) / (TOOL_CARD_W + 16)));   // 稿子：+gap 再整除
-}
 // 口径 B（2026-10-14 定稿）：停用 = 在所有界面隐藏（含其历史会话）。
 // 与设置页文案「禁用的工具在所有界面隐藏」一致：卡片 / 侧栏 / 列表 / 迁移目标同口径，
 // 一律只认启用且有会话根目录的工具；重新启用即恢复可见。
@@ -359,7 +565,8 @@ function toolCardHTML(t) {
     <div class="tcard ${state.filter === t.id ? 'is-on' : ''} ${t.enabled ? '' : 'is-off'}"
          data-testid="tool-card-${esc(t.id)}" data-tool="${esc(t.id)}" data-testid-drop="drop-${esc(t.id)}"
          title="${esc(title)}">
-      <span class="tcard__cnt mono" data-testid="count-${esc(t.id)}">${info.count}</span>
+      <svg class="stgt-frame" aria-hidden="true"><path class="fr-up" pathLength="1"/><path class="fr-dn" pathLength="1"/></svg>
+      ${window.MV.head({ id: t.id }, { cntTestid: 'count-' + t.id, hasActs: false }, info.count)}
       <button class="tcard__open" data-testid="tool-open-${esc(t.id)}"
               aria-label="进入 ${esc(t.name)} 的会话视图（${info.count} 条会话）">
         <span class="tcard__chip ${toolColorCls(t)}">${esc(toolShort(t))}</span>
@@ -371,36 +578,45 @@ function renderToolGrid() {
   const box = document.getElementById('tool-cards');
   if (!box) return;
   const list = sessionTools();
-  box.innerHTML = list.map(toolCardHTML).join('');
-  // 「展开更多」：只显示首行（列数按容器宽度算，与稿子 ToolGrid 一致），其余折起
-  const cols = toolGridCols(box);
-  const clipped = !state._toolsOpen && list.length > cols;
-  box.classList.toggle('tgrid--clip', clipped);
-  box.style.setProperty('--tgrid-cols', String(cols));
-  box.querySelectorAll('.tcard').forEach((c, i) => { c.hidden = clipped && i >= cols; });
-  box.querySelectorAll('.tcard').forEach(bindToolCard);
-  const nEl = document.getElementById('sess-tools-count');
-  if (nEl) nEl.textContent = list.length;
-  const toggle = document.getElementById('sess-tools-toggle');
-  if (toggle) {
-    const rest = list.length - cols;
-    toggle.hidden = rest <= 0;
-    const moreBox = toggle.parentElement;
-    if (moreBox) moreBox.hidden = rest <= 0;
-    if (rest > 0) {
-      toggle.innerHTML = (state._toolsOpen ? '收起' : `展开更多 (${rest})`)
-        + `<span class="sess-tools__cv${state._toolsOpen ? ' is-up' : ''}">▾</span>`;
-      toggle.onclick = () => { state._toolsOpen = !state._toolsOpen; renderToolGrid(); };
-    }
+  const counts = state.tools || {};
+  const total = list.reduce((n, t) => n + ((counts[t.id] || {}).count || 0), 0);
+  // 选中切换走就地类名同步（不重建卡片），保住「描边生长 + 背景扫入」动效（2026-10-20）
+  const sig = list.map(t => `${t.id}:${(counts[t.id] || {}).count || 0}`).join(',');
+  if (box.dataset.sig === sig) {
+    box.querySelectorAll('.tcard').forEach(c => c.classList.toggle('is-on', c.dataset.tool === state.filter));
+    renderSessBar(); applySessLayout(false);
+    return;
   }
-  const wrap = document.getElementById('sess-tools');
-  if (wrap) wrap.classList.toggle('is-fold', !!state._toolFocus);
+  box.dataset.sig = sig;
+  // 详细布局 = 来源分组（对齐 记忆/Skills/MCP 的 srcgroups；用户指令 2026-10-19「会话也接入」）：
+  // 组侧板（图标/名称/统计/说明）+ 卡片；卡片沿用 toolCardHTML，testid 与拖拽迁移落点原样保留
+  box.innerHTML = `
+    <div class="srcgroup" data-g="tool">
+      <div class="srcgroup__side" role="button" tabindex="0" data-gfold="tool" title="点击折叠 / 展开本组">
+        <div class="srcgroup__toph">
+          <span class="srcgroup__ic" style="color:var(--c-tool-p5)">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.5-.5-.5-2.5z"/></svg></span>
+          <span class="srcgroup__name">工具</span>
+          <span class="srcgroup__fold">${MV.chev()}</span>
+        </div>
+        <div class="mono srcgroup__meta">${list.length} 源 · ${total} 条</div>
+        <div class="srcgroup__d">点卡片进入该工具的会话；拖会话行到卡片可迁移</div>
+      </div>
+      <div class="srcgroup__body"><div><div class="srcgroup__grid">${list.map(toolCardHTML).join('')}</div></div></div>
+    </div>`;
+  box.querySelectorAll('.tcard').forEach(bindToolCard);
+  HubUI.drawFrames(box);   // 像素级描边路径构建 + 尺寸随动（ResizeObserver 在助手内）
+  MV.bindGroups(document.getElementById('view-sessions'));
+  renderSessBar();
+  applySessLayout(false);
 }
 function bindToolCard(card) {
   const tid = card.dataset.tool;
   const open = card.querySelector('.tcard__open');
   if (open) open.onclick = () => enterTool(tid);
-  // 卡片本身是迁移落点（拖会话行到卡片上）；采集入口在工具侧栏   card.ondragover = e => { e.preventDefault(); card.classList.add('is-hot'); };
+  // 卡片本身是迁移落点（拖会话行到卡片上）；ondragover 必须 preventDefault，drop 才会触发
+  card.ondragover = e => { e.preventDefault(); card.classList.add('is-hot'); };
   card.ondragleave = () => card.classList.remove('is-hot');
   card.ondrop = e => {
     e.preventDefault(); card.classList.remove('is-hot');
@@ -409,47 +625,97 @@ function bindToolCard(card) {
   };
 }
 
-/* ---------- 工具侧边栏（进入某个工具后） ---------- */
-function renderToolSide() {
-  const box = document.getElementById('sess-side');
-  if (!box) return;
-  const focus = focusTool();
-  if (!focus) { box.hidden = true; box.innerHTML = ''; return; }
-  box.hidden = false;
-  const counts = state.tools || {};
-  box.innerHTML = `
-    <button class="sside__back" id="sside-back" title="返回全部工具">‹</button>
-    ${sessionTools().map(t => {
-      const n = (counts[t.id] || {}).count || 0;
-      return `<button class="sside__it ${t.id === focus.id ? 'is-on' : ''} ${t.enabled ? '' : 'is-off'}"
-        data-tool="${esc(t.id)}" title="${esc(t.name)} · ${n} 条${t.enabled ? '' : ' · 已停用'}">
-        <span class="sside__chip ${toolColorCls(t)}">${esc(toolShort(t))}</span>
-        <span class="sside__nm">${esc((t.name || '').split(' ')[0])}</span>
-        <span class="sside__n">${n}</span></button>`;
-    }).join('')}
-    <div class="sside__acts">
-      <button data-testid="focus-refresh" title="刷新当前工具">⟳</button>
-    </div>`;
-  box.querySelector('#sside-back').onclick = exitTool;
-  box.querySelectorAll('.sside__it').forEach(b => {
-    b.onclick = () => { state._toolFocus = b.dataset.tool; state.filter = b.dataset.tool; state._sessDetail = null; renderAll(); };
-  });
-  box.querySelector('[data-testid="focus-refresh"]').onclick = ev => refreshOne(focus.id, ev.currentTarget);
-}
+/* ---------- 顶部布局切换（对齐 记忆/Skills/MCP；用户指令 2026-10-19「会话也接入」） ---------- */
 function focusTool() { return state._toolFocus ? toolById(state._toolFocus) : null; }
-// 点工具卡片进入该工具的会话视图（再点一次退出）
-function enterTool(id) {
-  state._toolFocus = state._toolFocus === id ? null : id;
-  state.filter = state._toolFocus || 'all';
+/** 简略条内容：全部工具 chip + 当前工具的 ⟳ 单工具采集（判据 testid：focus-refresh） */
+function renderSessBar() {
+  const bar = document.getElementById('sess-bar');
+  if (!bar) return;
+  const list = sessionTools();
+  const counts = state.tools || {};
+  const focus = focusTool();
+  // 内容未变只同步选中类名，保住 chip 描边动效（2026-10-20）
+  // 签名只含「chip 集合 + 数量」：选中变化本身就是要就地切类名的情形，
+  // 若把 focus 放进来，切换工具就会重建整条 → 新节点天生带 is-on，描边动效没有起点（2026-10-20 修）
+  const sig = list.map(t => `${t.id}:${(counts[t.id] || {}).count || 0}`).join(',')
+    + (focus ? '|r' : '');       // 只区分「有无刷新按钮」，仍不含具体工具 id（换工具要走就地切类名）
+  if (bar.dataset.sig === sig) {
+    bar.querySelectorAll('.cbar__it').forEach(b => b.classList.toggle('is-on', b.dataset.src === state._toolFocus));
+    // 重新绑定刷新按钮（换工具时早期返回，闭包里 focus 可能还是上一个工具）
+    const rb0 = bar.querySelector('[data-testid="focus-refresh"]');
+    if (rb0 && focus) rb0.onclick = ev => refreshOne(focus.id, ev.currentTarget);
+    return;
+  }
+  bar.dataset.sig = sig;
+  bar.innerHTML = MV.chipBar({
+    prefix: 'sess',
+    items: list.map(t => ({ id: t.id, name: t.name, short: toolShort(t), cls: toolColorCls(t),
+      count: (counts[t.id] || {}).count || 0 })),
+    activeId: state._toolFocus,
+    groups: [{ kind: 'tool', label: '工具', ids: list.map(t => t.id), actions: [] }],
+  });
+  HubUI.drawFrames(bar);   // 像素级描边路径构建 + 尺寸随动（ResizeObserver 在助手内）
+  MV.growIn(bar);          // 首次进入简略布局时补播选中动效
+  if (focus) {
+    bar.querySelector('.cbar').insertAdjacentHTML('beforeend',
+      `<button class="hub-btn btn-sm" data-testid="focus-refresh" title="刷新当前工具">⟳</button>`);
+    const rb = bar.querySelector('[data-testid="focus-refresh"]');
+    if (rb) rb.onclick = ev => refreshOne(focus.id, ev.currentTarget);
+  }
+  bar.querySelectorAll('.cbar__it').forEach(b => { b.onclick = () => sessPick(b.dataset.src, false); });
+  const back = bar.querySelector('#sess-barback');
+  if (back) back.onclick = () => { state._sessLayout = 'detail'; state._sessAnim = true; renderAll(); };
+}
+/** 布局落地：animate=true 时走两帧过渡（高度钉→下一帧切类名）；renderAll 里恒为 false（幂等即时） */
+function applySessLayout(animate) {
+  const hdr = document.getElementById('sess-hdr');
+  if (!hdr) return;
+  const top = document.getElementById('sess-top');
+  const compact = state._sessLayout === 'compact';
+  if (!compact) {
+    const fullH = top ? top.scrollHeight : 0;
+    if (fullH) state._sessFullH = fullH;          // compact 时卡片区绝对定位量不到，提前缓存
+  }
+  if (state._sessFullH) hdr.style.setProperty('--hdr-full', Math.round(state._sessFullH) + 'px');
+  const apply = () => {
+    hdr.style.height = '';
+    hdr.classList.toggle('is-compact', compact);
+    hdr.dataset.layout = compact ? 'compact' : 'detail';
+  };
+  const wantAnim = animate || state._sessAnim;
+  state._sessAnim = false;
+  const prev = hdr.dataset.layout || '';
+  const next = compact ? 'compact' : 'detail';
+  if (!wantAnim || !prev || prev === next) apply();
+  else {
+    hdr.style.height = Math.round(hdr.getBoundingClientRect().height) + 'px';
+    requestAnimationFrame(() => requestAnimationFrame(apply));
+  }
+  if (compact) { const dt = hdr.querySelector('#sess-hdrtoggle'); if (dt) dt.hidden = true; }
+  else MV.hdrToggle(hdr, 'sess', () => { state._sessLayout = 'compact'; state._sessAnim = true; renderAll(); });
+  const bar = document.getElementById('sess-bar');
+  if (bar) {
+    bar.hidden = !compact;
+    // 条在详细布局里是 display:none，量不到尺寸 → 描边路径建不出来；显示之后补建并补播一次选中动效
+    if (compact && prev !== next) { HubUI.drawFrames(bar); MV.growIn(bar); }
+  }
+}
+// 详细卡片点击（fromCards=true）与简略 chip 点击共用：点已选 = 只取消，布局不变；点新工具 = 选中（卡片路径同时收合成条）
+function sessPick(id, fromCards) {
+  const same = state._toolFocus === id;
+  if (same) { state._toolFocus = null; state.filter = 'all'; }
+  else {
+    state._toolFocus = id; state.filter = id;
+    // 改动：点工具卡片只「进入该工具的会话筛选」，不再自动收合成简略布局
+    //（用户指令 2026-10-20「取消点击卡片进入简略布局」）
+  }
   state._sessDetail = null;
   state._panelOff = false;
+  state.selected.clear();      // 换工具=换作用域：已选随之清空，避免"已选 N 条但列表里一条没勾"
   renderAll();
 }
-function exitTool() {
-  state._toolFocus = null;
-  state.filter = 'all';
-  renderAll();
-}
+// 兼容旧入口名：卡片打开按钮仍走这里
+function enterTool(id) { sessPick(id, true); }
 
 /* ---------- filter seg（内置 + 自定义工具，全部按注册表动态生成） ---------- */
 let lastSegSig = '__init__';
@@ -472,11 +738,19 @@ function renderFilterSeg() {
     lastSegSig = 'bound';
     seg.querySelectorAll('button').forEach(b => { b.onclick = () => setFilter(b.dataset.filter); });
   }
+  // 「★ 星标」在底部选择栏（用户指令 2026-10-19「星标筛选放到下面」）：toggle 语义，再点回「全部」
+  const star = document.getElementById('star-toggle');
+  if (star && !star.dataset.bound) {
+    star.dataset.bound = '1';
+    star.onclick = () => setFilter(state.filter === 'starred' ? 'all' : 'starred');
+  }
   syncFilterSegActive();
 }
 function syncFilterSegActive() {
   document.querySelectorAll('#filter-seg button').forEach(b =>
     b.classList.toggle('is-on', b.dataset.filter === state.filter));
+  const star = document.getElementById('star-toggle');
+  if (star) star.classList.toggle('is-on', state.filter === 'starred');
 }
 
 /* ---------- rows ---------- */
@@ -506,14 +780,7 @@ function renderRows() {
   const scopedIds = new Set(scopedSessions().map(s => s.sid));
   [...state.selected].forEach(sid => { if (!scopedIds.has(sid)) state.selected.delete(sid); });
   const box = document.getElementById('session-rows');
-  const focus = focusTool();
-  const title = document.getElementById('sess-title');
-  if (title) title.textContent = focus ? focus.name + ' · 会话' : '全部会话';
-  const cnt = document.getElementById('sess-left-count');
   const all = scopedSessions();
-  if (cnt) cnt.textContent = state.filter === 'all'
-    ? String(visibleSessions().length)
-    : visibleSessions().length + ' / ' + all.length;
   if (!all.length) {
     box.innerHTML = (state.sessions || []).length > 0
       ? '<div class="hub-empty">当前没有启用工具的会话</div>'
@@ -534,25 +801,28 @@ function renderRows() {
     const sel = state.selected.has(s.sid);
     const t = toolById(s.tool);
     const lid = s.lid ? `<span class="hub-badge" data-testid="lid-badge">[hub:${s.lid}]</span>` : '';
-    const tchip = showTool
-      ? `<span class="srow__chip ${toolColorCls(t)}" title="${esc(t ? t.name : s.tool)}">${esc(toolShort(t))}</span>` : '';
-    return `
-    <div class="srow ${open && !anim ? 'is-open' : ''} ${sel ? 'is-sel' : ''}" data-testid="row" data-sid="${esc(s.sid)}"
-         data-msgs="${esc(String(s.msg_count == null ? '' : s.msg_count))}"
-         data-tool="${esc(s.tool)}" draggable="true" ${anim ? 'data-anim="1"' : ''}>
-      <div class="srow__head">
-        <input type="checkbox" class="srow__chk" data-testid="row-check" ${sel ? 'checked' : ''}
-               title="勾选此会话" aria-label="勾选会话">
-        <button class="srow__star ${s.starred ? 'is-on' : ''}" data-testid="row-star"
-                title="${s.starred ? '取消收藏' : '收藏'}">★</button>
-        ${tchip}
-        <span class="srow__ti" title="${esc(s.title || '(无标题)')}">${esc(s.title || '(无标题)')}</span>
-        ${lid}
-        <span class="srow__meta">${esc(String(s.msg_count))} 条 · ${esc(fmtTime(s.updated_at))}</span>
-        <button class="srow__chev" title="${open ? '收起' : '展开'}" aria-label="展开会话">${SVG_CHEV}</button>
-      </div>
-      <div class="srow__acc"><div class="srow__accin">${open ? detailHTML(s.sid) : ''}</div></div>
-    </div>`;
+    // 会话行也用统一条目组件（variant='session' 保留 .srow* 类名与既有事件绑定）：
+    // 去掉右侧「N 条 · 时间」元信息、胶囊；悬停动作按 Skills 对齐（收藏 / 复制命令 / 导出）
+    const acts = `<span class="mvi-acts">`
+      + `<button class="hub-btn btn-sm${s.starred ? ' is-on' : ''}" data-act="star" data-testid="row-star" title="${s.starred ? '取消收藏' : '收藏'}">${s.starred ? '已收藏' : '收藏'}</button>`
+      + `<button class="hub-btn btn-sm" data-act="copy" data-testid="row-copy" title="复制 resume 命令">复制</button>`
+      + `<button class="hub-btn btn-sm" data-act="export" data-testid="row-export" title="导出 Markdown">导出</button>`
+      + `</span>`;
+    return MV.item({
+      id: s.sid,
+      testid: 'row',
+      chkTestid: 'row-check',
+      sel, open: open && !anim,
+      attrs: `data-sid="${esc(s.sid)}" data-msgs="${esc(String(s.msg_count == null ? '' : s.msg_count))}" data-tool="${esc(s.tool)}" draggable="true"${anim ? ' data-anim="1"' : ''}`,
+      chipText: showTool ? toolShort(t) : '',
+      chipCls: showTool ? toolColorCls(t) : '',
+      chipTitle: showTool ? (t ? t.name : s.tool) : '',
+      title: s.title || '(无标题)',
+      // 副标题按 Skills 的「来源 · 描述」形态：这里用 工具名 · 更新时间（原右侧的 N 条·时间 已去掉）
+      sub: `${(t ? t.name : s.tool)} · ${fmtTime(s.updated_at)}`,
+      extra: `${acts}${lid}`,
+      body: open ? detailHTML(s.sid) : '',
+    });
   }).join('');
   box.querySelectorAll('[data-testid="row"]').forEach(row => {
     const sid = row.dataset.sid;
@@ -563,21 +833,40 @@ function renderRows() {
       state._panelOff = false;
       renderSelCount();
     };
-    row.querySelector('.srow__star').onclick = async e => {
+    row.querySelectorAll('.mvi-acts [data-act]').forEach(b => {
+      b.onclick = async e => {
+        e.stopPropagation();
+        if (b.dataset.act === 'star') {
+          const rr = await post('/api/star', { sid });
+          if (!rr.data.ok) { HubUI.toast('收藏失败：' + (rr.data.error || ''), 'error'); return; }
+          const sm = (state.sessions || []).find(x => x.sid === sid);
+          if (sm) sm.starred = rr.data.starred;
+          const dd = state._detailCache[sid];
+          if (dd) dd.starred = rr.data.starred;
+          HubUI.toast(rr.data.starred ? '已收藏' : '已取消收藏', 'success');
+          renderRows();
+          return;
+        }
+        if (b.dataset.act === 'copy') {
+          try { await navigator.clipboard.writeText(`casr resume ${sid}`); HubUI.toast('已复制 resume 命令', 'success'); }
+          catch { HubUI.toast('复制失败（剪贴板被限制）', 'warn'); }
+        } else {
+          openSession(sid).then(() => document.getElementById('sess-export')?.click());
+        }
+      };
+    });
+    // 箭头是唯一的"收起"入口（行头点击改成幂等打开后）：已展开 → 收起，否则 → 展开
+    row.querySelector('.mvi__chev').onclick = e => {
       e.stopPropagation();
-      const rr = await post('/api/star', { sid });
-      if (!rr.data.ok) { HubUI.toast('收藏失败：' + (rr.data.error || ''), 'error'); return; }
-      const s = (state.sessions || []).find(x => x.sid === sid);
-      if (s) s.starred = rr.data.starred;
-      const d = state._detailCache[sid];
-      if (d) d.starred = rr.data.starred;
-      HubUI.toast(rr.data.starred ? '已收藏' : '已取消收藏', 'success');
-      renderRows();   // 「★ 星标」筛选下需即时移除／加回该行
+      if (state._sessDetail === sid) closeSession(sid); else openSession(sid);
     };
-    row.querySelector('.srow__chev').onclick = e => { e.stopPropagation(); toggleSession(sid); };
     // 点击整行 = 展开 / 收起（就地切换，不重画整表）
     // 行内按钮（勾选 / 收藏 / 折叠箭头 / 详情里的操作）一律不触发展开切换
     row.onclick = (e) => { if (e.target.closest('button, input, a')) return; toggleSession(sid); };
+    // 点详情内容任意处 = **不收起**（用户指令 2026-10-19「点击正文不收起」）：内容区用于阅读/选择，
+    // 误点不打断；收起只走行头点击或行尾箭头
+    const accin = row.querySelector('.mvi__accin');
+    if (accin) accin.onclick = (e) => { e.stopPropagation(); };
     row.ondragstart = e => {
       if (!state.selected.has(sid)) { state.selected.add(sid); state._panelOff = false; renderSelCount(); }
       e.dataTransfer.setData('text/plain', [...state.selected].join(','));
@@ -616,10 +905,13 @@ function sessSelNone() {
   renderRows(); renderSelCount();
 }
 function renderSessPager() {
+  // 兜底：已选集必须 ⊆ 当前作用域（切工具 / 数据刷新 / 搜索过滤后都可能残留）
+  { const ids = new Set(scopedSessions().map(s => s.sid));
+    [...state.selected].forEach(sid => { if (!ids.has(sid)) state.selected.delete(sid); }); }
   const info = document.getElementById('sess-pinfo');
   // 页脚只留这一处计数（2026-10-14：左侧那个「已选 N 条」与之重复，已删）
   if (info) info.innerHTML = `已选 <b id="sel-count" data-testid="sel-count">${state.selected.size}</b>`
-    + ` · 显示 ${visibleSessions().length} 条 · 共 ${scopedSessions().length} 条`;
+    + ` · 显示 ${visibleSessions().length} 条 · 共 ${scopedSessions().length} 条`;   // 会话口径：已选 N · 显示 M · 共 K
   const none = document.getElementById('sess-sel-none');
   if (none) none.disabled = !state.selected.size;
 }
@@ -646,9 +938,11 @@ function renderSelCount() {
 }
 function setFilter(tool) {
   state.filter = tool;
-  // 切到别的工具/全部 → 退出工具视图（卡片网格与侧边栏恢复）；进入工具视图走 enterTool
+  state.selected.clear();      // 换筛选作用域：清空已选，保持"勾选集合 ⊆ 当前可见列表"
+  state._sessDetail = null;
+  // 切到别的工具/全部 → 退出工具视图（顶部恢复详细网格）；进入工具视图走 enterTool
   if (state._toolFocus && state._toolFocus !== tool) state._toolFocus = null;
-  renderToolGrid(); renderToolSide(); syncFilterSegActive();
+  renderToolGrid(); syncFilterSegActive();
   renderRows();
 }
 
@@ -664,65 +958,71 @@ function panelTargets() {
 }
 function renderPanel() {
   const panel = document.getElementById('sess-panel');
-  if (!panel) return;
+  const host = document.getElementById('sess-panel-in');
+  if (!panel || !host) return;
   const n = state.selected.size || (state._sessDetail ? 1 : 0);
   const show = !state._panelOff && n > 0;
   panel.classList.toggle('is-in', show);
   if (!show) return;
   const d = state._detailCache[state._sessDetail];
-  const sel = document.getElementById('sess-panel-sel');
-  if (sel) sel.innerHTML = state.selected.size
-    ? `已选 <b class="mono">${state.selected.size}</b> 条会话`
-    : `当前：${esc((d && (d.title || d.sid)) || '—')}`;
-  renderMigTargets();
-  const tgt = toolById(state._migTarget);
-  const go = document.getElementById('sess-migrate-go');
-  if (go) {
-    go.disabled = !tgt || !n;
-    go.textContent = `迁移 ${n} 条到 ${tgt ? tgt.name : '…'}`;
-  }
-}
-function renderMigTargets() {
-  const box = document.getElementById('sess-targets');
-  if (!box) return;
   const targets = panelTargets();
-  if (state._migTarget && !targets.some(t => t.id === state._migTarget)) state._migTarget = null;
-  box.innerHTML = targets.length ? targets.map(t => `
-    <li><button class="stgt ${state._migTarget === t.id ? 'is-on' : ''}" data-target="${esc(t.id)}" data-testid="sess-target-${esc(t.id)}">
-      <span class="stgt__dot ${toolColorCls(t)}"></span>
-      <span class="stgt__nm">${esc(t.name)}</span>
-      <span class="stgt__radio"></span>
-    </button></li>`).join('')
-    : '<li class="stgt__none">没有可迁移的目标：当前会话所属工具之外的会话工具都可作为目标</li>';
-  box.querySelectorAll('[data-target]').forEach(b => {
-    b.onclick = () => { state._migTarget = b.dataset.target; renderPanel(); };
+  // 已被移除的工具自动退出选中集合
+  state._migTargets = state._migTargets.filter(id => targets.some(t => t.id === id));
+  const selNow = () => (state.selected.size
+    ? `已选 <b class="mono">${state.selected.size}</b> 条`
+    : `当前：${esc((d && (d.title || d.sid)) || '—')}`);
+  // 统一目标选择组件（用户 2026-10-20「目标选择：按 skills 对齐」）
+  const picker = MV.targetPicker({
+    prefix: 'sess',
+    items: targets.map(t => ({ id: t.id, name: t.name, dotCls: toolColorCls(t), testid: `sess-target-${t.id}` })),
+    chosen: (state._migTargets || []).map(String),
+    selLine: selNow(),
+    selLineFn: () => selNow(),
+    goText: '迁移',
+    goTextFn: (set) => {
+      const list = targets.filter(t => set.has(String(t.id)));
+      const what = !list.length ? '…' : list.length === 1 ? list[0].name : `${list.length} 个工具`;
+      return `迁移 ${n} 条到 ${what}`;
+    },
+    onChange: (ids) => { state._migTargets = ids.map(Number); },
+    onGo: () => panelMigrate(),
   });
-}
-// 面板「迁移」按钮：与工具卡片「迁移到此」同一入口（先出内联确认条）
-function panelMigrate() {
-  if (!state._migTarget) return;
-  const ids = state.selected.size ? [...state.selected] : (state._sessDetail ? [state._sessDetail] : []);
-  migrateConfirmInline(state._migTarget, ids);
+  host.innerHTML = `
+    <div class="spanel__h">
+      <h3>目标</h3>
+      <button class="spanel__x" id="sess-panel-close" title="收起" aria-label="收起">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    ${picker.html}`;
+  picker.bind(host);
+  const closeBtn = host.querySelector('#sess-panel-close');
+  if (closeBtn) closeBtn.onclick = closePanel;
 }
 function closePanel() { state._panelOff = true; renderPanel(); }
 
 /* ---------- migration（工具卡片与迁移面板即迁移目标；确认条内联在面板内） ---------- */
-function renderDrops() { /* no-op：迁移入口为工具卡片/迁移面板，由 renderToolGrid 与 renderPanel 渲染 */ }
-function migrateConfirmInline(target, ids) {
+/**
+ * 迁移确认条（内联在目标面板里，替代弹窗）。targets 可以是单个工具 id 或 id 数组。
+ * 底部台账已按用户指令 2026-10-20 去掉 → 确认条直接挂在面板底部（.spanel__in 末尾）。
+ */
+function migrateConfirmInline(targets, ids) {
   if (!ids.length) { HubUI.toast('先勾选要迁移的会话，或展开一条会话', 'warn'); return; }
-  // 确认条插在迁移面板内 → 先把面板展开并记下目标，保证用户看得见
-  state._panelOff = false; state._migTarget = target; renderPanel();
+  const tlist = (Array.isArray(targets) ? targets : [targets]).filter(Boolean);
+  if (!tlist.length) return;
+  // 确认条插在目标面板内 → 先把面板展开并记下目标，保证用户看得见
+  state._panelOff = false; state._migTargets = tlist; renderPanel();
   const byId = Object.fromEntries(state.sessions.map(s => [s.sid, s]));
-  const items = ids.map(id => byId[id]).filter(s => s && s.tool !== target);
+  const items = ids.map(id => byId[id]).filter(s => s && !tlist.includes(s.tool));
   if (!items.length) { HubUI.toast('所选会话已属于目标工具，无需迁移', 'warn'); return; }
-  // 右栏内联确认条（替代 HubUI.confirm 弹窗）
+  const tNames = tlist.map(t => (toolById(t) || {}).name || TOOL_NAMES[t] || t).join('、');
   const old = document.getElementById('mig-confirm');
   if (old) old.remove();
   const bar = document.createElement('div');
   bar.className = 'nv-migconfirm';
   bar.id = 'mig-confirm';
   bar.innerHTML = `
-    <div class="nv-migconfirm__txt">迁移 <b>${items.length}</b> 条 → <b>${esc(TOOL_NAMES[target])}</b>${items.length <= 3 ? '<br>' + items.map(s => esc((s.title || s.sid).slice(0, 30))).join('<br>') : `<br>${esc((items[0].title || items[0].sid).slice(0, 30))} 等`}
+    <div class="nv-migconfirm__txt">迁移 <b>${items.length}</b> 条 → <b>${esc(tNames)}</b>${items.length <= 3 ? '<br>' + items.map(s => esc((s.title || s.sid).slice(0, 30))).join('<br>') : `<br>${esc((items[0].title || items[0].sid).slice(0, 30))} 等`}
     <span class="mono-xs">生成新副本，源不动，入 lineage</span></div>
     <div class="nv-migconfirm__acts">
       <button class="hub-btn btn-sm" data-act="cancel">取消</button>
@@ -732,28 +1032,39 @@ function migrateConfirmInline(target, ids) {
   bar.querySelector('[data-act="go"]').onclick = async (e) => {
     bar.remove();
     e.currentTarget.classList.add('is-loading');
-    await runMigration(items, target, false);
+    await runMigration(items, tlist, false);
   };
-  const anchor = document.getElementById('mig-list');
-  anchor.parentNode.insertBefore(bar, anchor);
+  const anchor = document.getElementById('sess-panel-in');
+  (anchor || document.body).appendChild(bar);
   bar.scrollIntoView({ block: 'nearest' });
 }
-async function runMigration(items, target, force) {
+function renderDrops() { /* no-op：迁移入口为工具卡片/迁移面板，由 renderToolGrid 与 renderPanel 渲染 */ }
+
+async function runMigration(items, targets, force) {
+  // 多选：targets 可以是单个 id 或 id 数组；逐「目标 × 会话」发起迁移（后端一次只认一个 target）
+  const tlist = (Array.isArray(targets) ? targets : [targets]).filter(Boolean);
+  const target = tlist[0];                       // 兼容下方「同步更新」单目标重入
   const ok = [], dup = [], err = [];
-  const toastEl = HubUI.toast('迁移中… 0/' + items.length, 'info', 60000);
-  for (let i = 0; i < items.length; i++) {
-    const s = items[i];
-    const r = await post('/api/migrate', { sid: s.sid, target, force: !!force });
-    if (r.data.ok) ok.push({ s, r: r.data });
-    else if (r.data.duplicate) dup.push(s);
-    else err.push({ s, msg: r.data.error || ('迁移失败（HTTP ' + r.status + '，引擎 casr）') });
-    const msgEl = toastEl.querySelector('.hub-toast__msg');
-    if (msgEl) msgEl.textContent = `迁移中… ${i + 1}/${items.length}`;
+  const total = tlist.length * items.length;
+  let done = 0;
+  const toastEl = HubUI.toast('迁移中… 0/' + total, 'info', 60000);
+  for (const tg of tlist) {
+    for (const s of items) {
+      if (s.tool === tg) { done++; continue; }   // 已经是该工具，跳过
+      const r = await post('/api/migrate', { sid: s.sid, target: tg, force: !!force });
+      if (r.data.ok) ok.push({ s, r: r.data, tg });
+      else if (r.data.duplicate) dup.push({ s, tg });
+      else err.push({ s, msg: r.data.error || ('迁移失败（HTTP ' + r.status + '，引擎 casr）') });
+      done++;
+      const msgEl = toastEl.querySelector('.hub-toast__msg');
+      if (msgEl) msgEl.textContent = `迁移中… ${done}/${total}`;
+    }
   }
   toastEl.remove();
   if (ok.length) {
     const lids = ok.map(o => o.r.lid).filter(Boolean);
-    HubUI.toast(`${ok.length} 条已迁移到 ${TOOL_NAMES[target]}` +
+    const tnames = [...new Set(ok.map(o => TOOL_NAMES[o.tg] || o.tg))].join('、');
+    HubUI.toast(`${ok.length} 条已迁移到 ${tnames}` +
       (lids.length ? `（${[...new Set(lids)].join(', ')}）` : ''), 'success');
   }
   if (err.length) {
@@ -762,8 +1073,10 @@ async function runMigration(items, target, force) {
   if (dup.length) {
     // fetch increment info for a richer message (single-item case gets exact delta)
     let inc = '';
+    const dupItems = dup.map(d => d.s);
     if (dup.length === 1) {
-      const pv = await api('/api/sync/preview?sid=' + encodeURIComponent(dup[0].sid) + '&target=' + target);
+      const d0 = dup[0];
+      const pv = await api('/api/sync/preview?sid=' + encodeURIComponent(d0.s.sid) + '&target=' + d0.tg);
       const s = pv.data && pv.data.sync;
       if (s && s.delta != null) {
         inc = s.delta > 0
@@ -771,10 +1084,11 @@ async function runMigration(items, target, force) {
           : '<br><br>自上次迁移后<b>没有新消息</b>，通常无需同步。';
       }
     }
+    const dupTargets = [...new Set(dup.map(d => d.tg))];
     HubUI.confirm('检测到已迁移过的会话',
-      `${dup.length} 条会话此前已迁移到 ${TOOL_NAMES[target]}（同一 lineage 通道已记录，避免重复副本）。` + inc +
+      `${dup.length} 条会话此前已迁移到 ${dupTargets.map(t => TOOL_NAMES[t] || t).join('、')}（同一 lineage 通道已记录，避免重复副本）。` + inc +
       '<br><br>「同步更新」会生成目标工具内的新修订副本（不覆盖旧副本、不动源会话）。',
-      async () => { await runMigration(dup, target, true); },
+      async () => { await runMigration(dupItems, dupTargets, true); },
       { confirmText: '同步更新', cancelText: '忽略跳过' });
   }
   state.selected.clear();
@@ -823,9 +1137,8 @@ function openSchedule() {
     const cfg = (state.schedule || {})[k] || { enabled: false, interval_min: 30 };
     return `<div class="sched__row" data-testid="sched-row-${k}">
       <span class="sched__name">${name}</span>
-      <select class="sched__select" data-testid="sched-interval-${k}">
-        ${INTERVALS.map(m => `<option value="${m}" ${cfg.interval_min === m ? 'selected' : ''}>每 ${m} 分钟</option>`).join('')}
-      </select>
+      ${HubUI.select({ testid: 'sched-interval-' + k, value: cfg.interval_min,
+        options: INTERVALS.map(m => ({ value: m, label: '每 ' + m + ' 分钟' })) })}
       <span class="switch ${cfg.enabled ? 'is-on' : ''}" data-testid="sched-toggle-${k}">
         <span class="switch__track"></span></span>
     </div>`;
@@ -841,7 +1154,7 @@ async function saveSchedule(btn) {
   for (const [k] of schedScopes()) {
     const row = document.querySelector(`[data-testid="sched-row-${k}"]`);
     const enabled = row.querySelector('.switch').classList.contains('is-on');
-    const interval = parseInt(row.querySelector('select').value, 10);
+    const interval = parseInt(row.querySelector('.hub-select').value, 10);
     await post('/api/schedule', { tool: k, enabled, interval_min: interval });
   }
   btn.classList.remove('is-loading');
@@ -926,19 +1239,6 @@ function renderLedger() {
     box.appendChild(el);
   }
 }
-function renderMigrations() {
-  const box = document.getElementById('mig-list');
-  const list = (state.migrations || []).slice(0, 10);
-  if (!list.length) { box.innerHTML = '<div class="hub-empty">还没有迁移记录</div>'; return; }
-  box.innerHTML = '';
-  for (const m of list) {
-    const el = document.createElement('div');
-    el.className = 'led-item';
-    el.innerHTML = `<div class="led-item__time">${esc((m.ts || '').slice(5, 16))} · <span style="color:var(--c-accent)">${esc(m.lid)}</span></div>
-      <div class="led-item__act">${esc(TOOL_NAMES[m.src_tool] || m.src_tool)} → ${esc(TOOL_NAMES[m.dst_tool] || m.dst_tool)} · ${m.status === 'ok' ? '成功' : '失败'}</div>`;
-    box.appendChild(el);
-  }
-}
 
 /* ---------- status ---------- */
 function renderStatus() {
@@ -1009,6 +1309,141 @@ async function copyText(text) {
 const SVG_CHEV = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
   + ' stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
 
+/* 附件图标（线性，1.8 线宽，与模块图标同一套） */
+const ATT_ICONS = {
+  image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+    + '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.6"/><path d="m21 15-4.5-4.5L9 18"/></svg>',
+  text: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><path d="M9 13h7M9 17h5"/></svg>',
+  pdf: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><path d="M9 13h6v5H9z"/><path d="M9 16h6"/></svg>',
+  audio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4"/></svg>',
+  video: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+    + '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 6 3-6 3z"/></svg>',
+  file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/></svg>',
+  folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+    + '<path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+};
+
+/** 文件大小 → 人话（0 不显示）。 */
+function fmtBytes(n) {
+  n = Number(n) || 0;
+  if (!n) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
+}
+
+/** 有附件时去掉扫描器留下的 [file] / [image] 占位行，避免和预览重复。 */
+function stripAttPlaceholders(text, atts) {
+  const t = String(text || '');
+  if (!atts || !atts.length) return t;
+  return t.split('\n').filter(line => !/^\[(file|image)\b/.test(line.trim()))
+    .join('\n').replace(/^\s*\n+/, '').trim();
+}
+
+/** 一条消息的附件：图片直接大图预览，其余给文件行（点击弹窗或下载）。 */
+function attsHTML(m) {
+  const list = m.attachments || [];
+  if (!list.length) return '';
+  return '<div class="msg__atts">' + list.map(a => {
+    const kind = a.kind || 'file';
+    const name = a.name || '附件';
+    const attrs = `data-att-url="${esc(a.url || '')}" data-att-dl="${esc(a.download || a.url || '')}"`
+      + ` data-att-kind="${esc(kind)}" data-att-mime="${esc(a.mime || '')}" data-att-name="${esc(name)}"`;
+    if (kind === 'image') {
+      return `<button type="button" class="msg__att msg__att--img" ${attrs} aria-label="查看图片 ${esc(name)}">`
+        + `<img src="${esc(a.url || '')}" alt="${esc(name)}" loading="lazy"></button>`;
+    }
+    if (kind === 'folder') {
+      return `<div class="msg__att msg__file is-disabled"><span class="msg__att-ic">${ATT_ICONS.folder}</span>`
+        + `<span class="msg__att-nm">${esc(name)}</span><span class="msg__att-sz">文件夹</span></div>`;
+    }
+    const size = fmtBytes(a.size);
+    return `<button type="button" class="msg__att msg__file" ${attrs} aria-label="打开 ${esc(name)}">`
+      + `<span class="msg__att-ic">${ATT_ICONS[kind] || ATT_ICONS.file}</span>`
+      + `<span class="msg__att-nm">${esc(name)}</span>`
+      + (size ? `<span class="msg__att-sz">${esc(size)}</span>` : '') + '</button>';
+  }).join('') + '</div>';
+}
+
+/** 附件预览：图片 / 文本 / PDF / 音视频分别走弹窗，其它直接下载。 */
+function openAttachment(ds) {
+  const kind = ds.attKind || 'file';
+  const name = ds.attName || '附件';
+  const url = ds.attUrl;
+  const dl = ds.attDl || url;
+  if (!url) return;
+  const download = () => {
+    const a = document.createElement('a');
+    a.href = dl; a.download = name; a.rel = 'noopener';
+    document.body.appendChild(a); a.click(); a.remove();
+  };
+  if (kind === 'folder') { HubUI.toast('文件夹无法预览', 'info'); return; }
+  if (kind === 'image') {
+    HubUI.modal({
+      title: name,
+      bodyHTML: `<img class="att-view att-view--img" src="${esc(url)}" alt="${esc(name)}">`,
+      confirmText: '下载', cancelText: '关闭', wide: true,
+      onConfirm: () => { download(); return false; },
+    });
+    return;
+  }
+  if (kind === 'text') {
+    const m = HubUI.modal({
+      title: name, bodyHTML: '<div class="att-loading">正在读取…</div>',
+      confirmText: '关闭', cancelText: null, wide: true,
+    });
+    fetch(url).then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    }).then(text => {
+      const body = m.overlay.querySelector('.hub-modal__body');
+      const pre = document.createElement('pre');
+      pre.className = 'att-view att-view--text';
+      pre.textContent = text.length > 200000
+        ? text.slice(0, 200000) + '\n\n…（内容过长，已截断；完整文件请下载）' : text;
+      body.innerHTML = '';
+      body.appendChild(pre);
+    }).catch(() => {
+      m.overlay.querySelector('.hub-modal__body').textContent = '读取失败：文件可能已删除或无法访问';
+    });
+    return;
+  }
+  if (kind === 'pdf') {
+    HubUI.modal({
+      title: name,
+      bodyHTML: `<iframe class="att-view att-view--pdf" src="${esc(url)}" title="${esc(name)}"></iframe>`,
+      confirmText: '下载', cancelText: '关闭', wide: true,
+      onConfirm: () => { download(); return false; },
+    });
+    return;
+  }
+  if (kind === 'audio' || kind === 'video') {
+    const tag = kind === 'audio' ? 'audio' : 'video';
+    HubUI.modal({
+      title: name,
+      bodyHTML: `<${tag} class="att-view att-view--media" controls src="${esc(url)}"></${tag}>`,
+      confirmText: '下载', cancelText: '关闭',
+      onConfirm: () => { download(); return false; },
+    });
+    return;
+  }
+  download();
+}
+
+// 附件点击统一走**捕获阶段**委托：详情内容区会 stopPropagation（防误点收起），
+// 冒泡阶段收不到，必须在捕获阶段先接住。
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-att-url]');
+  if (!el) return;
+  e.preventDefault();
+  e.stopPropagation();
+  openAttachment(el.dataset);
+}, true);
+
 // 拉取会话详情（消息 + lineage 链）写入缓存；重复打开命中缓存不再请求
 async function loadSessionDetail(sid) {
   const r = await api('/api/session?id=' + encodeURIComponent(sid));
@@ -1029,8 +1464,9 @@ async function loadSessionDetail(sid) {
     : s.messages.map(m => {
         const cls = m.role === 'assistant' ? ' msg--assistant' : (m.role === 'tool' ? ' msg--tool' : '');
         const role = (m.role || '?').toUpperCase() + (m.ts ? ' · ' + String(m.ts).slice(11, 16) : '');
-        return `<div class="msg${cls}"><div class="msg__role">${esc(role)}</div>
-          <div class="msg__bubble">${esc((m.content || '').slice(0, 6000))}</div></div>`;
+        const text = stripAttPlaceholders(m.content || '', m.attachments);
+        const bubble = text ? `<div class="msg__bubble">${esc(text.slice(0, 6000))}</div>` : '';
+        return `<div class="msg${cls}"><div class="msg__role">${esc(role)}</div>${bubble}${attsHTML(m)}</div>`;
       }).join('');
   state._detailCache[sid] = {
     sid: s.sid, tool: s.tool, title: s.title, starred: s.starred,
@@ -1065,6 +1501,9 @@ async function openSessionFull(sid) {
   state._sessDetail = sid;
   state._animateOpen = sid;
   state._panelOff = false;
+  // 展开即选中（用户指令 2026-10-20：收起时取消选中）
+  state.selected.add(sid);
+  renderSelCount();
   renderRows();
   renderPanel();
   if (state._detailCache[sid] === undefined) {
@@ -1076,13 +1515,17 @@ async function openSessionFull(sid) {
 
 /** 打开某会话详情：优先就地把展开体填进当前行（不重画列表） */
 async function openSession(sid) {
-  const row = document.querySelector(`#session-rows .srow[data-sid="${CSS.escape(sid)}"]`);
+  const row = document.querySelector(`#session-rows .mvi[data-sid="${CSS.escape(sid)}"]`);
   state._sessDetail = sid;
   state._panelOff = false;
+  // 展开即选中（用户指令 2026-10-20：收起时取消选中）；勾选框跟着变
+  state.selected.add(sid);
+  if (row) { const cb = row.querySelector('[data-testid="row-check"]'); if (cb) cb.checked = true; }
+  renderSelCount();
   if (state._detailCache[sid] === undefined) {
     if (row && !row.classList.contains('is-open')) {
       // 先展开 + 占位，再异步填内容（用户立刻看到高度过渡，而不是等网络）
-      const acc = row.querySelector('.srow__accin');
+      const acc = row.querySelector('.mvi__accin');
       if (acc) acc.innerHTML = '<div class="srow__load">加载中…</div>';
       row.classList.remove('is-open'); void row.offsetWidth; row.classList.add('is-open');
     }
@@ -1100,28 +1543,37 @@ async function openSession(sid) {
 /** 把详情体就地填进指定行并展开（行不存在时退回整表重绘） */
 function fillDetailInPlace(row, sid) {
   if (!row) { renderRows(); renderPanel(); return; }
-  const acc = row.querySelector('.srow__accin');
+  const acc = row.querySelector('.mvi__accin');
   if (acc) acc.innerHTML = detailHTML(sid);
   row.classList.remove('is-open');
   void row.offsetWidth;                 // 重启动画：grid-template-rows 0fr → 1fr
   row.classList.add('is-open');
-  const chev = row.querySelector('.srow__chev');
+  const chev = row.querySelector('.mvi__chev');
   if (chev) chev.title = '收起';
 }
 
 /** 收起：只去掉类名，让高度过渡把它收回去（不重画） */
 function closeSession(sid) {
-  const row = document.querySelector(`#session-rows .srow[data-sid="${CSS.escape(sid)}"]`);
+  const row = document.querySelector(`#session-rows .mvi[data-sid="${CSS.escape(sid)}"]`);
   state._sessDetail = null;
   state._panelOff = false;
+  // 收起即取消选中（用户指令 2026-10-20）
+  state.selected.delete(sid);
+  if (row) { const cb = row.querySelector('[data-testid="row-check"]'); if (cb) cb.checked = false; }
+  renderSelCount();
   if (row) {
     row.classList.remove('is-open');
-    const chev = row.querySelector('.srow__chev');
+    const chev = row.querySelector('.mvi__chev');
     if (chev) chev.title = '展开';
   }
   renderPanel();
 }
 
+/**
+ * 点会话行头：展开 / 收起（toggle）。
+ * 改动：2026-10-20 一度改成"幂等打开"（为迁就 E2E 的时序假设），用户随即要求改回
+ * ——「为什么点击不会收起了？」。现恢复 toggle：已展开再点 = 收起（同时取消勾选）。
+ */
 function toggleSession(sid) {
   if (state._sessDetail === sid) return closeSession(sid);
   return openSession(sid);
@@ -1268,8 +1720,9 @@ function activeViewId() {
 async function refreshView(id) {
   const root = document.getElementById('view-' + id);
   if (!root) return;
-  if (id === 'skills' && window.SkillsView) await SkillsView.refresh();
-  else if (id === 'mcp' && window.McpView) await McpView.refresh();
+  if (id === 'connect' && window.ConnectView) await ConnectView.refresh();
+  else if (id === 'skills' && window.SkillsView) await SkillsView.refresh({ parts: ['rows', 'targets', 'ledger'] });
+  else if (id === 'mcp' && window.McpView) await McpView.refresh({ parts: ['rows', 'targets', 'ledger'] });
   else if (id === 'ops' && window.OpsView) await OpsView.render(root);
   else if (id === 'memory' && window.MemoryView) await MemoryView.render(root);
   if (id === 'sessions') renderAll();
@@ -1288,6 +1741,20 @@ function markLive(mode, ev) {
   if (scope) dot.title = `磁盘变动即时刷新（${scope}）· 后端 ${st.backend || 'watch'} · rev ${(state && state.rev) || 0}`;
   dot.hidden = false;
 }
+
+/** 删除行：先把高度收起（180ms），再让调用方刷新列表——避免"行瞬间消失、下面整体跳" */
+function collapseRows(list, opts) {
+  const { sel, keys } = opts || {};
+  const rows = [...document.querySelectorAll(list)]
+    .filter(r => (keys ? keys.indexOf(r.dataset.id) >= 0 : (sel ? sel(r) : true)));
+  if (!rows.length) return Promise.resolve(0);
+  rows.forEach(r => r.classList.add('is-removing'));
+  return new Promise(res => setTimeout(() => {
+    rows.forEach(r => r.remove());          // 先从 DOM 拿掉，刷新时不会再占位
+    res(rows.length);
+  }, 180));
+}
+window.collapseRows = collapseRows;
 
 /** 闪一下：讲清"这里刚变过"（1.2s 淡出，不改变布局） */
 function flash(el) {
@@ -1322,7 +1789,7 @@ function flashChanges(ev, before) {
   // 2) 新出现的行（会话 / 模块条目）
   if (before && before.rows instanceof Map) {
     // 按"数据层面的变化"判断：会话是新出现的，或消息数变了（DOM 会整块重建，不能靠节点比对）
-    document.querySelectorAll('#session-rows .srow[data-sid]').forEach(r => {
+    document.querySelectorAll('#session-rows .mvi[data-sid]').forEach(r => {
       const prev = before.rows.get(r.dataset.sid);      // undefined = 新会话
       const now = r.dataset.msgs != null ? Number(r.dataset.msgs) : null;
       if (prev === undefined || (now != null && prev !== now)) flash(r);
@@ -1355,11 +1822,16 @@ function applyLiveUpdate(ev) {
   if (quiet) return;
   const toolDirty = scopes.some(s => s.indexOf('tool:') === 0);
   const memDirty = scopes.some(s => s.indexOf('memory:') === 0);
+  // 本地目录 / 本地库：外部改 SKILL.md、registry 文件或链接目录内容 → 刷 Skills/MCP 视图
+  // （读取时会顺带扫描同步，SSE 只负责叫醒前端来读）
+  const regDirty = scopes.some(s => s === 'hub:registry' || s === 'hub:sources'
+    || s === 'hub:localdirs');
   let target = null;
   if (full || scopes.indexOf('hub') >= 0) target = active;
   else if (active === 'memory' && memDirty) target = 'memory';
-  else if (active === 'skills' && (toolDirty || memDirty)) target = 'skills';
-  else if (active === 'mcp' && toolDirty) target = 'mcp';
+  else if (active === 'connect' && (toolDirty || memDirty || regDirty)) target = 'connect';
+  else if (active === 'skills' && (toolDirty || memDirty || regDirty)) target = 'skills';
+  else if (active === 'mcp' && (toolDirty || regDirty)) target = 'mcp';
   else if (active === 'ops') target = 'ops';
   if (target) refreshView(target).then(() => flashChanges(ev, before)).catch(() => {});
 }
@@ -1441,10 +1913,15 @@ async function mountView(id, el) {
   MOUNTED.add(id);
   const box = first ? null : snapshotScroll(el);
   try {
-    if (id === 'skills' && window.SkillsView) {
-      if (first) await SkillsView.render(el); else await SkillsView.refresh();
+    if (id === 'connect' && window.ConnectView) {
+      if (first) await ConnectView.render(el);
+      else await ConnectView.refresh();
+    } else if (id === 'skills' && window.SkillsView) {
+      if (first) await SkillsView.render(el);
+      else await SkillsView.refresh({ parts: ['rows', 'targets', 'ledger'] });
     } else if (id === 'mcp' && window.McpView) {
-      if (first) await McpView.render(el); else await McpView.refresh();
+      if (first) await McpView.render(el);
+      else await McpView.refresh({ parts: ['rows', 'targets', 'ledger'] });
     } else if (id === 'ops' && window.OpsView) {
       await OpsView.render(el);
     } else if (id === 'stats' && window.StatsView) {
@@ -1532,66 +2009,71 @@ async function switchView(id) {
   syncNavIndicator(id);
 }
 
-function memItemsHTML(list) {
-  return list.length ? list.map(m => `
-    <div class="mem-item" data-testid="mv-item" data-mid="${esc(m.id || '')}">
-      <div class="mem-item__head">
-        <span class="hub-badge hub-badge--neutral">${m.kind === 'migration-summary' ? '迁移记录' : '笔记'}</span>
-        <span class="mem-item__title">${esc(m.title || '(无标题)')}</span>
-        <span class="mem-item__ts">${fmtTime(m.ts)}</span>
-      </div>
-      <div class="mem-item__body">${esc(m.body)}</div>
-    </div>`).join('') : '<div class="hub-empty">记忆区还是空的</div>';
+/**
+ * 「笔记 · 本地」子视图：与四个模块同一套条目/列表观感（用户 2026-10-20「你没改记忆吗？」）。
+ * 结构：统计行 → 搜索/导出行 → 行内新建条 → 统一条目行（MV.item）+ 展开体（内容 / 删除）。
+ * 数据仍走 /api/memory/add | /api/memory/search | /api/memory/delete。
+ */
+function memItemsHTML(list, openId) {
+  if (!list.length) return '<div class="hub-empty">记忆区还是空的</div>';
+  return list.map(m => {
+    const kindName = m.kind === 'migration-summary' ? '迁移记录' : '笔记';
+    const excerpt = String(m.body || '').replace(/\s+/g, ' ').slice(0, 90);
+    return MV.item({
+      id: m.id || ('n-' + Math.random().toString(36).slice(2)),
+      testid: 'mv-item',
+      chkTestid: 'mv-note-check',
+      sel: state.selected.has(m.id),
+      open: String(openId) === String(m.id),
+      chipText: m.kind === 'migration-summary' ? '迁' : '笔记',
+      chipCls: 'chip--muted',
+      title: m.title || '(无标题)',
+      sub: `${kindName} · ${fmtTime(m.ts)} · ${excerpt}`,
+      extra: `<span class="mvi-acts"><button class="hub-btn btn-sm hub-btn--danger" data-note-del="${esc(String(m.id || ''))}">删除</button></span>`,
+      body: `<pre class="mvi__pre" style="margin:0">${esc(m.body || '')}</pre>`,
+    });
+  }).join('');
 }
-const MEM_VIEW = { sel: null, q: '' };
+/** 删除一条 hub 记忆（笔记视图的悬停删除与展开体删除共用） */
+function delNote(root, id) {
+  HubUI.confirm('删除记忆', '确认删除这条记忆？<br>（仅删除 hub 记忆，不影响任何原生会话）', async () => {
+    const r = await post('/api/memory/delete', { id: Number(id) || id });
+    if (r.data.ok) { HubUI.toast('已删除', 'success'); await loadState(); renderMemoryView(root); }
+    else HubUI.toast('删除失败：' + (r.data.error || ''), 'error');
+  }, { confirmText: '删除', danger: true });
+}
+const MEM_VIEW = { sel: null, q: '', open: null };
 function renderMemoryView(root) {
-  const list = (state.memories || []);
+  const list = (state.memories || []).filter(m => !MEM_VIEW.q
+    || String(m.title || '').toLowerCase().includes(MEM_VIEW.q.toLowerCase())
+    || String(m.body || '').toLowerCase().includes(MEM_VIEW.q.toLowerCase()));
+  const all = state.memories || [];
   const busTools = TOOL_LIST.filter(t => t.mcp_config && t.enabled);
-  const busHtml = busTools.length
-    ? busTools.map(t => {
-        const mark = t.memory_wired === true ? '✓ 已接入' : (t.memory_wired === false ? '✗ 未接入' : '—');
-        return `<div class="nv-src-row ${t.memory_wired === true ? 'is-on' : ''}" data-testid="mem-bus-item">
-          <span class="tool-dot ${t.memory_wired === true ? '' : 'tool-dot--local'}"></span>
-          <span class="nv-sname">${esc(t.name)}</span>
-          <span class="nv-scount">${mark}</span>
-        </div>`;
-      }).join('')
-    : '<div class="nv-note">暂无登记 MCP 配置的工具</div>';
+  const wired = busTools.filter(t => t.memory_wired === true).length;
   root.innerHTML = `
-    <div class="nv-layout">
-      <aside class="nv-left">
-        <div class="nv-h"><span>记忆总线</span><span class="nv-cnt">✓ 已接入 / ✗ 未接入</span></div>
-        <div data-testid="mem-bus">${busHtml}</div>
-        <div class="nv-h" style="margin-top:var(--sp-2)"><span>新增记忆</span></div>
-        <div class="nv-filter">
-          <input class="hub-input" id="mv-title" data-testid="memory-title" placeholder="标题（可选）" style="margin-bottom:var(--sp-1)">
-          <textarea class="hub-input" id="mv-body" data-testid="memory-body" placeholder="内容：偏好、决策、约定…" rows="4" style="margin-bottom:var(--sp-1)"></textarea>
-          <button class="hub-btn hub-btn--primary" data-testid="mv-add" style="width:100%">保存记忆</button>
-        </div>
-      </aside>
-      <main class="center sb-center nv-center" style="border:0">
-        <div class="nv-stats">
-          <div class="nv-stat"><b>${list.length}</b><span>记忆总条数</span></div>
-          <div class="nv-stat"><b>${list.filter(m => m.kind === 'migration-summary').length}</b><span>迁移记录</span></div>
-          <div class="nv-stat"><b>${list.filter(m => m.kind === 'note').length}</b><span>笔记</span></div>
-          <div class="nv-stat"><b>${busTools.filter(t => t.memory_wired === true).length}</b><span>总线已接入工具</span></div>
-          <div class="nv-stat"><b>—</b><span>存于 ~/.agent/hub/memory/</span></div>
-        </div>
-        <div class="center__toolbar">
-          <input class="hub-input search" id="mv-q" data-testid="mv-search" placeholder="搜索记忆（全文）…">
-          <span class="sb-spacer"></span>
-          <a class="hub-btn btn-sm" data-testid="mv-export-md" href="/api/memory/export?format=md">导出 MD</a>
-          <a class="hub-btn btn-sm" data-testid="mv-export-json" href="/api/memory/export?format=json">导出 JSON</a>
-        </div>
-        <div class="rows" data-testid="mv-list">${memItemsHTML(list)}</div>
-      </main>
-      <aside class="nv-right">
-        <div class="nv-h"><span>记忆详情</span><span class="nv-cnt" id="mv-detail-count"></span></div>
-        <div id="mv-detail"><div class="nv-note">点击左侧或中栏的记忆条目查看详情；详情内可直接删除。</div></div>
-      </aside>
-    </div>`;
+    <div class="nv-stats" data-testid="mv-stats">
+      <div class="nv-stat"><b>${all.length}</b><span>记忆总条数</span></div>
+      <div class="nv-stat"><b>${all.filter(m => m.kind === 'note').length}</b><span>笔记</span></div>
+      <div class="nv-stat"><b>${all.filter(m => m.kind === 'migration-summary').length}</b><span>迁移记录</span></div>
+      <div class="nv-stat"><b>${wired}/${busTools.length}</b><span>记忆总线已接入</span></div>
+    </div>
+    <div class="slist__search" style="padding:var(--sp-2) 0">
+      <div class="ssearch"><span class="ssearch__ic">${MV.ic('search')}</span>
+        <input id="mv-q" data-testid="mv-search" placeholder="搜索记忆（全文）…" value="${esc(MEM_VIEW.q)}">
+      </div>
+      <span class="slist__seg">
+        <a class="hub-btn btn-sm" data-testid="mv-export-md" href="/api/memory/export?format=md">导出 MD</a>
+        <a class="hub-btn btn-sm" data-testid="mv-export-json" href="/api/memory/export?format=json">导出 JSON</a>
+      </span>
+    </div>
+    <div class="notes-compose">
+      <input class="hub-input" id="mv-title" data-testid="memory-title" placeholder="标题（可选）">
+      <input class="hub-input" id="mv-body" data-testid="memory-body" placeholder="记一条：偏好、决策、约定…">
+      <button class="hub-btn hub-btn--primary btn-sm" data-testid="mv-add">保存记忆</button>
+    </div>
+    <div class="nv-list" data-testid="mv-list">${memItemsHTML(list, MEM_VIEW.open)}</div>`;
   root.querySelector('[data-testid="mv-add"]').onclick = async (e) => {
-    const btn = e.currentTarget;   // await 之后 e.currentTarget 变 null，先存引用
+    const btn = e.currentTarget;
     const body = root.querySelector('#mv-body').value.trim();
     if (!body) { HubUI.toast('内容不能为空', 'error'); return; }
     btn.classList.add('is-loading');
@@ -1603,64 +2085,41 @@ function renderMemoryView(root) {
   let t = null;
   root.querySelector('#mv-q').oninput = (e) => {
     clearTimeout(t);
-    const q = e.target.value.trim();
-    MEM_VIEW.q = q;
-    t = setTimeout(async () => {
-      const box = root.querySelector('[data-testid="mv-list"]');
-      if (!q) { box.innerHTML = memItemsHTML(list); bindMemItems(root); return; }
-      const r = await api('/api/memory/search?q=' + encodeURIComponent(q));
-      const res = ((r.data || {}).results) || [];
-      box.innerHTML = res.length ? res.map(h => `
-        <div class="mem-item" data-testid="mv-hit">
-          <div class="mem-item__head">
-            <span class="hub-badge hub-badge--neutral">${h.kind === 'migration-summary' ? '迁移记录' : '笔记'}</span>
-            <span class="mem-item__title">${esc(h.title || '(无标题)')}</span>
-            <span class="mem-item__ts">${fmtTime(h.ts)}</span>
-          </div>
-          <div class="mem-item__body">${esc(h.snippet || '')}</div>
-        </div>`).join('') : '<div class="hub-empty">没有匹配的记忆</div>';
-    }, 250);
+    MEM_VIEW.q = e.target.value.trim();
+    t = setTimeout(() => renderMemoryView(root), 250);
   };
-  bindMemItems(root);
-  const sel = MEM_VIEW.sel;
-  if (sel) showMemDetail(root, sel.id, sel.title, sel.body, sel.kind, sel.ts);
-}
-function showMemDetail(root, id, title, body, kind, ts) {
-  MEM_VIEW.sel = { id, title, body, kind, ts };
-  const box = root.querySelector('#mv-detail');
-  if (!box) return;
-  const kindName = kind === 'migration-summary' ? '迁移记录' : '笔记';
-  box.innerHTML = `
-    <div class="nv-dhead">
-      <div class="nv-dtitle" style="font-size:var(--fs-m)">${esc(title || '(无标题)')}</div>
-      <div class="nv-ddesc mono-xs">${kindName} · ${fmtTime(ts)}</div>
-      ${id ? '<div class="nv-dops"><button class="hub-btn btn-sm hub-btn--danger" id="mv-detail-del">删除</button></div>' : ''}
-    </div>
-    <pre class="sb-md" style="margin-top:var(--sp-3)">${esc(body)}</pre>`;
-  const cnt = root.querySelector('#mv-detail-count');
-  if (cnt) cnt.textContent = '1 条';
-  const del = box.querySelector('#mv-detail-del');
-  if (del) del.onclick = () => {
-    HubUI.confirm('删除记忆', '确认删除这条记忆？<br>（仅删除 hub 记忆，不影响任何原生会话）', async () => {
-      const r = await post('/api/memory/delete', { id });
-      if (r.data.ok) {
-        HubUI.toast('已删除', 'success');
-        MEM_VIEW.sel = null;
-        await loadState();
-        // 记忆视图独立渲染，loadState 不覆盖它 —— 显式重渲染以刷新列表与详情
-        const viewRoot = document.getElementById('view-memory');
-        if (viewRoot && viewRoot.classList.contains('is-active')) renderMemoryView(viewRoot);
-      } else HubUI.toast('删除失败：' + (r.data.error || ''), 'error');
-    }, { confirmText: '删除', danger: true });
-  };
-}
-function bindMemItems(root) {
-  root.querySelectorAll('[data-testid="mv-item"]').forEach(el => {
-    el.onclick = () => {
-      const m = (state.memories || []).find(x => String(x.id) === el.dataset.mid);
-      if (m) showMemDetail(root, m.id, m.title, m.body, m.kind, m.ts);
+  // 条目行：点行头就地展开 / 收起（不重建列表）；展开即选中
+  root.querySelectorAll('[data-testid="mv-list"] .mvi').forEach(row => {
+    const id = row.dataset.id;
+    const setOpen = (on) => {
+      row.classList.toggle('is-open', on);
+      MEM_VIEW.open = on ? id : null;
+      const cb = row.querySelector('.mvi__chk');
+      if (cb) cb.checked = on;
+      row.classList.toggle('is-sel', on);
+      // 展开体：首次展开时注入正文（与其它模块的"展开即出内容"一致）
+      const acc = row.querySelector('.mvi__accin');
+      if (on && acc && !acc.innerHTML.trim()) {
+        const m = (state.memories || []).find(x => String(x.id) === String(id));
+        acc.innerHTML = `<div class="nv-dops"><button class="hub-btn btn-sm hub-btn--danger" id="mv-detail-del">删除</button></div>`
+          + `<pre class="mvi__pre">${esc((m && m.body) || '')}</pre>`;
+        const d2 = acc.querySelector('#mv-detail-del');
+        if (d2) d2.onclick = (ev) => { ev.stopPropagation(); delNote(root, id); };
+      }
     };
+    // 行任意处点击都展开（与其它模块一致）；按钮/勾选框不触发
+    row.onclick = (e) => {
+      if (e.target.closest('input, button')) return;
+      setOpen(!row.classList.contains('is-open'));
+    };
+
+    row.querySelector('.mvi__chev').onclick = (e) => { e.stopPropagation(); setOpen(!row.classList.contains('is-open')); };
+    const cb = row.querySelector('.mvi__chk');
+    if (cb) cb.onclick = (e) => { e.stopPropagation(); setOpen(e.target.checked); };
+    const del = row.querySelector('[data-note-del]');
+    if (del) del.onclick = (e) => { e.stopPropagation(); delNote(root, del.dataset.noteDel); };
   });
+  HubUI.drawFrames(root);
 }
 
 /* ---------- init ---------- */
@@ -1698,10 +2157,6 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('#filter-seg button').forEach(b => {
     b.onclick = () => setFilter(b.dataset.filter);
   });
-  const panelCloseBtn = document.getElementById('sess-panel-close');
-  if (panelCloseBtn) panelCloseBtn.onclick = closePanel;
-  const panelGoBtn = document.getElementById('sess-migrate-go');
-  if (panelGoBtn) panelGoBtn.onclick = panelMigrate;
   const selAllBtn = document.getElementById('sess-sel-all');
   if (selAllBtn) selAllBtn.onclick = sessSelAll;
   const selInvBtn = document.getElementById('sess-sel-invert');

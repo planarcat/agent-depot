@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 连接中心 四风格对比</title>
+<style>
+:root {
+  --c-ink: #171d1f; --c-ink-2: #3c4447; --c-ink-3: #5b6669; --c-ink-4: #8a9497;
+  --c-bg: #f2f4f4; --c-surface: #f9fafa; --c-surface-2: #ffffff;
+  --c-line: #d9dedf; --c-line-soft: #e6eaeb; --c-rail: #f4f3f0;
+  --c-accent: #0d6a63; --c-accent-strong: #0a544e; --c-accent-soft: #eaf2f1;
+  --c-accent-line: #bfd6d2; --c-on-accent: #ffffff;
+  --c-err: #a03d2e; --c-err-soft: #f8ece9; --c-err-line: #f0c8bf;
+  --c-ok: #1a7f4b; --c-warn: #8a6d1f; --c-warn-soft: #f6f1e2;
+  --c-t-claude: #d97757; --c-t-codex: #171d1f; --c-t-opencode: #7c5cff;
+  --c-t-p4: #4a7d8c; --c-t-p5: #9a6b3f; --c-t-p6: #6f8a4f; --c-t-p7: #a35d7a;
+  --fs-xs: 10px; --fs-s: 11px; --fs-md: 12px; --fs-body: 13px; --fs-m: 14px;
+  --fs-l: 16px; --fs-xl: 20px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px;
+  --r-xs: 6px; --r-s: 4px; --r-m: 8px; --r-l: 12px;
+  --t-quick: 150ms cubic-bezier(.2,.6,.3,1); --t-base: 250ms cubic-bezier(.2,.6,.3,1);
+  --sh-hover: 0 4px 12px rgba(23,29,31,.08); --sh-float: 0 12px 32px rgba(23,29,31,.14);
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--c-bg); color: var(--c-ink); font-family: var(--font-sans);
+  font-size: var(--fs-body); padding: var(--sp-5); }
+h1 { font-size: var(--fs-xl); font-weight: 600; }
+.sub { color: var(--c-ink-3); margin-top: var(--sp-1); line-height: 1.6; }
+.note { color: var(--c-ink-4); font-size: var(--fs-s); }
+.style { background: var(--c-surface-2); border: 1px solid var(--c-line);
+  border-radius: var(--r-l); padding: var(--sp-4); margin-top: var(--sp-5); }
+.style > h2 { font-size: var(--fs-l); font-weight: 600; }
+.style > h2 .tag { font-size: var(--fs-xs); color: var(--c-accent); background: var(--c-accent-soft);
+  border-radius: var(--r-s); padding: 2px 8px; margin-left: var(--sp-2); vertical-align: 2px; }
+.style > .fit { color: var(--c-ink-3); font-size: var(--fs-s); margin: var(--sp-1) 0 var(--sp-3); }
+.demo { border: 1px solid var(--c-line); border-radius: var(--r-m);
+  background: var(--c-surface); padding: var(--sp-3); overflow-x: auto; }
+.annotate { margin-top: var(--sp-3); border-top: 1px solid var(--c-line-soft);
+  padding-top: var(--sp-2); display: grid; gap: var(--sp-1); }
+.annotate b { font-size: var(--fs-s); color: var(--c-accent); }
+.annotate span { font-size: var(--fs-s); color: var(--c-ink-3); }
+.tool-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+.dot--claude { background: var(--c-t-claude); } .dot--codex { background: var(--c-t-codex); }
+.dot--opencode { background: var(--c-t-opencode); } .dot--p4 { background: var(--c-t-p4); }
+.dot--p5 { background: var(--c-t-p5); } .dot--p7 { background: var(--c-t-p7); }
+.btn { border: 1px solid var(--c-line); background: var(--c-surface-2); color: var(--c-ink);
+  border-radius: var(--r-xs); font-size: var(--fs-s); font-family: var(--font-sans);
+  padding: 4px 10px; cursor: pointer; transition: background var(--t-quick); }
+.btn:hover { background: var(--c-surface); }
+.btn.primary { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+.btn.primary:hover { background: var(--c-accent-strong); }
+.toast { position: fixed; right: var(--sp-5); bottom: var(--sp-5); z-index: 90;
+  background: var(--c-surface-2); border-radius: var(--r-m); box-shadow: var(--sh-float);
+  padding: var(--sp-2) var(--sp-3); display: none; align-items: center; gap: var(--sp-2);
+  font-size: var(--fs-body); }
+.toast .ok { color: var(--c-ok); font-weight: 600; }
+
+/* ---- 风格 A：工程矩阵 ---- */
+.mxA { display: grid; grid-template-columns: 190px repeat(4, 92px); border: 1px solid var(--c-line);
+  border-radius: var(--r-m); overflow: hidden; background: var(--c-surface); width: max-content; }
+.mxA .hd { background: var(--c-rail); padding: var(--sp-1) var(--sp-2); font-size: var(--fs-s);
+  font-weight: 600; color: var(--c-ink-2); border-bottom: 1px solid var(--c-line);
+  border-right: 1px solid var(--c-line); display: flex; align-items: center; gap: 6px; justify-content: center; }
+.mxA .rh { background: var(--c-rail); padding: var(--sp-1) var(--sp-2); font-size: var(--fs-s);
+  border-bottom: 1px solid var(--c-line); border-right: 1px solid var(--c-line);
+  display: flex; align-items: center; gap: 6px; }
+.mxA .rh em { font-style: normal; color: var(--c-ink-4); font-family: var(--font-mono); font-size: var(--fs-xs); }
+.mxA .c { display: flex; align-items: center; justify-content: center; gap: 4px;
+  border-bottom: 1px solid var(--c-line-soft); border-right: 1px solid var(--c-line-soft);
+  height: 32px; font-size: var(--fs-xs); cursor: pointer; }
+.mxA .c.on { background: var(--c-accent-soft); color: var(--c-accent); font-weight: 600; }
+.mxA .c.on:hover::after { content: " ✕"; color: var(--c-err); }
+.mxA .c:not(.on):hover { background: var(--c-accent-soft); }
+.mxA .c.fail { background: var(--c-warn-soft); color: var(--c-warn); }
+
+/* ---- 风格 B：双列连线 ---- */
+.graph { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-6); }
+.gcol { display: flex; flex-direction: column; gap: var(--sp-2); }
+.gnode { border: 1px solid var(--c-line); background: var(--c-surface-2);
+  border-radius: var(--r-m); padding: var(--sp-2) var(--sp-3); cursor: pointer;
+  display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-body);
+  transition: border-color var(--t-quick), box-shadow var(--t-quick); position: relative; z-index: 2; }
+.gnode:hover { border-color: var(--c-accent-line); }
+.gnode.is-focus { box-shadow: 0 0 0 1.5px var(--c-accent); }
+.gnode .nm { font-weight: 600; }
+.gnode .n { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-s); color: var(--c-ink-4); }
+.gnode .port { position: absolute; top: 50%; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--c-accent); transform: translateY(-50%); }
+.gnode .port.r { right: -4px; } .gnode .port.l { left: -4px; }
+.gsvg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.gsvg path { fill: none; stroke: var(--c-accent); stroke-width: 1.5; opacity: .55; }
+.gsvg path.dim { stroke: var(--c-line); opacity: .4; }
+.gsvg path.hl { stroke-width: 2.5; opacity: 1; }
+.gsvg path.flow { stroke-dasharray: 5 4; animation: dash 900ms linear infinite; }
+@keyframes dash { to { stroke-dashoffset: -18; } }
+.ghead { font-size: var(--fs-s); font-weight: 600; color: var(--c-ink-3);
+  padding: 0 var(--sp-2); }
+
+/* ---- 风格 C：关系清单 ---- */
+.rel { border: 1px solid var(--c-line); border-radius: var(--r-m); overflow: hidden;
+  background: var(--c-surface); }
+.rel .hd, .rel .r { display: grid; grid-template-columns: 1fr 20px 1fr 90px 110px 70px;
+  align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); }
+.rel .hd { background: var(--c-rail); font-size: var(--fs-s); font-weight: 600;
+  color: var(--c-ink-3); border-bottom: 1px solid var(--c-line); }
+.rel .r { border-bottom: 1px solid var(--c-line-soft); font-size: var(--fs-body);
+  animation: rowin var(--t-base); }
+@keyframes rowin { from { opacity: 0; transform: translateY(-6px); } }
+.rel .r .src, .rel .r .dst { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.rel .r .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rel .r .path { color: var(--c-ink-4); font-size: var(--fs-s); font-family: var(--font-mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rel .r .arrow { color: var(--c-accent); text-align: center; }
+.rel .r .st { font-size: var(--fs-s); }
+.rel .r .st .ok { color: var(--c-ok); }
+.rel .r .st .warn { color: var(--c-warn); }
+.rel .r .ops { display: flex; gap: var(--sp-1); justify-content: flex-end; }
+.rel .new { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 20px 1fr 90px 110px 70px;
+  gap: var(--sp-2); align-items: center; padding: var(--sp-2) var(--sp-3);
+  background: var(--c-accent-soft); }
+select.sel { height: 28px; border: 1px solid var(--c-line); border-radius: var(--r-xs);
+  background: var(--c-surface-2); font-family: var(--font-sans); font-size: var(--fs-body);
+  color: var(--c-ink); width: 100%; }
+
+/* ---- 风格 D：卡片磁贴 ---- */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--sp-3); }
+.tile { border: 1px solid var(--c-line); border-radius: var(--r-l); background: var(--c-surface-2);
+  padding: var(--sp-3); transition: box-shadow var(--t-quick), transform var(--t-quick); }
+.tile:hover { box-shadow: var(--sh-hover); transform: translateY(-2px); }
+.tile .tn { display: flex; align-items: center; gap: var(--sp-2); }
+.tile .tn b { font-size: var(--fs-m); }
+.tile .tn .n { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-s); color: var(--c-ink-4); }
+.tile .path { font-size: var(--fs-s); color: var(--c-ink-4); font-family: var(--font-mono);
+  margin: var(--sp-1) 0 var(--sp-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .binds { display: flex; flex-wrap: wrap; gap: var(--sp-1); min-height: 26px; }
+.pill { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--c-line);
+  border-radius: 999px; padding: 3px 9px; font-size: var(--fs-s); color: var(--c-ink-2);
+  background: var(--c-surface); cursor: pointer;
+  animation: pillin 260ms cubic-bezier(.34,1.56,.64,1); }
+@keyframes pillin { from { opacity: 0; transform: scale(.8); } }
+.pill:hover { border-color: var(--c-err-line); color: var(--c-err); }
+.pill:hover::after { content: " ✕"; }
+.addrow { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-2); }
+.addpill { border: 1.5px dashed var(--c-accent-line); background: transparent; color: var(--c-accent);
+  border-radius: 999px; padding: 3px 10px; font-size: var(--fs-s); font-family: var(--font-sans);
+  cursor: pointer; transition: background var(--t-quick); }
+.addpill:hover { background: var(--c-accent-soft); }
+</style>
+</head>
+<body>
+<h1>原型 · 连接中心 —— 四种风格对比</h1>
+<p class="sub">同一份绑定数据（本地目录 + 远程仓库 ⇄ 工具目标），四种交互范式与视觉气质。<b>全部可交互</b>：每个风格里都能建连 / 断开。统一动效的口径各风格自洽（连接=强调填充、断开=退场、同步=流动指示）。</p>
+
+<!-- ============ 风格 A ============ -->
+<section class="style">
+  <h2>风格 A · 工程矩阵<span class="tag">密度最高 · 现状进化版</span></h2>
+  <p class="fit">适合：目标与源数量多（10×10+）、常需总览健康度的重度使用。信息一眼全览；代价是抽象度略高、列多时要横向滚动。</p>
+  <div class="demo">
+    <div class="mxA" id="mxA"></div>
+  </div>
+  <div class="annotate">
+    <b>动效口径</b><span>连接 = 格填充强调底；断开 = 悬停出现 ✕（点击即断）；失败 = 黄格常亮</span>
+    <b>点格子</b><span>空格点击 = 建连；已连格点击 = 断开（演示）</span>
+  </div>
+</section>
+
+<!-- ============ 风格 B ============ -->
+<section class="style">
+  <h2>风格 B · 双列连线（关系图）<span class="tag">最直观表达多对多</span></h2>
+  <p class="fit">适合：想「看见」绑定关系本身的阶段；汇报/讲解友好。左右两列点选即连线；代价是节点多时线会密。</p>
+  <div class="demo">
+    <div class="graph" id="graph">
+      <div class="gcol" id="gsrc"><div class="ghead">源（目录 / 远程仓库）</div></div>
+      <div class="gcol" id="gtgt"><div class="ghead">工具目标</div></div>
+    </div>
+  </div>
+  <div class="annotate">
+    <b>操作</b><span>点左列一个源（聚焦它的线）→ 点右列一个工具 = 建连线；点已连线两端的工具 = 断开</span>
+    <b>动效</b><span>同步中的线为虚线流动（dash 流动指示）；新建连线为描线生长</span>
+  </div>
+</section>
+
+<!-- ============ 风格 C ============ -->
+<section class="style">
+  <h2>风格 C · 关系清单（扁平直接）<span class="tag">最简单 · 实现最快</span></h2>
+  <p class="fit">适合：把「绑定」当作普通数据管理——一行一条关系，加/删行即操作。零学习成本；代价是关系密度不可视（多对多规模感弱）。</p>
+  <div class="demo">
+    <div class="rel" id="relc">
+      <div class="hd"><span>源（目录 / 远仓）</span><span></span><span>工具目标</span><span>写入方式</span><span>状态</span><span style="text-align:right">操作</span></div>
+    </div>
+  </div>
+  <div class="annotate">
+    <b>操作</b><span>底部一行「新建连接」：两个下拉选好 → 点 ＋ 即成一行；行尾 ✕ 删除关系</span>
+    <b>动效</b><span>新行滑入 250ms；删除即消失；状态徽章文字切换</span>
+  </div>
+</section>
+
+<!-- ============ 风格 D ============ -->
+<section class="style">
+  <h2>风格 D · 卡片磁贴（亲和版）<span class="tag">最贴近现有目录卡心智</span></h2>
+  <p class="fit">适合：延续 Skills 页目录卡的心智——每张卡 = 一个源，卡上直接挂工具药丸；点药丸即断开，虚线药丸即建连。轻快、无表格感。</p>
+  <div class="demo">
+    <div class="tiles" id="tiles"></div>
+  </div>
+  <div class="annotate">
+    <b>操作</b><span>虚线药丸「＋ 连接工具…」展开可选工具列表 → 点选即成药丸；点实心药丸 = 断开</span>
+    <b>动效</b><span>药丸弹性入场（260ms spring）；与目录卡连接色点标记同语言</span>
+  </div>
+</section>
+
+<div class="toast" id="toast" style="position:fixed;right:24px;bottom:24px;z-index:90;background:var(--c-surface-2);border-radius:var(--r-m);box-shadow:var(--sh-float);padding:var(--sp-2) var(--sp-3);display:none;align-items:center;gap:8px"><span class="ok">✓</span><span id="toast-msg"></span></div>
+
+<script>
+/* ==== 共享数据 ==== */
+const TOOLS = [
+  { id: 'claude',    name: 'Claude Code', dot: 'dot--claude', path: '~/.claude/skills' },
+  { id: 'codex',     name: 'Codex CLI',   dot: 'dot--codex',  path: '~/.agents/skills 共享' },
+  { id: 'opencode',  name: 'OpenCode',    dot: 'dot--opencode', path: '~/.agents/skills 共享' },
+  { id: 'workbuddy', name: 'WorkBuddy',   dot: 'dot--p4', path: '~/.workbuddy/skills' },
+  { id: 'zcode',     name: 'ZCode',       dot: 'dot--p5', path: '~/.zcode/skills' },
+  { id: 'trae',      name: 'Trae CN',     dot: 'dot--p7', path: '~/.trae-cn/skills' },
+];
+const SOURCES = [
+  { id: 'dir-a', kind: '目录', name: '默认目录', n: 16, path: 'registry/skills · registry/mcp' },
+  { id: 'dir-b', kind: '目录', name: 'agent-skills', n: 17, path: '~/Documents/…/agent-skills' },
+  { id: 'dir-c', kind: '目录', name: 'lingchuang-skills', n: 11, path: '~/Documents/…/lingchuang-skills' },
+  { id: 'repo-a', kind: '远仓', name: 'planarcat skills', n: 17, path: 'git · 已拉取 17' },
+  { id: 'repo-b', kind: '远仓', name: '灵创Skills', n: 11, path: 'git · 已拉取 11' },
+];
+let BINDINGS = [
+  { s: 'dir-a', t: 'claude', mode: '复制', st: 'ok' },
+  { s: 'dir-a', t: 'codex',  mode: '复制', st: 'ok' },
+  { s: 'dir-b', t: 'trae',   mode: '复制', st: 'ok' },
+  { s: 'repo-a', t: 'zcode', mode: '复制', st: 'ok' },
+];
+const T = id => TOOLS.find(t => t.id === id);
+const SN = id => SOURCES.find(s => s.id === id).name;
+const SDOT = id => T(id).dot;
+function toast(m) { const t = document.getElementById('toast');
+  document.getElementById('toast-msg').textContent = m;
+  t.style.display = 'flex'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 2600); }
+
+/* ==== 风格 A：工程矩阵 ==== */
+(function () {
+  const A = TOOLS.slice(0, 4);          // 演示用 4 列（Claude/Codex/OpenCode/WorkBuddy）
+  const ROWS = SOURCES.slice(0, 5);
+  const mx = document.getElementById('mxA');
+  let html = '<div class="hd" style="justify-content:flex-start">源 \ 工具</div>';
+  A.forEach(t => html += `<div class="hd"><span class="tool-dot ${t.dot}"></span>${t.name}</div>`);
+  ROWS.forEach(s => {
+    html += `<div class="rh"><span>${s.name}</span><em>${s.n}</em></div>`;
+    A.forEach(t => {
+      const b = BINDINGS.find(x => x.s === s.id && x.t === t.id);
+      if (b) html += `<div class="c on" data-s="${s.id}" data-t="${t.id}" title="点击断开">已连接</div>`;
+      else html += `<div class="c" data-s="${s.id}" data-t="${t.id}" title="点击建连"></div>`;
+    });
+  });
+  mx.innerHTML = html;
+  mx.querySelectorAll('.c').forEach(c => c.onclick = () => {
+    const s = c.dataset.s, t = c.dataset.t;
+    if (c.classList.contains('on')) {
+      BINDINGS = BINDINGS.filter(x => !(x.s === s && x.t === t));
+      c.classList.remove('on'); c.textContent = '';
+      toast(`已断开 ${SN(s)} ⇄ ${T(t).name}（文件保留）`);
+    } else {
+      BINDINGS.push({ s, t, mode: '复制', st: 'ok' });
+      c.classList.add('on'); c.textContent = '已连接';
+      toast(`已连接 ${SN(s)} → ${T(t).name} · 全量同步 ${SOURCES.find(x=>x.id===s).n} 个`);
+    }
+  });
+})();
+
+/* ==== 风格 B：双列连线 ==== */
+(function () {
+  const g = document.getElementById('graph');
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('class', 'gsvg'); g.prepend(svg);
+  let focus = null, pending = null;
+
+  SOURCES.forEach(s => {
+    const n = document.createElement('div');
+    n.className = 'gnode'; n.dataset.id = s.id;
+    n.innerHTML = `<span class="nm">${s.name}</span><span class="tool-dot ${''}" style="visibility:hidden"></span><span class="n">${s.n}</span><span class="port r"></span>`;
+    n.onclick = () => { focus = (focus === s.id) ? null : s.id; render(); };
+    document.getElementById('gsrc').appendChild(n);
+  });
+  TOOLS.forEach(t => {
+    const n = document.createElement('div');
+    n.className = 'gnode'; n.dataset.id = t.id;
+    n.innerHTML = `<span class="port l"></span><span class="tool-dot ${t.dot}"></span><span class="nm">${t.name}</span><span class="n">${t.path.replace('~/', '')}</span>`;
+    n.onclick = () => {
+      if (focus) {
+        if (!BINDINGS.find(x => x.s === focus && x.t === t.id)) {
+          BINDINGS.push({ s: focus, t: t.id, mode: '复制', st: 'ok', fresh: true });
+          toast(`已连接 ${SN(focus)} → ${t.name}`);
+        }
+        focus = null; render();
+      }
+    };
+    document.getElementById('gtgt').appendChild(n);
+  });
+
+  function render() {
+    // 线
+    svg.innerHTML = '';
+    const g = document.getElementById('graph').getBoundingClientRect();
+    BINDINGS.forEach(b => {
+      const se = document.querySelector(`#gsrc .gnode[data-id="${b.s}"]`);
+      const te = document.querySelector(`#gtgt .gnode[data-id="${b.t}"]`);
+      if (!se || !te) return;
+      const sr = se.getBoundingClientRect(), tr = te.getBoundingClientRect();
+      const x1 = sr.right - g.left, y1 = sr.top + sr.height / 2 - g.top;
+      const x2 = tr.left - g.left, y2 = tr.top + tr.height / 2 - g.top;
+      const p = document.createElementNS(svgNS, 'path');
+      const dim = focus && b.s !== focus;
+      p.setAttribute('d', `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`);
+      p.setAttribute('class', (dim ? 'dim' : '') + (b.fresh ? ' flow' : ''));
+      if (focus && b.s === focus) p.classList.add('hl');
+      svg.appendChild(p);
+    });
+    // 节点状态
+    document.querySelectorAll('#gsrc .gnode').forEach(n =>
+      n.classList.toggle('is-focus', n.dataset.id === focus));
+  }
+  window.addEventListener('resize', render);
+  requestAnimationFrame(render);
+  // 首次渲染需等布局稳定
+  setTimeout(render, 60);
+  window._renderGraph = render;
+  window._graphToast = toast;
+})();
+
+/* ==== 风格 C：关系清单 ==== */
+(function () {
+  const host = document.getElementById('relc');
+  function render() {
+    let html = host.querySelector('.hd') ? host.querySelector('.hd').outerHTML : '';
+    html += `<div class="hd"><span>源（目录 / 远仓）</span><span></span><span>工具目标</span><span>写入方式</span><span>状态</span><span style="text-align:right">操作</span></div>`;
+    BINDINGS.forEach((b, i) => {
+      const s = SOURCES.find(x => x.id === b.s), t = T(b.t);
+      html += `<div class="r">
+        <span class="src"><span class="nm">${s.name}</span><span class="path">${s.path}</span></span>
+        <span class="arrow">→</span>
+        <span class="dst"><span class="tool-dot ${t.dot}"></span><span class="nm">${t.name}</span><span class="path">${t.path}</span></span>
+        <span>${b.mode}</span>
+        <span class="st">${b.st === 'ok' ? '<span class="ok">● 已同步</span>' : '<span class="warn">● 上次失败</span>'}</span>
+        <span class="ops"><button class="btn" data-del="${i}">✕</button></span>
+      </div>`;
+    });
+    html += `<div class="new">
+      <select class="sel" id="nc-src">${SOURCES.map(s => `<option value="${s.id}">${s.name}（${s.kind} · ${s.n}）</option>`).join('')}</select>
+      <span class="arrow" style="text-align:center;color:var(--c-accent)">→</span>
+      <select class="sel" id="nc-tgt">${TOOLS.map(t => `<option value="${t.id}">${t.name}</option>`).join('')}</select>
+      <span><select class="sel" id="nc-mode"><option>复制</option><option>软链接</option></select></span>
+      <span class="note">建连即全量同步</span>
+      <span class="ops"><button class="btn primary" id="nc-add">＋ 建立连接</button></span>
+    </div>`;
+    host.innerHTML = html;
+    host.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+      const b2 = BINDINGS.splice(Number(b.dataset.del), 1)[0];
+      toast(`已断开 ${SN(b2.s)} ⇄ ${T(b2.t).name}（文件保留）`);
+      render();
+    });
+    host.querySelector('#nc-add').onclick = () => {
+      const s = host.querySelector('#nc-src').value, t = host.querySelector('#nc-tgt').value;
+      if (BINDINGS.find(x => x.s === s && x.t === t)) { toast('该关系已存在'); return; }
+      BINDINGS.push({ s, t, mode: host.querySelector('#nc-mode').value, st: 'ok', fresh: true });
+      toast(`已连接 ${SN(s)} → ${T(t).name} · 全量同步`);
+      render();
+    };
+  }
+  render();
+})();
+
+/* ==== 风格 D：卡片磁贴 ==== */
+(function () {
+  const host = document.getElementById('tiles');
+  function render() {
+    host.innerHTML = SOURCES.map(s => {
+      const bs = BINDINGS.filter(b => b.s === s.id);
+      const tools = TOOLS.filter(t => !bs.find(b => b.t === t.id));
+      return `<div class="tile">
+        <div class="tn"><span class="nm"><b>${s.name}</b></span><span class="n">${s.n} skill</span></div>
+        <div class="path">${s.kind} · ${s.path}</div>
+        <div class="binds">
+          ${bs.map(b => { const t = T(b.t);
+            return `<span class="pill" data-un="${t.id}" title="点击断开"><span class="tool-dot ${t.dot}"></span>${t.name}</span>`; }).join('')}
+        </div>
+        <div class="addrow">
+          ${tools.map(t => `<button class="addpill" data-add="${t.id}">＋ ${t.name}</button>`).join('')}
+        </div>
+      </div>`;
+    }).join('');
+    host.querySelectorAll('[data-add]').forEach(b => b.onclick = () => {
+      const tid = b.dataset.add;
+      BINDINGS.push({ s: b.closest('.tile').dataset.sid, t: tid, mode: '复制', st: 'ok' });
+      toast(`已连接 ${SN(b.closest('.tile').dataset.sid)} → ${T(tid).name} · 全量同步`);
+      render();
+    });
+    host.querySelectorAll('[data-un]').forEach(b => b.onclick = () => {
+      const tile = b.closest('.tile');
+      BINDINGS = BINDINGS.filter(x => !(x.s === tile.dataset.sid && x.t === b.dataset.un));
+      toast(`已断开 ⇄ ${T(b.dataset.un).name}（文件保留）`);
+      render();
+    });
+    host.querySelectorAll('.tile').forEach(t => t.dataset.sid = SOURCES.find(
+      x => t.querySelector('.tn b').textContent === x.name).id);
+  }
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 连接融合 上下点亮（目录 ⇄ 工具）</title>
+<style>
+:root {
+  --c-ink: #171d1f; --c-ink-2: #3c4447; --c-ink-3: #5b6669; --c-ink-4: #8a9497;
+  --c-bg: #f2f4f4; --c-surface: #f9fafa; --c-surface-2: #ffffff;
+  --c-line: #d9dedf; --c-line-soft: #e6eaeb; --c-rail: #f4f3f0;
+  --c-accent: #0d6a63; --c-accent-strong: #0a544e; --c-accent-soft: #eaf2f1;
+  --c-accent-line: #bfd6d2; --c-on-accent: #ffffff;
+  --c-err: #a03d2e; --c-err-soft: #f8ece9; --c-err-line: #f0c8bf;
+  --c-ok: #1a7f4b; --c-warn: #8a6d1f; --c-warn-soft: #f6f1e2;
+  --c-t-p6: #6f8a4f;
+  --fs-xs: 10px; --fs-s: 11px; --fs-md: 12px; --fs-body: 13px; --fs-m: 14px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px;
+  --tcard: 136px;
+  --r-xs: 6px; --r-s: 4px; --r-m: 8px; --r-l: 12px;
+  --t-quick: 150ms cubic-bezier(.2,.6,.3,1); --t-base: 250ms cubic-bezier(.2,.6,.3,1);
+  --sh-hover: 0 4px 12px rgba(23,29,31,.08), 0 1px 2px rgba(23,29,31,.04);
+  --sh-active: 0 0 0 1.5px var(--c-accent);
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--c-bg); color: var(--c-ink); font-family: var(--font-sans);
+  font-size: var(--fs-body); padding: var(--sp-4); }
+.tool-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+.dot--pi { background: var(--c-t-p6); }
+.btn { border: 1px solid var(--c-line); background: var(--c-surface-2); color: var(--c-ink);
+  border-radius: var(--r-xs); font-size: var(--fs-s); font-family: var(--font-sans);
+  padding: 4px 10px; cursor: pointer; text-align: center; width: 100%;
+  transition: background var(--t-quick); }
+.btn:hover { background: var(--c-surface); }
+.btn.primary { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+
+/* ==== 顶栏 ==== */
+.topbar { display: flex; align-items: center; gap: var(--sp-4); background: var(--c-surface-2);
+  border: 1px solid var(--c-line); border-radius: var(--r-l); padding: var(--sp-2) var(--sp-4); }
+.topbar b { font-size: var(--fs-m); }
+.topbar nav { display: flex; gap: var(--sp-3); font-size: var(--fs-body); color: var(--c-ink-3); }
+.topbar nav .on { color: var(--c-accent); font-weight: 600; }
+
+/* ==== 上下两排卡片 ==== */
+.rowwrap { margin-top: var(--sp-4); }
+.rowlabel { font-size: var(--fs-s); font-weight: 600; color: var(--c-ink-3); margin-bottom: var(--sp-2); }
+.rowlabel small { color: var(--c-ink-4); font-weight: 400; }
+.grid { display: flex; gap: var(--sp-3); flex-wrap: wrap; }
+.tcard { width: var(--tcard); border: 1px solid var(--c-line); border-radius: var(--r-m);
+  background: var(--c-surface-2); position: relative; cursor: pointer; padding: var(--sp-2);
+  transition: transform var(--t-quick), box-shadow var(--t-quick), opacity var(--t-base); }
+.tcard:hover { transform: translateY(-2px); box-shadow: var(--sh-hover); }
+.tcard.is-focus { box-shadow: 0 0 0 2px var(--c-accent); }
+.tcard.is-lit { box-shadow: 0 0 0 1.5px var(--c-accent); transform: translateY(-2px); }
+.tcard.is-dim { opacity: .35; }
+.cnt { display: inline-flex; min-width: 28px; height: 28px; border-radius: var(--r-xs);
+  border: 1px solid var(--c-line); background: var(--c-surface);
+  align-items: center; justify-content: center; font-family: var(--font-mono);
+  font-size: var(--fs-md); font-weight: 600; color: var(--c-accent); }
+.cnt.ink { color: var(--c-ink-2); }
+.chip { width: 44px; height: 44px; border-radius: var(--r-m); margin: var(--sp-2) auto 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: var(--fs-m); font-weight: 600; background: #3c4447; }
+.chip.ve { background: var(--c-t-claude); }
+.chip.pi { background: var(--c-t-p6); }
+.tnm { font-size: var(--fs-body); font-weight: 600; text-align: center; margin-top: var(--sp-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tcard__tag { position: absolute; left: var(--sp-2); bottom: var(--sp-1);
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: var(--fs-s); font-weight: 600; color: var(--c-accent); }
+.tcard__tag .tool-dot { width: 7px; height: 7px; }
+.tcard__tag .back { color: var(--c-ink-3); }
+.tcard__tag .plus { color: var(--c-ink-4); font-weight: 400; }
+.group { border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-surface);
+  padding: var(--sp-2); width: 170px; flex: none; align-self: stretch;
+  display: flex; flex-direction: column; }
+.group .nm { font-weight: 600; }
+.group .meta { font-family: var(--font-mono); font-size: var(--fs-s); color: var(--c-ink-4);
+  margin: var(--sp-1) 0; }
+.group .acts { margin-top: auto; padding-top: var(--sp-2); display: flex;
+  flex-direction: column; gap: var(--sp-1); }
+
+/* ==== 聚焦条（选中卡的绑定详情 + 操作） ==== */
+.focusbar { margin: var(--sp-4) 0; border: 1px solid var(--c-line); border-radius: var(--r-m);
+  background: var(--c-surface-2); padding: var(--sp-3); min-height: 76px;
+  transition: border-color var(--t-base); }
+.focusbar.is-hot { border-color: var(--c-accent-line); }
+.focusbar .hint { color: var(--c-ink-4); font-size: var(--fs-body); }
+.focusbar .ttl { font-size: var(--fs-body); font-weight: 600; margin-bottom: var(--sp-2); }
+.focusbar .ttl .dir { color: var(--c-accent); }
+.chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-bottom: var(--sp-2); }
+.bchip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--c-accent-line);
+  background: var(--c-accent-soft); border-radius: 999px; padding: 3px 9px;
+  font-size: var(--fs-s); color: var(--c-accent); font-weight: 600;
+  animation: pin 260ms cubic-bezier(.34,1.56,.64,1); }
+@keyframes pin { from { opacity: 0; transform: scale(.85); } }
+.bchip .x { cursor: pointer; color: var(--c-err); font-weight: 400; }
+.achip { display: inline-flex; align-items: center; border: 1.5px dashed var(--c-accent-line);
+  background: transparent; border-radius: 999px; padding: 3px 10px; font-size: var(--fs-s);
+  color: var(--c-accent); cursor: pointer; font-family: var(--font-sans); }
+.achip:hover { background: var(--c-accent-soft); }
+.opsrow { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2);
+  font-size: var(--fs-s); color: var(--c-ink-4); flex-wrap: wrap; }
+.opsrow .note { color: var(--c-ink-4); }
+
+/* ==== toast ==== */
+.toast { position: fixed; right: var(--sp-5); bottom: var(--sp-5); z-index: 90;
+  background: var(--c-surface-2); border-radius: var(--r-m); box-shadow: var(--sh-float);
+  padding: var(--sp-2) var(--sp-3); font-size: var(--fs-body); display: none; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <b>Agent Depot</b>
+  <nav><span>会话</span><span>记忆</span><span class="on">Skills</span><span>MCP</span><span>台账</span><span>统计</span><span>设置</span></nav>
+</div>
+
+<!-- 上排：源卡片（目录 + 远仓） -->
+<div class="rowwrap">
+  <div class="rowlabel">源 · 目录与远程仓库 <small>点击卡片 = 点亮它已连接的工具卡</small></div>
+  <div class="grid" style="align-items:stretch">
+    <div class="group">
+      <div class="nm">本地</div>
+      <div class="meta">3 源 · 52 条</div>
+      <div class="acts"><button class="btn">目录管理</button><button class="btn">新建</button><button class="btn">导入</button></div>
+    </div>
+    <div id="dircards" class="grid"></div>
+    <div class="group">
+      <div class="nm">远程仓库</div>
+      <div class="meta">1 源 · 9 条</div>
+      <div class="acts"><button class="btn">添加仓库</button><button class="btn">全部拉取</button></div>
+    </div>
+    <div id="repocards" class="grid"></div>
+  </div>
+</div>
+
+<!-- 聚焦条 -->
+<div class="focusbar" id="focusbar">
+  <div class="hint">点击上方目录卡 / 远仓卡，或下方工具卡 —— 已连接的对方卡片会点亮；再点一次取消。聚焦后可在此条上建连 / 断开。</div>
+</div>
+
+<!-- 下排：工具卡片 -->
+<div class="rowwrap">
+  <div class="rowlabel">工具目标 <small>点击工具卡 = 点亮它已接入的源卡</small></div>
+  <div class="grid" id="toolcards"></div>
+</div>
+
+<script>
+/* ==== 数据 ==== */
+const DIRS = [
+  { id: 'd-def', kind: '目录', name: '默认目录', n: 16, chip: '默认', binds: [] },
+  { id: 'd-ag', kind: '目录', name: 'agent-skills', n: 17, chip: 'AG', binds: ['pi'] },
+  { id: 'd-li', kind: '目录', name: 'lingchuang-skills', n: 11, chip: 'LI', binds: ['pi'] },
+];
+const REPOS = [
+  { id: 'r-ve', kind: '远仓', name: 'Vercel Skills', n: 9, chip: 'VE', binds: ['codex'] },
+];
+const TOOLS = [
+  { id: 'pi', name: 'Pi-Agent', dot: 'dot--pi', path: '~/.pi/agent/skills' },
+  { id: 'codex', name: 'Codex CLI', dot: 'dot--codex', path: '~/.agents/skills 共享' },
+  { id: 'claude', name: 'Claude Code', dot: 'dot--claude', path: '~/.claude/skills' },
+  { id: 'workbuddy', name: 'WorkBuddy', dot: 'dot--p4', path: '~/.workbuddy/skills' },
+  { id: 'zcode', name: 'ZCode', dot: 'dot--p5', path: '~/.zcode/skills' },
+];
+let BINDS = [
+  { s: 'd-ag', t: 'pi' },
+  { s: 'd-li', t: 'pi' },
+  { s: 'r-ve', t: 'codex' },
+];
+const ALLSRC = () => [...DIRS, ...REPOS];
+const srcById = id => ALLSRC().find(s => s.id === id);
+const toolById = id => TOOLS.find(t => t.id === id);
+const boundToolsOf = sid => BINDS.filter(b => b.s === sid).map(b => toolById(b.t));
+const boundSrcsOf = tid => BINDS.filter(b => b.t === tid).map(b => srcById(b.s));
+
+let focus = null;   // {kind:'src'|'tool', id}
+
+/* ==== 渲染 ==== */
+function dirCard(s) {
+  const dots = boundToolsOf(s.id).slice(0, 3).map(t =>
+    `<span class="tool-dot ${t.dot}"></span>`).join('');
+  const more = boundToolsOf(s.id).length > 3 ? `<span class="plus">+${boundToolsOf(s.id).length - 3}</span>` : '';
+  const cls = focusKind('src', s.id);
+  return `<div class="tcard ${cls}" data-focus="src:${s.id}">
+    <span class="cnt">${s.n}</span>
+    <div class="chip">${s.chip}</div>
+    <div class="tnm">${s.name}</div>
+    ${boundToolsOf(s.id).length ? `<span class="tcard__tag"><span class="arr">→</span>${dots}${more}</span>` : ''}
+  </div>`;
+}
+function repoCard(s) {
+  const dots = boundToolsOf(s.id).slice(0, 3).map(t =>
+    `<span class="tool-dot ${t.dot}"></span>`).join('');
+  const cls = focusKind('src', s.id);
+  return `<div class="tcard tcard--repo ${cls}" data-focus="src:${s.id}">
+    <span class="cnt ink">${s.n}</span>
+    <div class="chip ve">${s.chip}</div>
+    <div class="tnm">${s.name}</div>
+    ${boundToolsOf(s.id).length ? `<span class="tcard__tag"><span class="arr">→</span>${dots}</span>` : ''}
+  </div>`;
+}
+function toolCard(t) {
+  const srcs = boundSrcsOf(t.id);
+  const names = srcs.map(s => s.name).join(' · ');
+  const cls = focusKind('tool', t.id);
+  return `<div class="tcard ${cls}" data-focus="tool:${t.id}">
+    <span class="cnt ink">${srcs.length}</span>
+    <div class="chip pi">${t.name.split(' ')[0].slice(0, 2)}</div>
+    <div class="tnm">${t.name}</div>
+    ${srcs.length ? `<span class="tcard__tag"><span class="back">⇐</span><span class="plus" title="${names}">${names}</span></span>` : ''}
+  </div>`;
+}
+function focusKind(kind, id) {
+  if (!focus) return '';
+  if (focus.kind === kind) return focus.id === id ? 'is-focus' : 'is-dim';
+  // 对面排：被绑定的点亮，否则暗淡
+  const bound = (focus.kind === 'src')
+    ? BINDS.find(b => b.s === focus.id && b.t === id)
+    : BINDS.find(b => b.t === focus.id && b.s === id);
+  return bound ? 'is-lit' : 'is-dim';
+}
+
+function render() {
+  document.getElementById('dircards').innerHTML = DIRS.map(dirCard).join('');
+  document.getElementById('repocards').innerHTML = REPOS.map(repoCard).join('');
+  document.getElementById('toolcards').innerHTML = TOOLS.map(toolCard).join('');
+  wire();
+  renderFocusBar();
+}
+function wire() {
+  document.querySelectorAll('[data-focus]').forEach(c => {
+    c.onclick = () => {
+      const [kind, id] = c.dataset.focus.split(':');
+      if (focus && focus.kind === kind && focus.id === id) focus = null;
+      else focus = { kind, id };
+      render();
+    };
+  });
+}
+function renderFocusBar() {
+  const bar = document.getElementById('focusbar');
+  if (!focus) {
+    bar.className = 'focusbar';
+    bar.innerHTML = '<div class="hint">点击上方目录卡 / 远仓卡，或下方工具卡 —— 已连接的对方卡片会点亮；再点一次取消。聚焦后可在此条上建连 / 断开。</div>';
+    return;
+  }
+  bar.className = 'focusbar is-hot';
+  if (focus.kind === 'src') {
+    const s = srcById(focus.id);
+    const bound = boundToolsOf(s.id);
+    const unbound = TOOLS.filter(t => !bound.find(x => x.id === t.id));
+    bar.innerHTML = `
+      <div class="ttl"><span class="dir">${s.name}</span>（${s.kind} · ${s.n} 个 skill）的连接</div>
+      <div class="chips">
+        ${bound.map(t => `<span class="bchip"><span class="tool-dot ${t.dot}"></span>${t.name}<span class="x" data-un="${t.id}"> ✕</span></span>`).join('')}
+        ${unbound.map(t => `<span class="achip" data-add="${t.id}">＋ 连接 ${t.name}</span>`).join('')}
+      </div>
+      <div class="opsrow">断开 = 解除自动跟随（工具内文件默认保留）· 建连 = 立即全量同步并持续跟随 · ${bound.length} 个连接</div>`;
+  } else {
+    const t = toolById(focus.id);
+    const srcs = boundSrcsOf(t.id);
+    const unbound = ALLSRC().filter(s => !srcs.find(x => x.id === s.id));
+    bar.innerHTML = `
+      <div class="ttl">工具 ${t.name}（${t.path}）已接入的源</div>
+      <div class="chips">
+        ${srcs.map(s => `<span class="bchip"><span class="badge">${s.kind}</span>${s.name}<span class="x" data-un-s="${s.id}"> ✕</span></span>`).join('')}
+        ${unbound.map(s => `<span class="achip" data-add-s="${s.id}">＋ 接入 ${s.name}</span>`).join('')}
+      </div>
+      <div class="opsrow">从这里也能反向管理：接入新源 / 断开源 —— 与源侧操作完全等价</div>`;
+  }
+  wireFocusBar();
+}
+function wireFocusBar() {
+  document.querySelectorAll('[data-un]').forEach(el => el.onclick = (e) => {
+    e.stopPropagation();
+    BINDS = BINDS.filter(b => !(b.s === focus.id && b.t === el.dataset.un));
+    toast(`已断开（工具内文件保留）`); render();
+  });
+  document.querySelectorAll('[data-add]').forEach(el => el.onclick = (e) => {
+    e.stopPropagation();
+    BINDS.push({ s: focus.id, t: el.dataset.add });
+    toast(`已连接 ${toolById(el.dataset.add).name} · 全量同步 ${srcById(focus.id).n} 个 skill`); render();
+  });
+  document.querySelectorAll('[data-add-s]').forEach(el => el.onclick = (e) => {
+    e.stopPropagation();
+    BINDS.push({ s: el.dataset.addS, t: focus.id });
+    toast(`已接入 ${srcById(el.dataset.addS).name} · 全量同步`); render();
+  });
+  document.querySelectorAll('[data-un-s]').forEach(el => el.onclick = (e) => {
+    e.stopPropagation();
+    BINDS = BINDS.filter(b => !(b.t === focus.id && b.s === el.dataset.unS));
+    toast(`已断开（文件保留）`); render();
+  });
+}
+function toast(m) { const t = document.getElementById('toast');
+  if (!t) { const d = document.createElement('div'); d.id = 'toast'; d.className = 'toast';
+    document.body.appendChild(d); }
+  const t2 = document.getElementById('toast');
+  t2.textContent = m; t2.style.display = 'block';
+  clearTimeout(t2._h); t2._h = setTimeout(() => t2.style.display = 'none', 2600); }
+
+render();
+</script>
+</body>
+</html>

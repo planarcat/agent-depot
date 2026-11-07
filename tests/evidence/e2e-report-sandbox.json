@@ -1,62 +1,62 @@
 {
   "mode": "sandbox",
-  "chrome": "Chrome/155.0.8059.40",
-  "base": "http://127.0.0.1:8658",
+  "chrome": "Chrome/155.0.8059.80",
+  "base": "http://127.0.0.1:8725",
   "passed": 13,
   "failed": 0,
   "results": [
     {
       "name": "empty-then-refresh",
       "ok": true,
-      "ms": 16,
+      "ms": 24,
       "detail": "100 行直接渲染（db 预置）"
     },
     {
       "name": "render-performance-100-rows",
       "ok": true,
-      "ms": 65,
-      "detail": "100 行 loadState+渲染 65ms"
+      "ms": 10,
+      "detail": "100 行 loadState+渲染 10ms"
     },
     {
       "name": "casr-missing-error-feedback",
       "ok": true,
-      "ms": 270,
+      "ms": 244,
       "detail": "引擎缺失 → 明确错误 toast: ✕1 条失败：迁移失败（HTTP 200，引擎 casr）"
     },
     {
       "name": "validation-empty-memory",
       "ok": true,
-      "ms": 161,
+      "ms": 156,
       "detail": "空记忆内容被拦截"
     },
     {
       "name": "long-title-no-overflow",
       "ok": true,
-      "ms": 69,
+      "ms": 95,
       "detail": "长标题省略正常，无溢出"
     },
     {
       "name": "screenshot-mobile-sandbox",
       "ok": true,
-      "ms": 362,
+      "ms": 367,
       "detail": "沙箱移动端 390px 无溢出"
     },
     {
       "name": "tools-add-and-refresh",
       "ok": true,
-      "ms": 522,
+      "ms": 535,
       "detail": "登记(pi-agent，格式自动识别) → 采集 1 会话 / 3 消息 → 卡片筛选生效"
     },
     {
       "name": "tools-root-redetect",
       "ok": true,
-      "ms": 618,
+      "ms": 625,
       "detail": "改路径→自动重识别（持久化+还原）· 内置路径锁定 + 格式可见"
     },
     {
       "name": "tools-disable-and-remove",
       "ok": true,
-      "ms": 468,
+      "ms": 482,
       "detail": "停用→卡片隐藏（数据保留）→移除→数据仍保留"
     },
     {
@@ -68,13 +68,13 @@
     {
       "name": "tools-sync-targets",
       "ok": true,
-      "ms": 187,
+      "ms": 174,
       "detail": "添加同步（Skills+MCP）→ 删除自动清理"
     },
     {
       "name": "tools-no-add-entry",
       "ok": true,
-      "ms": 5,
+      "ms": 2,
       "detail": "无工具弹窗 / 无 openToolModal / 无添加按钮"
     },
     {
@@ -84,5 +84,5 @@
     }
   ],
   "consoleErrors": [],
-  "at": "2026-10-17T07:29:16.300Z"
+  "at": "2026-10-20T14:40:35.784Z"
 }

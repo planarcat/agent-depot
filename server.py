@@ -22,12 +22,13 @@ import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, unquote, quote
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 
 from hub.store import (Store, now_iso, ensure_lineage_schema,   # noqa: E402
+                       HUB_DIR,
                        lineage_info, migration_history,
                        ensure_memory_schema, add_memory,
                        list_memories, delete_memory, sync_status,
@@ -35,12 +36,15 @@ from hub.store import (Store, now_iso, ensure_lineage_schema,   # noqa: E402
                        session_stats, search_memories, export_memories,
                        export_batch)
 from hub.scanners import scan_all, probe_source, detect_format   # noqa: E402
+from hub import attachments as hub_attachments   # noqa: E402
 from hub import tools_registry               # noqa: E402
 from hub.watcher import FileWatcher          # noqa: E402 文件监控 → SSE 即时刷新
 from hub import migrator                      # noqa: E402
 from hub.core import registry as mod_registry  # noqa: E402
 from hub.core import schema as core_schema     # noqa: E402
 from hub.core import ops as core_ops           # noqa: E402
+from hub.core import remote_repos as core_remote_repos   # noqa: E402
+from hub.core import local_dirs as core_local_dirs   # noqa: E402 本地源多目录
 from hub.lib import gitsrc                     # noqa: E402
 from hub.modules import mod_skills    # noqa: E402
 from hub.modules import mod_mcp       # noqa: E402
@@ -57,6 +61,23 @@ DEFAULT_SCHEDULE = {
     "codex":    {"enabled": False, "interval_min": 30},
     "opencode": {"enabled": False, "interval_min": 30},
 }
+
+
+def _index_html():
+    """index.html + 资源指纹：/assets/xxx → /assets/xxx?v=<mtime>。
+    页面重载时浏览器被迫拿最新 JS/CSS（前端迭代频繁，防止旧资源驻留）。"""
+    import re as _re
+    html = open(os.path.join(ROOT, "web", "index.html"), encoding="utf-8").read()
+
+    def _v(m):
+        rel = m.group(1)
+        try:
+            v = int(os.stat(os.path.join(ROOT, "web", rel)).st_mtime)
+        except OSError:
+            v = 0
+        return f'"/assets/{rel}?v={v}"'
+
+    return _re.sub(r'"/assets/([^"]+)"', _v, html)
 
 
 class Scheduler(threading.Thread):
@@ -83,6 +104,7 @@ class Scheduler(threading.Thread):
 STORE = None       # initialized in main()
 SCHED = None
 WATCHER = None     # hub.watcher.FileWatcher：磁盘变动 → /api/events 推送
+AUTO_INGEST = None # 会话文件变化 → 自动增量入库
 REFRESH_LOCK = threading.Lock()
 
 
@@ -127,6 +149,22 @@ def watch_roots(store):
         roots["memory:hub"] = [mod_memory.memstore_root()]
     except Exception:
         pass
+    # 源仓库缓存 / 本地条目库：在应用外 git pull、或直接改 SKILL.md 时也要能反映
+    try:
+        from hub import paths
+        base = paths.hub_dir()
+        roots["hub:sources"] = [os.path.join(base, "sources")]
+        roots["hub:registry"] = [os.path.join(base, "registry")]
+    except Exception:
+        pass
+    # 本地目录（链接的 hub 外路径）：外部增删改条目 → SSE → 前端刷新（读取时顺带扫描同步）
+    try:
+        linked = [d["path"] for d in core_local_dirs.list_dirs(store)
+                  if d.get("origin") == "linked"]
+        if linked:
+            roots["hub:localdirs"] = linked
+    except Exception:
+        pass
     return roots
 
 
@@ -142,7 +180,45 @@ def start_watcher(store):
         WATCHER = FileWatcher(debounce=0.25, interval=2.0)
         WATCHER.set_roots(watch_roots(store))
         WATCHER.start()
+        start_binding_worker(store)
     return WATCHER
+
+
+def start_binding_worker(store):
+    """目录绑定同步 worker：watcher 的内部订阅者（守护线程）。
+
+    目录内容变化（hub:localdirs / hub:registry / full）→ 停 1s 合并抖动 →
+    扫描目录（拾取外部增删改）→ 把变化自动分发到已绑定的工具目标。
+    启动时先跑一次兜底（服务停机期间落下的变化补齐）。自身写入触发的
+    tool: scope 不会被本 worker 消费，无自激回路。
+    """
+    def run():
+        q = WATCHER.subscribe()
+        try:
+            mod_skills.sync_all_bindings(store)      # 启动兜底：停机期间的变化
+        except Exception:
+            pass
+        while True:
+            try:
+                ev = q.get()
+            except Exception:
+                continue
+            scopes = ev.get("scopes") or []
+            if not (ev.get("full") or any(
+                    s in ("hub:localdirs", "hub:registry", "hub") for s in scopes)):
+                continue
+            time.sleep(1.0)                          # 合并连续事件（保存风暴只同步一次）
+            try:
+                mod_skills.sync_all_bindings(store)
+            except Exception as e:
+                try:
+                    core_ops.log_op(store, "skills", "binding:sync", "failed",
+                                    reason=str(e)[:200])
+                except Exception:
+                    pass
+    t = threading.Thread(target=run, daemon=True, name="binding-sync")
+    t.start()
+    return t
 
 
 def bump_watch(scope="hub", full=False, refresh_roots=False):
@@ -155,6 +231,144 @@ def bump_watch(scope="hub", full=False, refresh_roots=False):
         WATCHER.bump(scope, full=full)
     except Exception:
         pass
+
+
+class AutoIngest(object):
+    """监听工具会话文件的变化并自动增量入库。
+
+    实测（48MB 会话文件）：冷扫 0.77s；增量 +1 条 0.2ms、+1MB 约 6.6ms；
+    全部工具空转一次约 23ms。因此采用「事件即时触发 + 低频兜底轮询」：
+    - 事件驱动：watcher 命中 tool:* 后合并 300ms 抖动，只扫变化的工具；
+    - 兜底轮询：kqueue 看不到深层文件追加、SQLite 写入走 -wal，故每 poll 秒
+      做一次全量比对，保证任何工具的写入最终都会自动转存。
+    """
+
+    def __init__(self, store, watcher, poll=1.0, debounce=0.3):
+        self.store = store
+        self.watcher = watcher
+        self.poll = max(0.5, float(poll))
+        self.debounce = max(0.0, float(debounce))
+        self._stop = threading.Event()
+        self._thread = None
+        self._fp = None            # 来源指纹基线（mtime+size），空转轮询据此跳过扫描
+        self._stats = {"scans": 0, "messages": 0, "last_ms": 0.0}
+
+    def start(self):
+        if self._thread:
+            return self
+        self._thread = threading.Thread(target=self._loop, name="hub-auto-ingest", daemon=True)
+        self._thread.start()
+        return self
+
+    def stop(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2.0)
+        self._thread = None
+
+    def status(self):
+        return dict(self._stats, running=bool(self._thread))
+
+    def _enabled_tools(self):
+        try:
+            return {t["id"] for t in tools_registry.load_tools(self.store)
+                    if t.get("enabled", True)}
+        except Exception:
+            return set()
+
+    def _fingerprint(self):
+        """会话来源的轻量指纹（路径 + mtime + size）：空转轮询只做 stat，不写库。"""
+        from hub.scanners import build_scanners
+        out = {}
+        try:
+            for sc in build_scanners(self.store):
+                fps = []
+                for p in sc.sources():
+                    for q in (p, p + "-wal"):      # SQLite 写入先落 -wal，主库 mtime 可能不变
+                        try:
+                            st = os.stat(q)
+                            fps.append((q, st.st_mtime_ns, st.st_size))
+                        except OSError:
+                            continue
+                out[sc.tool] = tuple(sorted(fps))
+        except Exception:
+            return None
+        return out
+
+    def _poll_once(self):
+        """兜底轮询：仅当来源指纹变化时才采集变化的工具（首次建立基线并补采一次）。"""
+        fp = self._fingerprint()
+        if fp is None:
+            return
+        if self._fp is None:
+            self._fp = fp
+            self._run(None)                        # 启动补采：入库停机期间新增的会话
+            return
+        changed = [t for t, v in fp.items() if self._fp.get(t) != v]
+        self._fp = fp
+        if changed:
+            self._run(changed)
+
+    def _run(self, tools=None):
+        """执行一轮采集；有新内容时记台账并通知前端刷新。"""
+        t0 = time.perf_counter()
+        try:
+            results = scan_all(self.store, tools=tools)
+        except Exception as e:
+            self.store.log("ingest:auto", {"tools": tools or "all", "error": str(e)[:200]})
+            return
+        added = sum(int(r.get("new_messages") or 0) for r in results)
+        sessions = sum(int(r.get("new_sessions") or 0) for r in results)
+        self._stats["scans"] += 1
+        self._stats["messages"] += added
+        self._stats["last_ms"] = (time.perf_counter() - t0) * 1000
+        if added or sessions:
+            self.store.log("ingest:auto", {"tools": tools or "all", "new_messages": added,
+                                           "new_sessions": sessions,
+                                           "ms": round(self._stats["last_ms"], 1)})
+            bump_watch("hub")
+
+    def _loop(self):
+        q = self.watcher.subscribe()
+        try:
+            while not self._stop.is_set():
+                try:
+                    ev = q.get(timeout=self.poll)
+                except queue_mod.Empty:
+                    ev = None
+                if ev is None:                     # 兜底轮询：仅指纹变化时扫描
+                    self._poll_once()
+                    continue
+                allowed = self._enabled_tools()
+                dirty = {str(s)[5:] for s in (ev.get("scopes") or [])
+                         if str(s).startswith("tool:") and str(s)[5:] in allowed}
+                if not dirty:
+                    continue
+                # 合并抖动窗口：一次批量写入可能产生多条事件
+                deadline = time.time() + self.debounce
+                while time.time() < deadline and not self._stop.is_set():
+                    try:
+                        ev2 = q.get(timeout=deadline - time.time())
+                    except queue_mod.Empty:
+                        break
+                    for s in (ev2.get("scopes") or []):
+                        s = str(s)
+                        if s.startswith("tool:") and s[5:] in allowed:
+                            dirty.add(s[5:])
+                self._run(sorted(dirty))
+        finally:
+            self.watcher.unsubscribe(q)
+
+
+def start_auto_ingest(store):
+    """启动会话自动中转（HUB_INGEST_AUTO=0 关闭，HUB_INGEST_POLL 调兜底周期秒）。"""
+    global AUTO_INGEST
+    if os.environ.get("HUB_INGEST_AUTO") == "0" or not WATCHER:
+        return None
+    if AUTO_INGEST is None:
+        poll = float(os.environ.get("HUB_INGEST_POLL") or 1.0)
+        AUTO_INGEST = AutoIngest(store, WATCHER, poll=poll).start()
+    return AUTO_INGEST
 
 
 def scheduler_tick(store, last_run):
@@ -452,6 +666,43 @@ class Handler(BaseHTTPRequestHandler):
                 d["files"], d["sample"], d["name"] = 0, [], ""
             d["ok"] = True
             return 200, d
+        # 设置 → 远程仓库：仓库是跨模块实体，勾选模块由 sources.repo_id 关联
+        if path == "/api/remote-repos" and method == "GET":
+            return 200, {"ok": True, "repos": core_remote_repos.list_repos(STORE),
+                         "modules": [{"id": "skills", "name": "Skills"},
+                                     {"id": "mcp", "name": "MCP"}]}
+        if path == "/api/remote-repos" and method == "POST":
+            r = core_remote_repos.create_repo(STORE, body)
+            return (200 if r.get("ok") else 400), r
+        if path.startswith("/api/remote-repos/") and method == "PATCH":
+            try:
+                rid = int(path[len("/api/remote-repos/"):])
+            except (TypeError, ValueError):
+                return 400, {"ok": False, "error": "非法仓库 id"}
+            r = core_remote_repos.update_repo(STORE, rid, body)
+            return (200 if r.get("ok") else 400), r
+        # 本地目录：Skills/MCP 共用的本地多目录（选择链接 / 移除）；读取时顺带扫描同步，
+        # 让外部增删改在「任何一次读取」时都能对齐登记（SSE 只负责叫醒前端来读）
+        if path == "/api/local-dirs" and method == "GET":
+            core_local_dirs.sync_all(STORE)
+            return 200, {"ok": True, "dirs": core_local_dirs.list_dirs(STORE)}
+        if path == "/api/local-dirs/pick" and method == "POST":
+            # 弹 macOS 原生「选择文件夹」→ 选中即链接；用户取消返回 canceled（前端静默）。
+            # 阻塞至用户完成选择，前端按钮保持 is-loading。
+            r = core_local_dirs.pick_native(STORE)
+            if r.get("ok"):
+                r = core_local_dirs.link_dir(STORE, r.get("path"))
+            return (200 if r.get("ok") else 400), r
+        if path == "/api/local-dirs/link" and method == "POST":
+            r = core_local_dirs.link_dir(STORE, body.get("path"), body.get("name"))
+            return (200 if r.get("ok") else 400), r
+        if path.startswith("/api/local-dirs/") and method == "DELETE":
+            try:
+                did = int(path[len("/api/local-dirs/"):])
+            except (TypeError, ValueError):
+                return 400, {"ok": False, "error": "非法目录 id"}
+            r = core_local_dirs.remove_dir(STORE, did)
+            return (200 if r.get("ok") else 400), r
         if (path.startswith("/api/tools/") and path.endswith("/wire-memory")
                 and method == "POST"):
             tid = path[len("/api/tools/"):-len("/wire-memory")]
@@ -543,11 +794,12 @@ class Handler(BaseHTTPRequestHandler):
             checks.append({"name": "git", "ok": code == 0, "detail": out.strip()})
             # hub dir writable
             try:
-                probe = os.path.join(os.path.expanduser("~/.agent/hub"), ".doctor-probe")
+                probe = os.path.join(HUB_DIR, ".doctor-probe")
                 with open(probe, "w") as f:
                     f.write("x")
                 os.unlink(probe)
-                checks.append({"name": "hub_dir_writable", "ok": True, "detail": "~/.agent/hub"})
+                checks.append({"name": "hub_dir_writable", "ok": True,
+                               "detail": HUB_DIR.replace(os.path.expanduser("~"), "~")})
             except Exception as e:
                 checks.append({"name": "hub_dir_writable", "ok": False, "detail": str(e)[:120]})
             # casr
@@ -579,7 +831,7 @@ class Handler(BaseHTTPRequestHandler):
             return 200, {"ok": True, "created": {"skills": c1, "mcp": c2}}
         if path == "/api/backup" and method == "GET":
             import time as _t
-            db = os.path.join(os.path.expanduser("~/.agent/hub"), "hub.db")
+            db = os.path.join(HUB_DIR, "hub.db")
             if not os.path.exists(db):
                 return 404, {"ok": False, "error": "hub.db 不存在"}
             body_b = open(db, "rb").read()
@@ -648,6 +900,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
+
     def _serve_subtree(self, subdir, rel):
         """Serve a file strictly from ROOT/<subdir>/ — traversal-proof."""
         base = os.path.realpath(os.path.join(ROOT, subdir))
@@ -656,6 +909,22 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "forbidden"}, 403)
             return
         return self._file(os.path.relpath(path, ROOT))
+
+    def _bytes(self, body, ctype, filename=None, download=False):
+        """直接输出二进制（会话附件预览 / 下载）；调用方负责校验来源。"""
+        ctype = ctype or "application/octet-stream"
+        if ctype.startswith("text/") and "charset" not in ctype:
+            ctype += "; charset=utf-8"
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        if filename:
+            disp = "attachment" if download else "inline"
+            self.send_header("Content-Disposition",
+                             "%s; filename*=UTF-8''%s" % (disp, quote(str(filename))))
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _file(self, rel, ctype=None):
         base = os.path.realpath(ROOT)
@@ -711,7 +980,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             return self._json(r[1], r[0])
         if u.path == "/" or u.path == "/index.html":
-            return self._file("web/index.html", "text/html; charset=utf-8")
+            self._bytes(_index_html().encode("utf-8"), "text/html; charset=utf-8")
+            return "sent"
         # static assets: /assets/* -> web/ subtree only; /tests/* -> tests/ subtree only
         if u.path.startswith("/assets/"):
             return self._serve_subtree("web", u.path[len("/assets/"):])
@@ -748,7 +1018,9 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/events":
             return self._sse()
         if u.path == "/api/watch":
-            return self._json({"ok": True, "watch": (WATCHER.status() if WATCHER else {"backend": "off"}),
+            return self._json({"ok": True,
+                               "watch": (WATCHER.status() if WATCHER else {"backend": "off"}),
+                               "ingest": (AUTO_INGEST.status() if AUTO_INGEST else {"running": False}),
                                "roots": ({k: v for k, v in WATCHER.watched_paths()} if WATCHER else {})})
         if u.path == "/api/search":
             q = parse_qs(u.query)
@@ -779,7 +1051,36 @@ class Handler(BaseHTTPRequestHandler):
             if not sess:
                 return self._json({"error": "not found"}, 404)
             sess["messages"] = STORE.messages(sid)
+            # 附件按需回放源会话（图片 / 文件），不写库；解析失败不影响会话本身。
+            # 只有出现扫描器占位符的会话才回放，避免给纯文本大文件做无谓解析。
+            if any(("[image]" in (m.get("content") or "") or "[file]" in (m.get("content") or ""))
+                   for m in sess["messages"]):
+                try:
+                    amap = hub_attachments.session_attachments(STORE, sid)
+                    for msg in sess["messages"]:
+                        msg["attachments"] = amap.get(msg["seq"], [])
+                except Exception:
+                    pass
+            else:
+                for msg in sess["messages"]:
+                    msg["attachments"] = []
             return self._json(sess)
+        if u.path == "/api/attachment":
+            q = parse_qs(u.query)
+            sid = q.get("sid", [""])[0]
+            try:
+                seq = int(q.get("seq", ["0"])[0])
+                index = int(q.get("i", ["0"])[0])
+            except (TypeError, ValueError):
+                return self._json({"error": "参数非法"}, 400)
+            if not sid:
+                return self._json({"error": "sid 必填"}, 400)
+            try:
+                body, mime, name = hub_attachments.read_attachment(STORE, sid, seq, index)
+            except Exception:
+                return self._json({"error": "附件不存在或无法读取"}, 404)
+            download = q.get("download", ["0"])[0] not in ("0", "", None)
+            return self._bytes(body, mime, name, download=download)
         if u.path == "/api/schedule":
             raw = STORE.get_config("schedule")
             return self._json(json.loads(raw) if raw else DEFAULT_SCHEDULE)
@@ -847,12 +1148,21 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             r = self._do_post_inner(method)
-            # 自己写盘立刻广播（不等 watcher）：工具的增删改还要重建监控范围
-            bump_watch("hub", refresh_roots=path.startswith("/api/tools"))
+            # 自己写盘立刻广播（不等 watcher）：工具与本地目录的增删改还要重建监控范围
+            bump_watch("hub", refresh_roots=path.startswith("/api/tools")
+                       or path.startswith("/api/local-dirs"))
             return r
         except (ValueError, TypeError, KeyError) as e:
+            try:
+                STORE.db.rollback()   # 异常路径可能留下未提交的隐式事务，污染后续写（2026-10-31 database is locked）
+            except Exception:
+                pass
             self._json({"ok": False, "error": "无效输入: %s" % e}, 400)
         except Exception as e:
+            try:
+                STORE.db.rollback()   # 同上：失败请求不留悬挂事务
+            except Exception:
+                pass
             # 带上请求路径与引擎上下文：迁移类失败要能一眼看出是 casr 的问题还是数据的问题
             eng = "（引擎 casr）" if "/migrate" in str(getattr(self, "path", "")) else ""
             self._json({"ok": False, "error": "服务器内部错误%s: %s" % (eng, e)}, 500)
@@ -994,9 +1304,10 @@ def main():
     addr = ("127.0.0.1", PORT)
     ensure_store()
     start_watcher(STORE)          # 起服务时才挂文件监控（单测只建 store 不挂）
+    start_auto_ingest(STORE)      # 工具会话有变化即增量入库（兜底轮询 1s）
     httpd = HubServer(addr, Handler)
     print("Agent Depot -> http://127.0.0.1:%d  (Ctrl-C to stop)" % PORT)
-    print("hub dir: %s" % STORE.db.db if False else "hub db:  ~/.agent/hub/hub.db")
+    print("hub dir: %s" % HUB_DIR)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

@@ -28,12 +28,12 @@ ADAPTERS = {
 BUILTIN_TOOLS = [
     {"id": "claude", "name": "Claude Code", "adapter": "claude", "builtin": True, "color": 1,
      "skills_dir": "~/.claude/skills", "mcp_config": "~/.claude.json", "mcp_format": "mcpServers"},
-    # Codex CLI / OpenCode 原生直读共享目录 ~/.agents/skills（由内置 agents 工具承载），
-    # 故 skills_dir 置空：路径为空的工具不在 Skills 界面显示，无需额外判断
+    # Codex CLI / OpenCode 原生直读共享目录 ~/.agents/skills；仍把 skills_dir 指到该目录，
+    # 这样它们会作为「工具来源」出现在 Skills 页（同一目录对应多张卡，用户 2026-10-28 选定）
     {"id": "codex", "name": "Codex CLI", "adapter": "codex", "builtin": True, "color": 2,
-     "skills_dir": "", "mcp_config": "~/.codex/config.toml", "mcp_format": None},
+     "skills_dir": "~/.agents/skills", "mcp_config": "~/.codex/config.toml", "mcp_format": None},
     {"id": "opencode", "name": "OpenCode", "adapter": "opencode", "builtin": True, "color": 3,
-     "skills_dir": "", "mcp_config": "~/.config/opencode/opencode.json",
+     "skills_dir": "~/.agents/skills", "mcp_config": "~/.config/opencode/opencode.json",
      "mcp_format": "mcp"},
     # ---- v0.6 新增：本机在用的四个工具（路径取自 2026-10-09 实测）----
     {"id": "workbuddy", "name": "WorkBuddy", "adapter": "workbuddy", "builtin": True, "color": 4,
@@ -59,18 +59,19 @@ TOOL_PRESETS = [
     {"key": "claude-code", "name": "Claude Code", "adapter": "claude",
      "root": "~/.claude/projects", "skills_dir": "~/.claude/skills",
      "mcp_config": "~/.claude.json", "mcp_format": "mcpServers"},
-    # codex / opencode / cursor 原生直读共享目录 ~/.agents/skills，预设 skills_dir 置空
+    # codex / opencode / cursor / pi-agent 原生直读共享目录 ~/.agents/skills，
+    # 预设统一指向该目录（Skills 页同一目录会出现多张工具卡）
     {"key": "codex", "name": "Codex CLI", "adapter": "codex",
-     "root": "~/.codex", "skills_dir": "",
+     "root": "~/.codex", "skills_dir": "~/.agents/skills",
      "mcp_config": "~/.codex/config.toml", "mcp_format": None},
     {"key": "opencode", "name": "OpenCode", "adapter": "opencode",
-     "root": "~/.local/share/opencode/opencode.db", "skills_dir": "",
+     "root": "~/.local/share/opencode/opencode.db", "skills_dir": "~/.agents/skills",
      "mcp_config": "~/.config/opencode/opencode.json", "mcp_format": "mcp"},
     {"key": "cursor", "name": "Cursor", "adapter": "cursor",
      "root": "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb",
-     "skills_dir": "", "mcp_config": "~/.cursor/mcp.json", "mcp_format": "mcpServers"},
+     "skills_dir": "~/.agents/skills", "mcp_config": "~/.cursor/mcp.json", "mcp_format": "mcpServers"},
     {"key": "pi-agent", "name": "Pi-Agent", "adapter": "pi",
-     "root": "~/.pi/agent/sessions", "skills_dir": "~/.pi/agent/skills",
+     "root": "~/.pi/agent/sessions", "skills_dir": "~/.agents/skills",
      "mcp_config": None, "mcp_format": None},
     {"key": "workbuddy", "name": "WorkBuddy", "adapter": "workbuddy",
      "root": "~/.workbuddy/projects", "skills_dir": "~/.workbuddy/skills",

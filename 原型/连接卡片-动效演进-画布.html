@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 目录卡绑定交互 动效演进 ×4</title>
+<style>
+:root {
+  --c-ink: #171d1f; --c-ink-2: #3c4447; --c-ink-3: #5b6669; --c-ink-4: #8a9497;
+  --c-bg: #f2f4f4; --c-surface: #f9fafa; --c-surface-2: #ffffff;
+  --c-line: #d9dedf; --c-line-soft: #e6eaeb; --c-rail: #f4f3f0;
+  --c-accent: #0d6a63; --c-accent-strong: #0a544e; --c-accent-soft: #eaf2f1;
+  --c-accent-line: #bfd6d2; --c-on-accent: #ffffff;
+  --c-err: #a03d2e; --c-err-soft: #f8ece9; --c-err-line: #f0c8bf;
+  --c-ok: #1a7f4b; --c-warn: #8a6d1f; --c-warn-soft: #f6f1e2;
+  --c-t-claude: #d97757; --c-t-codex: #171d1f; --c-t-opencode: #7c5cff;
+  --c-t-p4: #4a7d8c; --c-t-p5: #9a6b3f; --c-t-p7: #a35d7a;
+  --fs-xs: 10px; --fs-s: 11px; --fs-md: 12px; --fs-body: 13px; --fs-m: 14px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+  --tcard: 150px;
+  --r-xs: 6px; --r-s: 4px; --r-m: 8px; --r-l: 12px;
+  --t-quick: 150ms cubic-bezier(.2,.6,.3,1); --t-base: 250ms cubic-bezier(.2,.6,.3,1);
+  --sh-hover: 0 4px 12px rgba(23,29,31,.08), 0 1px 2px rgba(23,29,31,.04);
+  --sh-float: 0 12px 32px rgba(23,29,31,.14), 0 2px 6px rgba(23,29,31,.06);
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--c-bg); color: var(--c-ink); font-family: var(--font-sans);
+  font-size: var(--fs-body); padding: var(--sp-5); }
+h1 { font-size: 20px; font-weight: 600; }
+.sub { color: var(--c-ink-3); margin-top: var(--sp-1); line-height: 1.6; }
+.style { background: var(--c-surface-2); border: 1px solid var(--c-line);
+  border-radius: var(--r-l); padding: var(--sp-4); margin-top: var(--sp-5); }
+.style > h2 { font-size: 16px; font-weight: 600; }
+.style > h2 .tag { font-size: 10px; color: var(--c-accent); background: var(--c-accent-soft);
+  border-radius: 4px; padding: 2px 8px; margin-left: var(--sp-2); vertical-align: 2px; }
+.style > .fit { color: var(--c-ink-3); font-size: var(--fs-body); margin: var(--sp-1) 0 var(--sp-3); }
+.grid { display: flex; gap: var(--sp-3); min-height: 150px; }
+.annotate { margin-top: var(--sp-3); border-top: 1px solid var(--c-line-soft);
+  padding-top: var(--sp-2); display: grid; gap: var(--sp-1); }
+.annotate b { font-size: var(--fs-s); color: var(--c-accent); }
+.annotate span { font-size: var(--fs-s); color: var(--c-ink-3); }
+
+/* ==== 线上 .tcard 本体（1:1 复刻关键值） ==== */
+.tcard { width: var(--tcard); border: 1px solid var(--c-line); border-radius: var(--r-m);
+  background: var(--c-surface-2); position: relative; cursor: pointer; padding: var(--sp-2);
+  transition: transform var(--t-quick), box-shadow var(--t-quick); }
+.tcard:hover { transform: translateY(-2px); box-shadow: var(--sh-hover); z-index: 10; }
+.tcard.is-on { box-shadow: 0 0 0 1.5px var(--c-accent); }
+.cnt { display: inline-flex; min-width: 28px; height: 28px; border-radius: var(--r-xs);
+  border: 1px solid var(--c-line); background: var(--c-surface);
+  align-items: center; justify-content: center; font-family: var(--font-mono);
+  font-size: var(--fs-md); font-weight: 600; color: var(--c-accent);
+  transition: transform var(--t-base) cubic-bezier(.2,.6,.3,1), opacity var(--t-base) cubic-bezier(.2,.6,.3,1); }
+.chip { width: 44px; height: 44px; border-radius: var(--r-m); margin: var(--sp-2) auto 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: var(--fs-m); font-weight: 600; }
+.chip.muted { background: #3c4447; }
+.nm { font-size: var(--fs-body); font-weight: 600; text-align: center; margin-top: var(--sp-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tool-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+.dot--claude { background: var(--c-t-claude); } .dot--codex { background: var(--c-t-codex); }
+.dot--opencode { background: var(--c-t-opencode); } .dot--p4 { background: var(--c-t-p4); }
+.dot--p5 { background: var(--c-t-p5); } .dot--p7 { background: var(--c-t-p7); }
+.arr { color: var(--c-accent); font-weight: 600; }
+
+/* ==== 连接标记（既有）：左下 → + 色点 ==== */
+.tcard__tag { position: absolute; left: var(--sp-2); bottom: var(--sp-1);
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: var(--fs-s); font-weight: 600; color: var(--c-accent); }
+.tcard__tag .tool-dot { width: 7px; height: 7px; }
+
+/* ==== 演进 A：悬停连接排（dots 交叉淡化为芯片排） ==== */
+.linkbar { position: absolute; left: var(--sp-2); right: var(--sp-2); bottom: var(--sp-1);
+  display: flex; align-items: center; gap: 4px; opacity: 0;
+  transition: opacity var(--t-quick); }
+.tcard:hover .linkbar { opacity: 1; }
+.tcard:hover .tcard__tag { opacity: 0; }
+.tcard__tag, .linkbar { transition: opacity var(--t-quick); }
+.lchip { display: inline-flex; align-items: center; gap: 3px;
+  border: 1px solid var(--c-accent-line); background: var(--c-accent-soft);
+  border-radius: 999px; padding: 1px 6px; font-size: 10px; color: var(--c-accent); }
+.lchip .x { color: var(--c-err); cursor: pointer; font-weight: 600; }
+.ladd { width: 18px; height: 18px; border-radius: 50%; border: 1.5px dashed var(--c-accent-line);
+  background: transparent; color: var(--c-accent); font-size: var(--fs-s); line-height: 1;
+  cursor: pointer; }
+@keyframes dpop { from { transform: scale(.4); opacity: 0; } }
+.lchip.pop { animation: dpop 260ms cubic-bezier(.34,1.56,.64,1); }
+
+/* ==== 演进 B：原位抽屉（卡片向下展开，邻居平滑让位） ==== */
+.tcard.exp { grid-row: span 2; }
+.tdrawer { grid-column: 1 / -1; display: grid; grid-template-rows: 0fr;
+  transition: grid-template-rows var(--t-base); margin-top: var(--sp-2); }
+.tdrawer.is-open { grid-template-rows: 1fr; }
+.tdrawer > div { overflow: hidden; display: flex; flex-direction: column; gap: var(--sp-1); }
+.brow { display: flex; align-items: center; gap: var(--sp-2); padding: 3px var(--sp-2);
+  background: var(--c-surface); border: 1px solid var(--c-line-soft); border-radius: var(--r-xs);
+  font-size: var(--fs-s); animation: dpop 260ms cubic-bezier(.34,1.56,.64,1); }
+.brow .bn { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brow .st { font-size: 10px; }
+.brow .st.ok { color: var(--c-ok); } .brow .st.pz { color: var(--c-warn); }
+.brow .st.fl { color: var(--c-err); }
+.brow .ops { display: flex; gap: 4px; }
+.brow .mb { border: 1px solid var(--c-line); background: var(--c-surface-2);
+  border-radius: var(--r-xs); font-size: 10px; padding: 1px 6px; cursor: pointer;
+  font-family: var(--font-sans); color: var(--c-ink-2); }
+.brow .mb:hover { border-color: var(--c-accent); color: var(--c-accent); }
+
+/* ==== 演进 C：状态徽标（→dots 升级为状态胶囊） ==== */
+.statpill { position: absolute; left: var(--sp-2); bottom: var(--sp-1);
+  display: inline-flex; align-items: center; gap: 4px;
+  border-radius: 999px; padding: 2px 8px 2px 6px; font-size: 10px; font-weight: 600;
+  transition: background var(--t-quick), color var(--t-quick); }
+.statpill.idle { color: var(--c-accent); }
+.statpill.idle .tool-dot { width: 7px; height: 7px; }
+.statpill.sync { background: var(--c-accent-soft); color: var(--c-accent);
+  position: absolute; left: var(--sp-2); bottom: var(--sp-1); overflow: hidden; }
+.statpill.sync::before { content: ""; position: absolute; inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(13,106,99,.16) 50%, transparent 70%);
+  background-size: 220% 100%; animation: sweep 900ms cubic-bezier(.2,.6,.3,1) infinite; }
+.statpill.sync span { position: relative; }
+.statpill.fail { background: var(--c-warn-soft); color: var(--c-warn); }
+@keyframes sweep { from { background-position: 130% 0; } to { background-position: -30% 0; } }
+
+/* ==== 演进 D：＋ 浮层建连（锚定卡片） ==== */
+.addpop { position: fixed; z-index: 70; background: var(--c-surface-2);
+  border: 1px solid var(--c-line); border-radius: var(--r-m); box-shadow: var(--sh-float);
+  padding: var(--sp-2); width: 240px; display: none;
+  transform-origin: top left; }
+.addpop.is-in { display: block; animation: dpop 150ms cubic-bezier(.2,.6,.3,1); }
+.addpop .hd { font-size: var(--fs-s); color: var(--c-ink-3); padding: 2px var(--sp-2) var(--sp-1); }
+.addpop .trow { display: flex; align-items: center; gap: var(--sp-2); padding: 4px var(--sp-2);
+  border-radius: var(--r-xs); cursor: pointer; font-size: var(--fs-body); }
+.addpop .trow:hover { background: var(--c-accent-soft); }
+.addpop .trow .p { flex: 1; color: var(--c-ink-4); font-size: 10px; font-family: var(--font-mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ==== 动效总表 ==== */
+.mtable { border: 1px solid var(--c-line); border-radius: var(--r-m); overflow: hidden;
+  font-size: var(--fs-s); background: var(--c-surface); }
+.mtr { display: grid; grid-template-columns: 110px 1fr 90px 110px; gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3); border-bottom: 1px solid var(--c-line-soft); align-items: center; }
+.mtr:last-child { border-bottom: 0; }
+.mtr.h { background: var(--c-rail); font-weight: 600; color: var(--c-ink-3); }
+.mtr .k { font-weight: 600; }
+.mtr .c1 { color: var(--c-ink-2); }
+.mtr .d { font-family: var(--font-mono); color: var(--c-ink-3); }
+.mtr .keep { color: var(--c-ok); }
+</style>
+</head>
+<body>
+<h1>原型 · 目录卡绑定交互 —— 动效演进 ×4</h1>
+<p class="sub">基于线上 <b>.tcard 卡片本体</b>（数量角标 / 色块 / 名称 / →色点 / 悬停浮起 全部保留），只演进绑定相关的交互与动效。每个变体都可交互，悬停/点击试试。</p>
+
+<!-- ============ A 悬停连接排 ============ -->
+<section class="style">
+  <h2>A · 悬停连接排<span class="tag">演进最小 · 复用交叉淡化</span></h2>
+  <p class="fit">默认态与线上完全一致（→色点）。悬停卡片时，色点**交叉淡化**为「连接排」：每个已连工具变成小胶囊（可 ✕ 断开），末尾 [＋] 建连。零新增占位。</p>
+  <div class="grid" id="ga"></div>
+  <div class="annotate">
+    <b>保留的动效</b><span>悬停浮起（-2px + 阴影）· 数量角标交叉淡化 · 选中描边</span>
+    <b>演进的动效</b><span>色点 ⇄ 连接排 = 交叉淡化 150ms（与数量角标同一手法）；建连 = 胶囊弹性入场 260ms spring；断开 = 即时消失</span>
+    <b>试一下</b><span>悬停 agent-skills 卡 → 胶囊排出现 → 点 [＋] 建连 → 点胶囊 ✕ 断开</span>
+  </div>
+</section>
+
+<!-- ============ B 原位抽屉 ============ -->
+<section class="style">
+  <h2>B · 原位抽屉<span class="tag">卡片向下展开 · 状态逐条可见</span></h2>
+  <p class="fit">点卡片左下「→n」标记，卡片向下原位展开抽屉：每条绑定一行（工具 · 模式 · 状态 · 暂停/断开），底部列出可建连的其余工具。状态逐条可见，适合绑定多的源。</p>
+  <div class="grid" id="gb"></div>
+  <div class="annotate">
+    <b>动效</b><span>展开 = grid-rows 0fr→1fr 250ms（邻居平滑让位，无跳变）；行入场 = 弹性 260ms 逐行出现；暂停 = 状态徽章文字切换（黄）</span>
+    <b>试一下</b><span>点 lingchuang-skills 卡的「→1」→ 抽屉展开 → 点行尾 ⏸ / ✕</span>
+  </div>
+</section>
+
+<!-- ============ C 状态徽标 ============ -->
+<section class="style">
+  <h2>C · 状态徽标<span class="tag">→色点升级为活的状态胶囊</span></h2>
+  <p class="fit">左下标记从「静态色点」升级为「状态胶囊」：平时=色点（无占位变化）；同步中=青底扫光「↻ 同步中」；失败=黄底「!」悬停看原因。动效只表达**正在发生的事**。</p>
+  <div class="grid" id="gc"></div>
+  <div class="annotate">
+    <b>动效</b><span>同步中 = 青底扫光循环（只在同步期间存在，完成即静默回到色点）；失败 = 黄底常亮 + 悬停原因（无动效，状态不打扰）</span>
+    <b>试一下</b><span>点「触发一次同步」→ agent-skills 的胶囊进入扫光态 → 2s 后自动回到色点</span>
+  </div>
+</section>
+
+<!-- ============ D 建连浮层 ============ -->
+<section class="style">
+  <h2>D · 建连浮层<span class="tag">＋号锚定卡片 · 一层完成建连</span></h2>
+  <p class="fit">连接排末尾的 [＋] 点击后，从锚点弹出一层工具选择浮层（色点+名+路径+连接），建连完成后目标色点**弹入**连接排。建连全程不离卡片。</p>
+  <div class="grid" id="gd"></div>
+  <div class="annotate">
+    <b>动效</b><span>浮层 = 从锚点缩放入场 150ms；建连成功 = 新色点弹性入场 260ms spring；其余卡片无感知</span>
+    <b>试一下</b><span>悬停默认目录卡 → 点连接排末尾 [＋] → 浮层里点「Codex CLI」建连</span>
+  </div>
+</section>
+
+<!-- ============ 动效总表 ============ -->
+<section class="style">
+  <h2>动效总表<span class="tag">保留 ✓ · 演进 ↗ · 新增 ＋</span></h2>
+  <div class="mtable">
+    <div class="mtr h"><span>动效</span><span>曲线 / 时长</span><span>档位</span><span>来源</span></div>
+    <div class="mtr"><span class="k">卡片悬停浮起</span><span class="c1">.2,.6,.3,1 · 150ms</span><span class="d">quick</span><span class="keep">✓ 保留（线上已有）</span></div>
+    <div class="mtr"><span class="k">选中描边</span><span class="c1">描边圈 1.5px accent</span><span class="d">—</span><span class="keep">✓ 保留（线上已有）</span></div>
+    <div class="mtr"><span class="k">数量交叉淡化</span><span class="c1">.2,.6,.3,1 · 250ms</span><span class="d">base</span><span class="keep">✓ 保留（线上已有）</span></div>
+    <div class="mtr"><span class="k">色点 ⇄ 连接排交叉淡化</span><span class="c1">.2,.6,.3,1 · 150ms</span><span class="d">quick</span><span class="keep">↗ 演进（复用交叉淡化手法）</span></div>
+    <div class="mtr"><span class="k">原位抽屉展开</span><span class="c1">grid-rows 0fr→1fr · 250ms</span><span class="d">base</span><span class="keep">＋ 新增（邻居平滑让位）</span></div>
+    <div class="mtr"><span class="k">胶囊/色点弹性入场</span><span class="c1">.34,1.56,.64,1 · 260ms</span><span class="d">pop</span><span class="keep">＋ 新增（建连反馈）</span></div>
+    <div class="mtr"><span class="k">同步扫光</span><span class="c1">线性扫光 · ≤900ms 循环</span><span class="d">—</span><span class="keep">＋ 新增（仅同步期间存在）</span></div>
+    <div class="mtr"><span class="k">失败黄底常亮</span><span class="c1">无动效（状态不打扰）</span><span class="d">—</span><span class="keep">＋ 新增（悬停看原因）</span></div>
+  </div>
+  <div class="annotate">
+    <b>原则</b><span>动效只表达「正在发生的事」；状态用常亮承载；所有曲线两族、时长三档，不新增第五种语言</span>
+  </div>
+</section>
+
+<!-- 建连浮层（D 用，锚定卡片） -->
+<div class="addpop" id="addpop">
+  <div class="hd">连接到…</div>
+  <div id="addpop-list"></div>
+</div>
+
+<script>
+/* ==== 共享数据 ==== */
+const TOOLS = [
+  { id: 'claude', name: 'Claude Code', dot: 'dot--claude', path: '~/.claude/skills' },
+  { id: 'codex', name: 'Codex CLI', dot: 'dot--codex', path: '~/.agents/skills 共享' },
+  { id: 'opencode', name: 'OpenCode', dot: 'dot--opencode', path: '~/.agents/skills 共享' },
+  { id: 'workbuddy', name: 'WorkBuddy', dot: 'dot--p4', path: '~/.workbuddy/skills' },
+  { id: 'p7', name: 'Trae CN', dot: 'dot--p7', path: '~/.trae-cn/skills' },
+];
+let BIND = [
+  { s: 'ga-b', t: 'claude', st: 'ok' },
+  { s: 'ga-b', t: 'codex', st: 'ok' },
+  { s: 'ga-c', t: 'p7', st: 'paused' },
+  { s: 'gb-c', t: 'p7', st: 'ok' },
+  { s: 'gd-a', t: 'claude', st: 'ok' },
+];
+const SOURCES = { 'ga-a': '默认目录', 'ga-b': 'agent-skills', 'ga-c': 'lingchuang-skills',
+  'gb-c': 'lingchuang-skills', 'gc-a': '默认目录', 'gc-b': 'agent-skills', 'gc-c': 'lingchuang-skills',
+  'gd-a': '默认目录', 'gd-b': 'agent-skills', 'gd-c': 'lingchuang-skills' };
+const T = id => TOOLS.find(t => t.id === id) || { id, name: id, dot: '' };
+
+function cardHTML(id, name, n, opts = {}) {
+  const binds = BIND.filter(b => b.s === id);
+  const dots = binds.slice(0, 3).map(b => `<span class="tool-dot ${T(b.t).dot}"></span>`).join('');
+  const more = binds.length > 3 ? `<span>+${binds.length - 3}</span>` : '';
+  const tag = binds.length ? `<span class="arr">→</span>${dots}${more}` : '';
+  const on = opts.on ? 'is-on' : '';
+  return `<div class="tcard ${on}" data-id="${id}">
+    <span class="cnt">${n}</span>
+    <div class="chip muted">${opts.chip || name.slice(0, 2)}</div>
+    <div class="nm">${name}</div>
+    ${tag ? `<span class="tcard__tag">${tag}</span>` : ''}
+  </div>`;
+}
+
+/* ==== A 悬停连接排 ==== */
+/* ==== A 悬停连接排 ==== */
+(function () {
+  const host = document.getElementById('ga');
+  function render() {
+    host.innerHTML = '';
+    ['ga-a', 'ga-b', 'ga-c'].forEach(id => {
+      const n = id === 'ga-a' ? 16 : id === 'ga-b' ? 17 : 11;
+      const name = SOURCES[id];
+      const binds = BIND.filter(b => b.s === id);
+      const card = document.createElement('div');
+      card.className = 'tcard';
+      card.innerHTML = `<span class="cnt">${n}</span>
+        <div class="chip muted">${id === 'ga-a' ? '默认' : name === 'agent-skills' ? 'AG' : 'LI'}</div>
+        <div class="nm">${name}</div>
+        <span class="tcard__tag">${binds.length ? '<span class="arr">→</span>' + binds.slice(0, 3).map(b =>
+          `<span class="tool-dot ${T(b.t).dot}"></span>`).join('') : ''}</span>
+        <span class="linkbar">
+          ${binds.map(b => `<span class="lchip"><span class="tool-dot ${T(b.t).dot}" style="width:7px;height:7px"></span>${T(b.t).name.split(' ')[0]}<span class="x" data-x="${id}|${b.t}">✕</span></span>`).join('')}
+          <button class="ladd" data-add="${id}">＋</button>
+        </span>`;
+      host.appendChild(card);
+    });
+    host.querySelectorAll('[data-add]').forEach(b => b.onclick = (e) => {
+      e.stopPropagation();
+      openAddPop(b, b.dataset.add, render);
+    });
+    host.querySelectorAll('[data-x]').forEach(x => x.onclick = (e) => {
+      e.stopPropagation();
+      const [s, t] = x.dataset.x.split('|');
+      BIND = BIND.filter(b => !(b.s === s && b.t === t));
+      render();
+    });
+  }
+  render();
+})();
+
+/* ==== 建连浮层（A/D 共用） ==== */
+function openAddPop(anchor, sourceId, after) {
+  const pop = document.getElementById('addpop');
+  const list = document.getElementById('addpop-list');
+  const bound = BIND.filter(b => b.s === sourceId).map(b => b.t);
+  const avail = TOOLS.filter(t => !bound.includes(t.id));
+  list.innerHTML = avail.map(t => `<div class="trow" data-t="${t.id}">
+      <span class="tool-dot ${t.dot}"></span><span>${t.name}</span><span class="p">${t.path}</span></div>`).join('')
+    || '<div class="hd">都已连接</div>';
+  const r = anchor.getBoundingClientRect();
+  pop.classList.add('is-in');
+  pop.style.left = Math.min(r.left, innerWidth - 260) + 'px';
+  pop.style.top = Math.min(r.bottom + 6, innerHeight - 200) + 'px';
+  list.querySelectorAll('.trow').forEach(row => row.onclick = () => {
+    BIND.push({ s: sourceId, t: row.dataset.t, st: 'ok', fresh: true });
+    hideAddPop();
+    if (after) after();
+    const card = anchor.closest('.tcard');
+    if (card) { card.style.transform = 'translateY(-2px)'; setTimeout(() => card.style.transform = '', 300); }
+  });
+}
+function hideAddPop() { document.getElementById('addpop').classList.remove('is-in'); }
+document.addEventListener('click', e => { if (!e.target.closest('.addpop') && !e.target.closest('.ladd')) hideAddPop(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideAddPop(); });
+
+/* ==== B 原位抽屉 ==== */
+(function () {
+  const host = document.getElementById('gb');
+  let open = false;
+  function render() {
+    host.innerHTML = '';
+    // 邻居卡（默认目录）
+    host.insertAdjacentHTML('beforeend', cardHTML('gb-a', '默认目录', 16, { chip: '默认' }));
+    // 目标卡：lingchuang-skills（可展开）
+    const binds = BIND.filter(b => b.s === 'gb-c');
+    const card = document.createElement('div');
+    card.className = 'tcard' + (open ? ' exp' : '');
+    card.innerHTML = `<span class="cnt">11</span>
+      <div class="chip muted">LI</div>
+      <div class="nm">lingchuang-skills</div>
+      <span class="tcard__tag" style="cursor:pointer" id="gb-toggle">${binds.length ? '<span class="arr">→' + binds.length + '</span>' : ''} <span style="font-weight:400">${open ? '收起 ▴' : '展开 ▾'}</span></span>
+      <div class="tdrawer ${open ? 'is-open' : ''}"><div>
+        ${binds.map(b => `<div class="brow">
+          <span class="tool-dot ${T(b.t).dot}"></span><span class="bn">${T(b.t).name}</span>
+          <span class="badge" style="border:1px solid var(--c-line);border-radius:4px;padding:0 5px;font-size:10px;color:var(--c-ink-4)">复制</span>
+          ${b.st === 'paused' ? '<span class="st pz">⏸ 已暂停</span>' : '<span class="st ok">✓ 已同步</span>'}
+          <span class="ops">
+            <button class="mb" data-p="${b.t}">${b.st === 'paused' ? '恢复' : '⏸'}</button>
+            <button class="mb" data-x="${b.t}">✕</button>
+          </span></div>`).join('')}
+        ${['claude', 'codex', 'workbuddy'].filter(t => !binds.find(b => b.t === t)).map(t =>
+          `<div class="brow"><span class="tool-dot ${T(t).dot}"></span><span class="bn" style="color:var(--c-ink-4)">${T(t).name}</span>
+           <span class="ops"><button class="mb" data-c="${t}">连接</button></span></div>`).join('')}
+      </div></div>`;
+    host.appendChild(card);
+    card.querySelector('#gb-toggle').onclick = (e) => { e.stopPropagation(); open = !open; render(); };
+    card.querySelectorAll('[data-p]').forEach(b => b.onclick = (e) => {
+      e.stopPropagation();
+      const x = BIND.find(y => y.s === 'gb-c' && y.t === b.dataset.p);
+      x.st = x.st === 'paused' ? 'ok' : 'paused'; render();
+    });
+    card.querySelectorAll('[data-x]').forEach(b => b.onclick = (e) => {
+      e.stopPropagation();
+      BIND = BIND.filter(y => !(y.s === 'gb-c' && y.t === b.dataset.x)); render();
+    });
+    card.querySelectorAll('[data-c]').forEach(b => b.onclick = (e) => {
+      e.stopPropagation();
+      BIND.push({ s: 'gb-c', t: b.dataset.c, st: 'ok' }); render();
+    });
+  }
+  render();
+})();
+
+/* ==== C 状态徽标 ==== */
+(function () {
+  const host = document.getElementById('gc');
+  let syncing = false;
+  function render() {
+    host.innerHTML = `
+      <div class="tcard"><span class="cnt">16</span><div class="chip muted">默认</div><div class="nm">默认目录</div>
+        <span class="statpill idle"><span class="arr">→</span><span class="tool-dot dot--claude"></span><span class="tool-dot dot--codex"></span></span></div>
+      <div class="tcard"><span class="cnt">17</span><div class="chip muted">AG</div><div class="nm">agent-skills</div>
+        ${syncing
+          ? '<span class="statpill sync"><span>↻ 同步中 · 3 项</span></span>'
+          : '<span class="statpill idle"><span class="arr">→</span><span class="tool-dot dot--claude"></span><span class="tool-dot dot--codex"></span></span>'}</div>
+      <div class="tcard"><span class="cnt">11</span><div class="chip muted">LI</div><div class="nm">lingchuang-skills</div>
+        <span class="statpill fail" title="同步失败：目标目录只读 · 17:42:11 · 下次变化自动重试">! 同步失败</span></div>`;
+    const btn = document.createElement('button');
+    btn.className = 'btn'; btn.style.marginTop = 'var(--sp-3)';
+    btn.textContent = syncing ? '同步中…' : '触发一次同步';
+    btn.disabled = syncing;
+    btn.onclick = () => {
+      syncing = true; render();
+      setTimeout(() => { syncing = false; render(); }, 3000);
+    };
+    host.appendChild(btn);
+  }
+  render();
+})();
+
+/* ==== D 建连浮层 ==== */
+(function () {
+  const host = document.getElementById('gd');
+  function render() {
+    host.innerHTML = '';
+    ['gd-a', 'gd-b', 'gd-c'].forEach(id => {
+      const n = id === 'gd-a' ? 16 : id === 'gd-b' ? 25 : 11;
+      const name = SOURCES[id];
+      const binds = BIND.filter(b => b.s === id);
+      const card = document.createElement('div');
+      card.className = 'tcard';
+      card.innerHTML = `<span class="cnt">${n}</span>
+        <div class="chip muted">${id === 'gd-a' ? '默认' : name === 'agent-skills' ? 'AG' : 'LI'}</div>
+        <div class="nm">${name}</div>
+        <span class="tcard__tag" style="gap:4px">${binds.length ? '<span class="arr">→</span>' + binds.slice(0, 2).map(b =>
+          `<span class="tool-dot ${T(b.t).dot}"></span>`).join('') + (binds.length > 2 ? `<span>+${binds.length - 2}</span>` : '') : ''}
+          <button class="ladd" data-add="${id}" style="width:18px;height:18px;border-radius:50%;border:1.5px dashed var(--c-accent-line);background:transparent;color:var(--c-accent);font-size:var(--fs-s);line-height:1;cursor:pointer">＋</button></span>`;
+      card.querySelector('[data-add]').onclick = (e) => {
+        e.stopPropagation();
+        openAddPop(e.target, id, render);
+      };
+      host.appendChild(card);
+    });
+  }
+  render();
+})();
+</script>
+</body>
+</html>

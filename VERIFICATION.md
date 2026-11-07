@@ -1,6 +1,6 @@
 # 测试记录 · Verification
 
-> 最新更新：2026-10-17（质量卡口 + 变异门禁 100%/74% + lint 基线；全量验收含 E2E 34 场景）。原始报告在 `tests/evidence/`。
+> 最新更新：2026-11-07（行为规格套件 78 条 + 变异门禁扩容至 7 文件 + 4 个真 bug 修复）。原始报告在 `tests/evidence/`。
 
 ### watcher 变异得分 33.00% → 74.03%（2026-10-17 补判据）
 
@@ -302,3 +302,16 @@ curl -s http://127.0.0.1:3111/agentmemory/health | head -c 120
 **回归防护**：`tests/test_extras.py` 新增 `ScannerRootTildeTest`（3 项：`~` 展开助手、8 个扫描器 `__init__`、`build_scanners` 构造结果）→ 11/11 通过。
 
 **连带修复**：内容搜索收敛到可见域（口径 B 下命中"已停用工具"的会话点进去打不开）。
+
+## 行为规格套件（2026-11-07 · Rust 重写前置）
+
+- **新增 `tests/spec/`：78 条黑盒 HTTP 行为规格用例**（10 文件），作为 Rust 重写的行为真源——
+  以 `HUB_BASE` 打 depotd 原样复跑，全绿即切换闸门。
+- 量化起点（三路审计）：22/46 路由双零、8 大契约均有未钉守卫、弱断言 ~27%。
+- **抓出并修复 4 个真 bug**：① distribute/mcp name 防穿越缺失（`../evil` 可写出目标目录）；
+  ② mod_mcp update_registry 链接目录条目写错位置；③ rollback 同秒二次回退 500（File exists）；
+  ④ clean 断连后重新建连 conflict 死锁（removed 部署记录挡住重装）。
+- **变异门禁扩容**：+4 目标（mod_skills/mod_mcp/local_dirs/store）；
+  local_dirs 首测 **41.21%** 登记为基线（存活 281 集中于内部分支——量化了覆盖缺口，ratchet 只升不降）。
+- 覆盖矩阵 `tests/spec/_matrix.py`：46 条路由触达 46，双零清零，纳入 check.sh。
+- check.sh 新增 2.5/4 步（spec 套件 + 矩阵）；spec×3 连跑稳定；e2e 19/19 不受影响。

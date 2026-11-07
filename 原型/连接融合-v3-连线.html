@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 连接融合 v3 —— 选中目录展开 Skills/MCP，连线表达链接状态</title>
+<style>
+:root {
+  --c-ink: #171d1f; --c-ink-2: #3c4447; --c-ink-3: #5b6669; --c-ink-4: #8a9497;
+  --c-bg: #f2f4f4; --c-surface: #f9fafa; --c-surface-2: #ffffff;
+  --c-line: #d9dedf; --c-line-soft: #e6eaeb; --c-rail: #f4f3f0;
+  --c-accent: #0d6a63; --c-accent-strong: #0a544e; --c-accent-soft: #eaf2f1;
+  --c-accent-line: #bfd6d2; --c-on-accent: #ffffff;
+  --c-err: #a03d2e; --c-err-soft: #f8ece9; --c-err-line: #f0c8bf;
+  --c-ok: #1a7f4b;
+  --c-t-agents: #4a7d8c; --c-t-claude: #d97757; --c-t-pi: #6f8a4f;
+  --c-t-wb: #4a7d8c; --c-t-zcode: #9a6b3f;
+  --fs-xs: 10px; --fs-s: 11px; --fs-md: 12px; --fs-body: 13px; --fs-m: 14px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px;
+  --tcard: 136px;
+  --r-xs: 6px; --r-s: 4px; --r-m: 8px; --r-l: 12px;
+  --t-quick: 150ms cubic-bezier(.2,.6,.3,1); --t-base: 250ms cubic-bezier(.2,.6,.3,1);
+  --sh-hover: 0 4px 12px rgba(23,29,31,.08), 0 1px 2px rgba(23,29,31,.04);
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--c-bg); color: var(--c-ink); font-family: var(--font-sans);
+  font-size: var(--fs-body); padding: var(--sp-4); }
+button { font-family: var(--font-sans); }
+.tool-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block;
+  vertical-align: -1px; }
+.dot--agents { background: var(--c-t-agents); } .dot--claude { background: var(--c-t-claude); }
+.dot--pi { background: var(--c-t-pi); } .dot--wb { background: var(--c-t-wb); }
+.dot--zcode { background: var(--c-t-zcode); }
+.topbar { display: flex; align-items: center; gap: var(--sp-4); background: var(--c-surface-2);
+  border: 1px solid var(--c-line); border-radius: var(--r-l); padding: var(--sp-2) var(--sp-4); }
+.topbar b { font-size: var(--fs-l); }
+.topbar nav { display: flex; gap: var(--sp-3); color: var(--c-ink-3); }
+.topbar nav .on { color: var(--c-accent); font-weight: 600; }
+.topbar .engine { margin-left: auto; font-size: var(--fs-s); color: var(--c-ok); }
+.srcrow { display: flex; gap: var(--sp-3); align-items: stretch; margin-top: var(--sp-3); }
+.group { border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-surface);
+  padding: var(--sp-2); width: 170px; flex: none; display: flex; flex-direction: column; }
+.group .nm { font-weight: 600; }
+.group .meta { font-family: var(--font-mono); font-size: var(--fs-s); color: var(--c-ink-4);
+  margin: var(--sp-1) 0; }
+.group .d { font-size: var(--fs-s); color: var(--c-ink-4); line-height: 1.5; }
+.group .acts { margin-top: auto; padding-top: var(--sp-2); display: flex; flex-direction: column;
+  gap: var(--sp-1); }
+.btn { border: 1px solid var(--c-line); background: var(--c-surface-2); color: var(--c-ink);
+  border-radius: var(--r-xs); font-size: var(--fs-s); padding: 4px 10px; cursor: pointer;
+  text-align: center; transition: background var(--t-quick); }
+.btn:hover { background: var(--c-surface); }
+.btn.sm { padding: 3px 9px; width: auto; }
+.btn.danger { color: var(--c-err); border-color: var(--c-err-line); background: var(--c-err-soft); }
+.grid { display: flex; gap: var(--sp-3); }
+.tcard { width: var(--tcard); border: 1px solid var(--c-line); border-radius: var(--r-m);
+  background: var(--c-surface-2); position: relative; cursor: pointer; padding: var(--sp-2);
+  transition: transform var(--t-quick), box-shadow var(--t-quick), opacity var(--t-base); }
+.tcard:hover { transform: translateY(-2px); box-shadow: var(--sh-hover); z-index: 5; }
+.tcard.is-focus { box-shadow: 0 0 0 2px var(--c-accent); }
+.tcard.is-lit { box-shadow: 0 0 0 1.5px var(--c-accent); transform: translateY(-2px); }
+.tcard.is-dim { opacity: .35; }
+.cnt { display: inline-flex; min-width: 28px; height: 28px; border-radius: var(--r-xs);
+  border: 1px solid var(--c-line); background: var(--c-surface);
+  align-items: center; justify-content: center; font-family: var(--font-mono);
+  font-size: var(--fs-md); font-weight: 600; color: var(--c-accent); }
+.cnt.ink { color: var(--c-ink-2); }
+.chip { width: 44px; height: 44px; border-radius: var(--r-m); margin: var(--sp-2) auto 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: var(--fs-m); font-weight: 600; background: #3c4447; }
+.chip.ve { background: var(--c-t-claude); }
+.chip.agents { background: var(--c-t-agents); }
+.chip.claude { background: var(--c-t-claude); }
+.chip.pi { background: var(--c-t-pi); }
+.chip.wb { background: var(--c-t-wb); }
+.chip.zc { background: var(--c-t-zcode); }
+.tnm { font-size: var(--fs-body); font-weight: 600; text-align: center; margin-top: var(--sp-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tcard__tag { position: absolute; left: var(--sp-2); bottom: var(--sp-1);
+  display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap;
+  font-size: var(--fs-s); font-weight: 600; color: var(--c-accent); }
+.tcard__tag .tool-dot { width: 7px; height: 7px; }
+.tcard__tag .plus { color: var(--c-ink-4); font-weight: 400; }
+.tcard__tag .back { color: var(--c-ink-3); font-weight: 400; }
+.stats { display: flex; gap: var(--sp-4); margin: var(--sp-3) 0; align-items: center; }
+.stats b { font-size: 16px; margin-right: 4px; }
+.stats .muted { color: var(--c-ink-3); }
+
+/* ==== 管理面板（沿用：绑定/断开工具） ==== */
+.focus { border: 1px solid var(--c-accent-line); border-radius: var(--r-m);
+  background: var(--c-surface-2); padding: var(--sp-3); margin: var(--sp-3) 0; }
+.focus h3 { font-size: var(--fs-m); margin-bottom: var(--sp-1); }
+.focus .p { font-size: var(--fs-s); color: var(--c-ink-4); font-family: var(--font-mono);
+  margin-bottom: var(--sp-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.focus .sec { font-size: var(--fs-s); font-weight: 600; color: var(--c-ink-3);
+  margin: var(--sp-2) 0 var(--sp-1); }
+.focus .hint { color: var(--c-ink-4); font-size: var(--fs-body); line-height: 1.6; }
+.frow { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--c-line-soft); border-radius: var(--r-xs); margin-bottom: var(--sp-1); }
+.frow .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.frow .st { font-size: var(--fs-xs); flex: none; }
+.frow .st.ok { color: var(--c-ok); }
+.pills { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
+
+/* ==== 类型面板（Skills / MCP）与连线区 ==== */
+.linkzone { position: relative; margin-top: var(--sp-2); }
+.panels { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+.typepanel { border: 1.5px solid var(--c-accent); border-radius: var(--r-m);
+  background: var(--c-surface-2); padding: var(--sp-2) var(--sp-3); cursor: pointer;
+  transition: opacity var(--t-base), border-color var(--t-quick); position: relative; z-index: 2; }
+.typepanel .h { display: flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--fs-body); font-weight: 600; }
+.typepanel .h .badge { font-size: var(--fs-xs); font-weight: 400; color: var(--c-ink-4);
+  border: 1px solid var(--c-line); border-radius: var(--r-s); padding: 0 5px; }
+.typepanel .h .selmark { margin-left: auto; font-size: var(--fs-xs); color: var(--c-ink-4); }
+.typepanel .items { margin-top: var(--sp-1); font-size: var(--fs-s); color: var(--c-ink-3);
+  line-height: 1.7; }
+.typepanel.is-off { opacity: .45; border-color: var(--c-line); }
+.typepanel.is-off .items { display: none; }
+.linksvg { position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 1; }
+.linksvg line { stroke: var(--c-accent); stroke-width: 1.5; opacity: .6; }
+.linksvg line.mcpline { stroke-dasharray: 6 4; }
+.toolsrow { margin-top: var(--sp-3); position: relative; z-index: 2; }
+.toolsrow .rl { font-size: var(--fs-s); font-weight: 600; color: var(--c-ink-3); margin-bottom: var(--sp-2); }
+.toolsrow .rl small { color: var(--c-ink-4); font-weight: 400; }
+.tipbar { margin-top: var(--sp-2); font-size: var(--fs-s); color: var(--c-ink-4); }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <b>Agent Depot</b>
+  <nav><span>会话</span><span>记忆</span><span class="on">Skills</span><span>MCP</span><span>台账</span><span>统计</span><span>设置</span></nav>
+  <span class="engine">引擎 casr · 已连接</span>
+</div>
+
+<!-- 源卡区（现状保留） -->
+<div class="srcrow">
+  <div class="group">
+    <div class="nm">本地</div>
+    <div class="meta">3 源 · 52 条</div>
+    <div class="d">默认目录 + 已链接目录；目录内条目变化实时同步</div>
+    <div class="acts"><button class="btn">目录管理</button><button class="btn">新建</button><button class="btn">导入</button></div>
+  </div>
+  <div class="grid" id="dircards"></div>
+  <div class="group">
+    <div class="nm">远程仓库</div>
+    <div class="meta">1 源 · 9 条</div>
+    <div class="d">Git 仓库拉取，只读跟随上游</div>
+    <div class="acts"><button class="btn">添加仓库</button><button class="btn">全部拉取</button></div>
+  </div>
+  <div class="grid" id="repocards"></div>
+</div>
+
+<div class="stats">
+  <span><b>61</b>条目 · 全部来源</span><span class="muted"><b>52</b>本地</span>
+  <span><b>10</b>远程拉取</span><span><b>88</b>已部署到工具</span><span class="muted"><b>394</b>待更新 / 待安装</span>
+</div>
+
+<!-- 管理面板（沿用：绑定/断开工具） -->
+<div class="focus" id="focus" hidden></div>
+
+<!-- 连线区：类型面板（选中目录后出现） → 工具卡 -->
+<div class="linkzone" id="linkzone">
+  <div class="panels" id="panels" hidden>
+    <div class="typepanel" id="tp-skills" data-type="skills">
+      <div class="h">Skills <span class="badge" id="sk-n"></span><span class="selmark" id="sk-sel">已选中 · 显示连线</span></div>
+      <div class="items" id="sk-items"></div>
+    </div>
+    <div class="typepanel" id="tp-mcp" data-type="mcp">
+      <div class="h">MCP <span class="badge" id="mc-n"></span><span class="selmark" id="mc-sel">已选中 · 显示连线</span></div>
+      <div class="items" id="mc-items"></div>
+    </div>
+  </div>
+  <div class="toolsrow">
+    <div class="rl">工具目标 <small>有线 = 该类条目与此工具链接中 · 无线 = 无链接 · 点工具卡切换链接</small></div>
+    <div class="grid" id="toolcards"></div>
+  </div>
+  <svg class="linksvg" id="linksvg"></svg>
+</div>
+
+<div class="tipbar">选中目录后：默认同时选中 Skills 与 MCP 两条支线（各自显示到工具的连线）；点支线面板可切换选中/隐藏其连线。点工具卡 = 切换该目录与该工具的链接。</div>
+
+<script>
+/* ==== 数据 ==== */
+const DIRS = [
+  { id: 'd-def', name: '默认目录', n: 16, chip: '默认', binds: [], mcpBinds: [], mcpItems: [] },
+  { id: 'd-ag', name: 'agent-skills', n: 17, chip: 'AG', binds: ['pi'], mcpBinds: ['pi'],
+    mcpItems: ['api-mcp', 'docs-mcp'] },
+  { id: 'd-li', name: 'lingchuang-skills', n: 11, chip: 'LI', binds: [], mcpBinds: ['pi'],
+    mcpItems: ['kb-mcp'] },
+];
+const REPOS = [
+  { id: 'r-ve', name: 'Vercel Skills', n: 9, chip: 'VE', binds: [] },
+];
+const TOOLS = [
+  { id: 'agents', name: 'Agents', dot: 'dot--agents', path: '~/.agents/skills 共享' },
+  { id: 'claude', name: 'Claude Code', dot: 'dot--claude', path: '~/.claude/skills' },
+  { id: 'pi', name: 'Pi-Agent', dot: 'dot--pi', path: '~/.pi/agent/skills' },
+  { id: 'workbuddy', name: 'WorkBuddy', dot: 'dot--p4', path: '~/.workbuddy/skills' },
+  { id: 'zcode', name: 'ZCode', dot: 'dot--zcode', path: '~/.zcode/skills' },
+];
+const SKILL_ITEMS = {
+  'd-ag': ['agent-html-skills', 'api-snapshot', 'capturing-takeaways', 'change-advice',
+    'design-guardrails', 'development-guardrails', 'full-code-review', 'generate-commit'],
+  'd-li': ['界面审查', '日报撰写'],
+  'd-def': ['scratch-note'],
+};
+const T = id => TOOLS.find(t => t.id === id);
+const D = id => DIRS.concat(REPOS).find(d => d.id === id);
+function toast(m) { const t = document.getElementById('toast') || (() => {
+    const d = document.createElement('div'); d.id = 'toast';
+    d.style.cssText = 'position:fixed;right:24px;bottom:24px;z-index:99;background:var(--c-surface-2);border-radius:var(--r-m);box-shadow:var(--sh-float);padding:8px 12px';
+    document.body.appendChild(d); return d; })();
+  t.textContent = m; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 2600); }
+
+/* 状态 */
+let selDir = null;
+const typeSel = { skills: true, mcp: true };
+
+/* ==== 渲染：源卡区 ==== */
+function renderSrc() {
+  document.getElementById('dircards').innerHTML = DIRS.map(d => {
+    const dots = (d.binds || []).map(tid => `<span class="tool-dot ${T(tid).dot}"></span>`).join('');
+    const cls = selDir === d.id ? 'is-focus' : '';
+    return `<div class="tcard ${cls}" data-dir="${d.id}">
+      <span class="cnt">${d.n}</span>
+      <div class="chip">${d.chip}</div>
+      <div class="tnm">${d.name}</div>
+      ${(d.binds || []).length ? `<span class="tcard__tag"><span class="arr">→</span>${dots}</span>` : ''}
+    </div>`;
+  }).join('');
+  document.getElementById('repocards').innerHTML = REPOS.map(r => {
+    const dots = (r.binds || []).map(tid => `<span class="tool-dot ${T(tid).dot}"></span>`).join('');
+    return `<div class="tcard" data-repo="${r.id}">
+      <span class="cnt ink">${r.n}</span>
+      <div class="chip ve">${r.chip}</div>
+      <div class="tnm">${r.name}</div>
+      ${(r.binds || []).length ? `<span class="tcard__tag"><span class="back">⇐</span>${dots}</span>` : ''}
+    </div>`;
+  }).join('');
+  wireSrc();
+}
+function wireSrc() {
+  document.querySelectorAll('[data-dir]').forEach(c => c.onclick = () => {
+    selDir = (selDir === c.dataset.dir) ? null : c.dataset.dir;
+    renderSrc(); renderFocus(); renderExpansion(); drawLines();
+  });
+  document.querySelectorAll('[data-repo]').forEach(c => c.onclick = () => {
+    toast('远仓卡：绑定能力与目录一致（原型略）'); 
+  });
+}
+
+/* ==== 渲染：管理面板 ==== */
+function renderFocus() {
+  const host = document.getElementById('focus');
+  if (!selDir) { host.hidden = true; return; }
+  host.hidden = false;
+  const d = DIRS.find(x => x.id === selDir);
+  const bs = (d.binds || []).map(tid => T(tid));
+  const un = TOOLS.filter(t => !d.binds.includes(t.id));
+  host.innerHTML = `
+    <h3>目录 · ${d.name}</h3>
+    <div class="p">${d.n} 个 skill · ${d.mcpItems.length} 个 mcp · 已连接 ${bs.length} 个工具</div>
+    <div class="sec">整源跟随（绑定）</div>
+    ${bs.map(t => `<div class="frow"><span class="tool-dot ${t.dot}"></span><span class="nm">${t.name}</span>
+        <span class="st ok">● skills + mcp 跟随中</span>
+        <button class="btn sm danger" data-unbind="${t.id}">断开</button></div>`).join('')
+      || '<div class="note" style="color:var(--c-ink-4);font-size:var(--fs-s)">尚未连接工具 · 点下方工具卡建连</div>'}
+    <div class="sec">说明</div>
+    <div class="hint">Skills 与 MCP 两条支线的连线随绑定变化；点工具卡切换链接；点支线面板切换其连线显隐。</div>`;
+  host.querySelectorAll('[data-unbind]').forEach(b => b.onclick = () => {
+    d.binds = d.binds.filter(x => x !== b.dataset.unbind);
+    d.mcpBinds = d.mcpBinds.filter(x => x !== b.dataset.unbind);
+    toast(`已断开 ⇄ ${T(b.dataset.unbind).name}（文件保留）`);
+    renderSrc(); renderFocus(); drawLines();
+  });
+}
+
+/* ==== 渲染：展开区（Skills/MCP 面板）+ 工具卡 + 连线 ==== */
+function renderExpansion() {
+  const zone = document.getElementById('panels');
+  if (!selDir) { zone.hidden = true; drawLines(); return; }
+  zone.hidden = false;
+  const d = DIRS.find(x => x.id === selDir);
+  document.getElementById('sk-n').textContent = `${d.n} 个`;
+  document.getElementById('mc-n').textContent = `${d.mcpItems.length} 个`;
+  document.getElementById('sk-items').innerHTML =
+    SKILL_ITEMS[d.id].map(x => '· ' + x).join('<br>') || '—';
+  document.getElementById('mc-items').innerHTML =
+    d.mcpItems.map(x => '· ' + x).join('<br>') || '—';
+  document.getElementById('sk-sel').textContent =
+    typeSel.skills ? '已选中 · 显示连线' : '未选中 · 连线隐藏';
+  document.getElementById('mc-sel').textContent =
+    typeSel.mcp ? '已选中 · 显示连线' : '未选中 · 连线隐藏';
+  document.getElementById('tp-skills').classList.toggle('is-off', !typeSel.skills);
+  document.getElementById('tp-mcp').classList.toggle('is-off', !typeSel.mcp);
+  renderToolCards();
+}
+function renderToolCards() {
+  const d = selDir ? DIRS.find(x => x.id === selDir) : null;
+  document.getElementById('toolcards').innerHTML = TOOLS.map(t => {
+    const bound = d && d.binds.includes(t.id);
+    return `<div class="tcard ${bound ? 'is-lit' : (selDir ? 'is-dim' : '')}" data-tool="${t.id}">
+      <span class="cnt ink">${toolItemCount(t.id)}</span>
+      <div class="chip ${t.dot.replace('dot--', '') === 'claude' ? 'claude' : t.id === 'pi' ? 'pi' : t.id === 'workbuddy' ? 'wb' : t.id === 'zcode' ? 'zc' : 'agents'}">${t.name.split(' ')[0].slice(0, 2).toUpperCase()}</div>
+      <div class="tnm">${t.name}</div>
+      ${selDir ? `<span class="tcard__tag">${bound ? '<span class="arr">链</span>' : ''}</span>` : ''}
+    </div>`;
+  }).join('');
+  document.querySelectorAll('[data-tool]').forEach(c => c.onclick = () => {
+    if (!selDir) { toast('先点选一个目录'); return; }
+    const d = DIRS.find(x => x.id === selDir);
+    const tid = c.dataset.tool;
+    if (d.binds.includes(tid)) {
+      d.binds = d.binds.filter(x => x !== tid);
+      d.mcpBinds = d.mcpBinds.filter(x => x !== tid);
+      toast(`已断开 ${d.name} ⇄ ${T(tid).name}（文件保留）`);
+    } else {
+      d.binds.push(tid); d.mcpBinds.push(tid);
+      toast(`已连接 ${d.name} → ${T(tid).name} · 全量同步（skills + mcp）`);
+    }
+    renderToolCards(); renderSrc(); drawLines();
+  });
+}
+function toolItemCount(tid) {
+  let n = 0;
+  DIRS.forEach(d => { if (d.binds.includes(tid)) n += d.n; });
+  REPOS.forEach(r => { if (r.binds.includes(tid)) n += r.n; });
+  return n;
+}
+
+/* ==== 连线：从 Skills/MCP 面板 → 已绑定工具卡 ==== */
+function drawLines() {
+  const svg = document.getElementById('linksvg');
+  const zone = document.getElementById('linkzone');
+  const zr = zone.getBoundingClientRect();
+  svg.setAttribute('width', zr.width); svg.setAttribute('height', zr.height);
+  svg.innerHTML = '';
+  if (!selDir) return;
+  const d = DIRS.find(x => x.id === selDir);
+  const draw = (panelId, type, tools) => {
+    if (!typeSel[type]) return;
+    const p = document.getElementById(panelId);
+    if (!p || p.classList.contains('is-off')) return;
+    const pr = p.getBoundingClientRect();
+    const x1 = pr.left + pr.width / 2 - zr.left;
+    const y1 = pr.bottom - zr.top;
+    tools.forEach(tid => {
+      const card = document.querySelector(`#toolcards .tcard[data-tool="${tid}"]`);
+      if (!card) return;
+      const cr = card.getBoundingClientRect();
+      const x2 = cr.left + cr.width / 2 - zr.left;
+      const y2 = cr.top - zr.top;
+      const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      l.setAttribute('x1', x1); l.setAttribute('y1', y1);
+      l.setAttribute('x2', x2); l.setAttribute('y2', y2);
+      if (type === 'mcp') l.classList.add('mcpline');
+      svg.appendChild(l);
+    });
+  };
+  draw('tp-skills', 'skills', d.binds);
+  draw('tp-mcp', 'mcp', d.mcpBinds);
+}
+
+/* ==== 事件 ==== */
+document.getElementById('tp-skills').onclick = () => {
+  typeSel.skills = !typeSel.skills; renderExpansion(); drawLines();
+};
+document.getElementById('tp-mcp').onclick = () => {
+  typeSel.mcp = !typeSel.mcp; renderExpansion(); drawLines();
+};
+window.addEventListener('resize', drawLines);
+
+/* ==== init ==== */
+renderSrc(); renderFocus(); renderExpansion(); drawLines();
+</script>
+</body>
+</html>

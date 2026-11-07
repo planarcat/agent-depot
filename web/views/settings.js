@@ -17,11 +17,12 @@
     skills: 'Skill 源拉取 / 本地编写 / 分发到各工具目录',
     mcp: 'MCP 源与手动条目 / 写入各工具配置 / 握手验证',
   };
-  const PANE_TITLE = { modules: '模块', tools: '工具', env: '关于' };
+  const PANE_TITLE = { modules: '模块', tools: '工具', remotes: '远程仓库', env: '关于' };
   // 与左导航两行文案一致；头部副标题跟随切换
   const PANE_SUB = {
     modules: '启用或停用顶部导航模块',
     tools: '排序、启停与路径配置',
+    remotes: '仓库地址与所属模块',
     env: '版本与存储位置',
   };
   const S = { pane: 'modules' };
@@ -46,6 +47,7 @@
     if (ver) ver.textContent = 'Agent Depot ' + ((window.hubApp && window.hubApp.state.version) || '');
     if (S.pane === 'modules') await renderModules();
     if (S.pane === 'tools') await renderTools();
+    if (S.pane === 'remotes') await renderRemotes();
     if (S.pane === 'env') renderEnv();
   }
 
@@ -301,7 +303,8 @@
             if (!r.data.ok) { HubUI.toast('删除失败：' + (r.data.error || ''), 'error'); return; }
             HubUI.toast(purge ? '已彻底删除（含已采集数据）' : '已删除登记（数据保留）', 'success');
             closeRows();
-            await window.hubApp.loadState(); await renderTools();
+            await window.hubApp.loadState();
+            removeToolRow(box, t.id);
           },
           { confirmText: '删除', danger: true });
         return;
@@ -319,7 +322,9 @@
         const skills = row.querySelector('#settool-skills');
         const mcp = row.querySelector('#settool-mcp');
         save.classList.add('is-loading');
-        const body = { root: root.value.trim(), skills_dir: skills.value.trim(), mcp_config: mcp.value.trim() };
+        // 内置工具的会话路径是锁定的（disabled）→ 不要把它当成"改成空"发出去
+        const body = { skills_dir: skills.value.trim(), mcp_config: mcp.value.trim() };
+        if (!root.disabled) body.root = root.value.trim();
         if (PANEL.draft.enabled !== !!t.enabled) body.enabled = PANEL.draft.enabled;
         const r = await api('/api/tools/' + encodeURIComponent(t.id), {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -329,7 +334,10 @@
         HubUI.toast('已保存', 'success');
         closeRows();
         await window.hubApp.loadState();
-        await renderTools();
+        const fresh = (window.hubApp.state.tool_list || []).find(x => x.id === t.id) || r.data.tool || t;
+        syncToolRow(row, fresh);
+        // 更新本地缓存：下次展开面板要按"已保存后的值"算脏检查，否则保存按钮会一直是禁用态
+        TOOLS_CACHE = (TOOLS_CACHE || []).map(x => (x.id === t.id ? Object.assign({}, x, fresh) : x));
         return;
       }
       if (row && t0.closest('.trow__line') && !t0.closest('[data-stop], .trow__grip, [data-mv]')) {
@@ -439,6 +447,38 @@
     });
   }
 
+  /** 保存后就地同步这一行（不重绘整张工具表：拖拽顺序、展开态都不受影响） */
+  function syncToolRow(row, t) {
+    if (!row || !t) return;
+    const chip = row.querySelector('.trow__chip');
+    if (chip) { chip.className = 'trow__chip ' + toolColorCls(t); chip.textContent = toolShort(t); }
+    const nm = row.querySelector('.trow__name');
+    if (nm) nm.textContent = t.name;
+    const sw = row.querySelector('.set-toggle[data-tid]');
+    if (sw) sw.classList.toggle('is-on', !!t.enabled);
+    row.classList.toggle('is-off', !t.enabled);
+  }
+
+  /** 删除后：该行收起移走 + 重排序号与箭头（不重绘整表） */
+  function removeToolRow(box, tid) {
+    const row = box.querySelector(`.trow[data-tid="${CSS.escape(tid)}"]`);
+    if (!row) return;
+    row.classList.add('is-removing');
+    setTimeout(() => {
+      row.remove();
+      const rows = [...box.querySelectorAll('.trow')];
+      rows.forEach((r, i) => {
+        const n = r.querySelector('.trow__n'); if (n) n.textContent = i + 1;
+        const up = r.querySelector('[data-mv="up"]'), down = r.querySelector('[data-mv="down"]');
+        if (up) up.disabled = i === 0;
+        if (down) down.disabled = i === rows.length - 1;
+      });
+      const all = box.querySelector('#set-tool-all');
+      if (all) all.classList.toggle('is-on', rows.length > 0
+        && rows.every(r => r.querySelector('.set-toggle[data-tid]')?.classList.contains('is-on')));
+    }, 180);
+  }
+
   /* 启停开关（行内，不触发展开） */
   function bindToolToggle(box) {
     const patchTool = (tid, on) => api('/api/tools/' + encodeURIComponent(tid), {
@@ -480,6 +520,135 @@
       toastOnce('tool-all', on ? `已全部启用（${targets.length}）` : `已全部停用（${targets.length}）`, 'success');
       window.hubApp.loadState();
     };
+  }
+
+
+  /* ==================== 远程仓库 ====================
+     仓库是设置级实体：一份地址配置 + 模块勾选（当前支持 Skills / MCP）。
+     Skills / MCP 里的新增、编辑、移除都会同步到这里（sources.repo_id 关联）。 */
+  const REPO_MODULES = { skills: 'Skills', mcp: 'MCP' };
+
+  async function renderRemotes() {
+    const box = $pane('remotes');
+    if (!box) return;
+    box.innerHTML = '<div class="hub-empty">加载中…</div>';
+    const r = await api('/api/remote-repos');
+    if (!r.data || !r.data.ok) {
+      box.innerHTML = '<div class="hub-empty">读取远程仓库失败<div class="hub-empty__hint">'
+        + esc((r.data && r.data.error) || '稍后重试') + '</div></div>';
+      return;
+    }
+    const repos = r.data.repos || [];
+    box.innerHTML = `
+      <div class="setpane__toph">
+        <p class="setpane__hint">远程 Git 仓库由模块共用：勾选 Skills / MCP 后，仓库会出现在对应模块的
+          「远程仓库」分组；在模块里新增或编辑仓库，也会同步到这里。</p>
+        <button class="hub-btn hub-btn--primary" id="remote-repo-add" data-testid="remote-repo-add">＋ 新建仓库</button>
+      </div>
+      ${repos.length ? `<div class="setcard--list">${repos.map(repoRowHTML).join('')}</div>` : `
+        <div class="hub-empty">还没有远程仓库<div class="hub-empty__hint">点「新建仓库」添加，或在 Skills / MCP 里添加后自动同步到这里</div></div>`}`;
+    box.querySelector('#remote-repo-add').onclick = () => repoDialog(null);
+    box.querySelectorAll('[data-repo-edit]').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const repo = repos.find(x => String(x.id) === btn.dataset.repoEdit);
+        if (repo) repoDialog(repo);
+      };
+    });
+  }
+
+  function repoRowHTML(repo) {
+    const chips = (repo.modules || []).map(m =>
+      `<span class="hub-badge hub-badge--neutral">${esc(REPO_MODULES[m] || m)}</span>`).join('')
+      || '<span class="hub-badge">未关联模块</span>';
+    const desc = [repo.url, repo.branch || 'main',
+      repo.subdir ? '子目录 ' + repo.subdir : ''].filter(Boolean).join(' · ');
+    return `
+      <div class="setrow" data-testid="remote-repo-${repo.id}">
+        <div class="setrow__txt">
+          <div class="setrow__name">${esc(repo.name)}</div>
+          <div class="setrow__desc" title="${esc(desc)}">${esc(desc)}</div>
+        </div>
+        <span class="setrow__chips">${chips}</span>
+        <button class="hub-btn btn-sm" data-repo-edit="${repo.id}"
+                data-testid="remote-repo-edit-${repo.id}">编辑</button>
+      </div>`;
+  }
+
+  /** 新建 / 编辑仓库：共享字段 + 模块勾选；保存后模块侧立即能看到该仓库 */
+  function repoDialog(repo) {
+    const isNew = !repo;
+    const mods = new Set(repo ? (repo.modules || []) : ['skills']);
+    HubUI.modal({
+      title: isNew ? '新建远程仓库' : '编辑远程仓库 · ' + repo.name,
+      confirmText: isNew ? '创建' : '保存',
+      bodyHTML: `
+        <div class="form-grid">
+          <label>名称<input class="hub-input" id="repo-name" data-testid="repo-name"
+                 value="${esc(repo ? repo.name : '')}" placeholder="my-skills"></label>
+          <label>仓库地址<input class="hub-input mono" id="repo-url" data-testid="repo-url"
+                 value="${esc(repo ? repo.url : '')}" placeholder="https://github.com/org/repo.git"></label>
+          <label>分支<input class="hub-input" id="repo-branch"
+                 value="${esc((repo && repo.branch) || 'main')}"></label>
+          <label>子目录（可选）<input class="hub-input" id="repo-subdir"
+                 value="${esc((repo && repo.subdir) || '')}" placeholder="skills/"></label>
+          <label>凭据引用（可选）<input class="hub-input" id="repo-auth"
+                 value="${esc((repo && repo.auth_ref) || '')}"
+                 placeholder="env:GITHUB_TOKEN 或 file:~/.secrets/token"></label>
+          <label>定时拉取（分钟，0=关闭）<input class="hub-input" id="repo-poll"
+                 value="${(repo && repo.poll_min) || 0}" inputmode="numeric"></label>
+        </div>
+        <div class="modpick">
+          <div class="modpick__l">应用到模块</div>
+          <label class="modpick__it"><input type="checkbox" id="repo-mod-skills"
+                 data-testid="repo-mod-skills" ${mods.has('skills') ? 'checked' : ''}> Skills</label>
+          <label class="modpick__it"><input type="checkbox" id="repo-mod-mcp"
+                 data-testid="repo-mod-mcp" ${mods.has('mcp') ? 'checked' : ''}> MCP</label>
+        </div>
+        <div class="hub-modal__sub" style="color:var(--c-ink-4)">勾选后仓库会显示在对应模块的
+          「远程仓库」分组；取消勾选会从该模块移除（已拉取的本地副本转为手动条目，不删已分发文件）。</div>`,
+      onConfirm: (_v, close) => {
+        const modules = [];
+        if (document.getElementById('repo-mod-skills').checked) modules.push('skills');
+        if (document.getElementById('repo-mod-mcp').checked) modules.push('mcp');
+        if (!modules.length) {
+          HubUI.toast('至少勾选一个模块（Skills / MCP）', 'warn');
+          return false;
+        }
+        const body = {
+          name: document.getElementById('repo-name').value.trim(),
+          url: document.getElementById('repo-url').value.trim(),
+          branch: document.getElementById('repo-branch').value.trim() || 'main',
+          subdir: document.getElementById('repo-subdir').value.trim(),
+          auth_ref: document.getElementById('repo-auth').value.trim() || null,
+          poll_min: Math.max(0, parseInt(document.getElementById('repo-poll').value, 10) || 0),
+          modules,
+        };
+        if (!body.name || !body.url) {
+          HubUI.toast('名称与仓库地址必填', 'warn');
+          return false;
+        }
+        const btn = document.querySelector('.hub-overlay.is-in .hub-modal__ok');
+        if (btn) btn.classList.add('is-loading');
+        (async () => {
+          const res = isNew
+            ? await post('/api/remote-repos', body)
+            : await api('/api/remote-repos/' + repo.id, {
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+          if (btn) btn.classList.remove('is-loading');
+          if (!res.data.ok) {
+            HubUI.toast((isNew ? '创建' : '保存') + '失败：' + (res.data.error || ''), 'error');
+            return;
+          }
+          HubUI.toast(isNew ? '已创建远程仓库' : '已保存远程仓库', 'success');
+          close();
+          await renderRemotes();
+        })();
+        return false;                       // 异步完成后再关：失败时弹窗保留
+      },
+    });
   }
 
 

@@ -8,9 +8,11 @@
 import json
 import os
 import re
+import shutil
 import time
 
-from hub.core import fsutil, ops
+from hub import paths
+from hub.core import fsutil, ops, remote_repos, local_dirs
 from hub.lib import catalog, gitsrc, mcpverify
 
 MODULE = "mcp"
@@ -21,11 +23,17 @@ BLOCK_CLOSE = "# <<< hub:managed: %s <<<"
 
 
 def _hub_dir():
-    return os.environ.get("AGENT_HUB_DIR") or os.path.expanduser("~/.agent/hub")
+    return paths.hub_dir()
 
 
-def sources_root():
-    return os.path.join(_hub_dir(), "sources")
+def _source_cache(store, source_id):
+    """按来源记录取缓存目录（与拉取时同一套命名）。"""
+    with store.lock:
+        row = store.db.execute("SELECT url, branch, subdir FROM sources WHERE id=?",
+                               (source_id,)).fetchone()
+    if not row:
+        return None
+    return paths.source_cache_dir(KIND, row["url"], row["branch"], row["subdir"])
 
 
 def registry_root():
@@ -52,6 +60,7 @@ def add_source(store, name, url, branch="main", subdir="", auth_ref=None):
             sid = cur.lastrowid
     except Exception as e:
         return {"ok": False, "error": "源已存在或非法：%s" % e}
+    remote_repos.link_source(store, KIND, sid)      # 同步到 设置 → 远程仓库
     ops.log_op(store, MODULE, "source:add", "ok", source_id=sid, item_name=name)
     return {"ok": True, "id": sid}
 
@@ -67,34 +76,31 @@ def list_sources(store):
 
 def update_source(store, source_id, fields):
     allowed = ("enabled", "branch", "subdir", "auth_ref", "poll_min", "name", "url")
-    sets, args = [], []
-    for k in allowed:
-        if k in fields:
-            sets.append("%s=?" % k)
-            args.append(fields[k])
-    if not sets:
+    payload = {k: v for k, v in (fields or {}).items() if k in allowed}
+    if not payload:
         return {"ok": False, "error": "无更新字段"}
-    with store.lock:
-        store.db.execute("UPDATE sources SET %s WHERE id=? AND kind=?" % ",".join(sets),
-                         args + [source_id, KIND])
-        store.db.commit()
-    ops.log_op(store, MODULE, "source:update", "ok", source_id=source_id, detail=fields)
+    # 共享字段同步主表与另一模块的同仓库记录；重名/重址冲突在这里拦下
+    err = remote_repos.update_from_source(store, KIND, source_id, payload)
+    if err:
+        return {"ok": False, "error": err}
+    ops.log_op(store, MODULE, "source:update", "ok", source_id=source_id, detail=payload)
     return {"ok": True}
 
 
 def delete_source(store, source_id):
     """移除源：删 items/源记录 + git 缓存目录；registry 与已写入配置不动。"""
     with store.lock:
-        src = store.db.execute("SELECT name FROM sources WHERE id=? AND kind=?",
-                               (source_id, KIND)).fetchone()
+        src = store.db.execute("SELECT name, url, branch, subdir, repo_id FROM sources "
+                               "WHERE id=? AND kind=?", (source_id, KIND)).fetchone()
         store.db.execute("DELETE FROM items WHERE source_id=?", (source_id,))
         store.db.execute("DELETE FROM sources WHERE id=? AND kind=?", (source_id, KIND))
         store.db.commit()
     if src:
         import shutil as _sh
-        cache = os.path.join(sources_root(), "mcp-%d" % source_id)
+        cache = paths.source_cache_dir(KIND, src["url"], src["branch"], src["subdir"])
         if os.path.isdir(cache):
             _sh.rmtree(cache, ignore_errors=True)
+        remote_repos.prune_repo(store, src["repo_id"])   # 没有模块再用它 → 设置页也移除
     ops.log_op(store, MODULE, "source:delete", "ok", source_id=source_id,
                item_name=src["name"] if src else None)
     return {"ok": True}
@@ -111,7 +117,7 @@ def pull_source(store, source_id, removed_action=None):
     if not src:
         return {"ok": False, "error": "源不存在"}
     src = dict(src)
-    cache = os.path.join(sources_root(), "mcp-%d" % source_id)
+    cache = paths.source_cache_dir(KIND, src["url"], src["branch"], src["subdir"])
     ok, commit, resolved_branch, err = gitsrc.ensure_cache(
         cache, src["url"], src["branch"] or "main", src["auth_ref"])
     if not ok:
@@ -206,7 +212,7 @@ def _normalize_config(cfg, name=None):
     return catalog._normalize_mcp_entry((name or "").strip() or inner or "_", cfg)
 
 
-def _name_conflict(store, name):
+def _name_conflict(store, name, root=None):
     if not _NAME_RE.match(name or ""):
         return "名称非法（字母数字开头，允许 . _ -，≤64 字符）"
     with store.lock:
@@ -219,8 +225,8 @@ def _name_conflict(store, name):
         return "已存在同名条目（来自源仓库 %s）；重名会被拦截" % src_row["name"]
     if reg:
         return "已存在同名条目（%s）" % ("本地" if reg["source_id"] is None else "远程")
-    if os.path.exists(_reg_path(name)):
-        return "已存在同名配置文件（本地库）"
+    if os.path.exists(os.path.join(root or registry_root(), name + ".json")):
+        return "已存在同名配置文件"
     return None
 
 
@@ -232,9 +238,19 @@ def _manual_reg(store, name):
     return dict(row) if row else None
 
 
-def _write_manual(store, name, cfg, action):
-    os.makedirs(registry_root(), exist_ok=True)
-    dest = _reg_path(name)
+def _write_manual(store, name, cfg, action, dir_id=None):
+    # 显式 dir_id 优先；未指定但条目已登记在目录 → 保持原目录（编辑语义）；否则默认库
+    if dir_id:
+        d = local_dirs.get_dir(store, dir_id)
+        if not d:
+            return {"ok": False, "error": "本地目录不存在（id=%s）" % dir_id}
+        root = _container_root(d, KIND)   # 容器目录：写进其 mcp 集合文件夹
+    elif _manual_reg(store, name):
+        root = _item_root(store, name)
+    else:
+        root = registry_root()
+    os.makedirs(root, exist_ok=True)
+    dest = _reg_path(name, root=root)
     if os.path.exists(dest):
         vroot = versions_root(name)
         os.makedirs(vroot, exist_ok=True)
@@ -246,27 +262,34 @@ def _write_manual(store, name, cfg, action):
                                 (KIND, name)).fetchone()
         store.db.execute(
             "INSERT INTO registry_items(kind, name, source_id, version, hash, updated_at, "
-            "prev_version, prev_hash, source_hash_at) VALUES(?,?,NULL,?,?,?,?,?,NULL) "
+            "prev_version, prev_hash, source_hash_at, dir_id) VALUES(?,?,NULL,?,?,?,?,?,NULL,?) "
             "ON CONFLICT(kind, name) DO UPDATE SET version=excluded.version, hash=excluded.hash, "
             "updated_at=excluded.updated_at, prev_version=excluded.prev_version, "
-            "prev_hash=excluded.prev_hash, source_hash_at=NULL",
+            "prev_hash=excluded.prev_hash, source_hash_at=NULL, dir_id=excluded.dir_id",
             (KIND, name, "v2", new_hash, ops.now_iso(),
-             prev["version"] if prev else None, prev["hash"] if prev else None))
+             prev["version"] if prev else None, prev["hash"] if prev else None,
+             dir_id or None))
         store.db.commit()
     ops.log_op(store, MODULE, action, "ok", item_kind="mcp", item_name=name,
-               detail={"transport": cfg.get("type"), "hash": new_hash[:12]})
+               detail={"transport": cfg.get("type"), "hash": new_hash[:12], "dir": root})
     return {"ok": True, "name": name, "hash": new_hash[:12]}
 
 
-def create_manual(store, name, config=None):
+def create_manual(store, name, config=None, dir_id=None):
     name = (name or "").strip()
     cfg = _normalize_config(dict(config or {}), name=name)
     if cfg is None:
         return {"ok": False, "error": "config 非法：需要 command 或 url（键白名单：command/args/env/url/headers/type/transport/cwd）"}
-    err = _name_conflict(store, name)
+    if dir_id:
+        d = local_dirs.get_dir(store, dir_id)
+        if not d:
+            return {"ok": False, "error": "本地目录不存在（id=%s）" % dir_id}
+        err = _name_conflict(store, name, root=d["path"])
+    else:
+        err = _name_conflict(store, name)
     if err:
         return {"ok": False, "error": err}
-    return _write_manual(store, name, cfg, "create")
+    return _write_manual(store, name, cfg, "create", dir_id=dir_id)
 
 
 def update_manual(store, name, config=None):
@@ -323,10 +346,11 @@ def delete_manual(store, name, force=False):
                     removed_targets.append(t["name"])
         except Exception:
             continue
-    if os.path.exists(_reg_path(name)):
+    reg_file = _reg_path(name, root=_item_root(store, name))
+    if os.path.exists(reg_file):
         vroot = versions_root(name)
         os.makedirs(vroot, exist_ok=True)
-        os.rename(_reg_path(name), os.path.join(vroot, time.strftime("%Y%m%d-%H%M%S") + "-deleted"))
+        os.rename(reg_file, os.path.join(vroot, time.strftime("%Y%m%d-%H%M%S") + "-deleted"))
     with store.lock:
         store.db.execute("DELETE FROM deployments WHERE item_kind='mcp' AND item_name=?", (name,))
         store.db.execute("DELETE FROM registry_items WHERE kind=? AND name=?", (KIND, name))
@@ -364,9 +388,9 @@ def _read_tool_servers(tool):
         return {}
 
 
-def _reg_cfg(name):
+def _reg_cfg(store, name):
     """本地库条目的可比较形态（去内嵌 name）；不存在返回 None。"""
-    cur = fsutil.read_json(_reg_path(name))
+    cur = fsutil.read_json(_reg_path(name, root=_item_root(store, name)))
     if cur is None:
         return None
     cur.pop("name", None)
@@ -398,7 +422,7 @@ def tool_items(store, tool_id=None):
             else:
                 cfg = _normalize_config(dict(raw), name=name)
                 cfg.pop("name", None) if cfg else None
-                if cfg is None or cfg != _reg_cfg(name):
+                if cfg is None or cfg != _reg_cfg(store, name):
                     cur["state"] = "diff"
             cur["tools"].append(meta)
     order = {"local_only": 0, "diff": 1, "synced": 2}
@@ -428,7 +452,7 @@ def extract(store, tool_id, names):
         if cfg is None:
             out.append({"name": name, "ok": False, "error": "配置非法：缺 command 或 url"})
             continue
-        cur = _reg_cfg(name)
+        cur = _reg_cfg(store, name)
         if cur is not None:
             if cur == cfg:
                 out.append({"name": name, "ok": True, "skipped": "已与本地库一致"})
@@ -444,16 +468,91 @@ def extract(store, tool_id, names):
     return {"ok": True, "items": out}
 
 
+def sync_to_targets(store, tool_id, names, target_ids):
+    """把一个工具 MCP 配置中的 server 一键同步到其它工具（同名覆盖）。
+
+    复用「提取 + 写入」同一条资产管线：先以工具内实际配置为准收编进本地库，
+    再以 force 写到所选目标（同名 server 先备份配置后覆盖）。
+    源工具自己的目标会被剔除；返回 {ok, extracted, results}。
+    """
+    if not tool_id:
+        return {"ok": False, "error": "tool 必填"}
+    names = [str(n).strip() for n in (names or []) if str(n).strip()]
+    ids = []
+    for x in (target_ids or []):
+        try:
+            ids.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    if not names or not ids:
+        return {"ok": False, "error": "names 与 target_ids 必填"}
+    with store.lock:
+        own = {r["id"] for r in store.db.execute(
+            "SELECT id FROM targets WHERE tool=? AND kind IN ('mcp_json','mcp_toml')",
+            (tool_id,)).fetchall()}
+        valid = {r["id"] for r in store.db.execute(
+            "SELECT id FROM targets WHERE kind IN ('mcp_json','mcp_toml')").fetchall()}
+    tids = [t for t in ids if t in valid and t not in own]
+    if not tids:
+        return {"ok": False, "error": "没有可用的目标工具（源工具自身不作为目标）"}
+    ex = extract(store, tool_id, names)
+    if not ex.get("ok"):
+        return ex
+    extracted = ex.get("items") or []
+    outgoing = [x["name"] for x in extracted if x.get("ok")]
+    results = distribute_mcp(store, outgoing, tids, force=True) if outgoing else []
+    ops.log_op(store, MODULE, "tool-sync", "ok", item_kind="mcp",
+               detail={"tool": tool_id, "names": outgoing, "target_ids": tids})
+    return {"ok": True, "extracted": extracted, "results": results}
+
+
 def _config_of(item_row):
     return json.loads(item_row["meta"]) if item_row["meta"] else {}
 
 
-def _reg_path(name):
-    return os.path.join(registry_root(), name + ".json")
+def _container_root(d, kind):
+    """目录的写入根：容器目录（layout 有该 kind 的子文件夹）→ 第一个集合子文件夹；
+    普通目录 → 目录自身。避免写进容器根后扫描发现不到。"""
+    try:
+        layout = json.loads(d.get("layout") or "null") or {}
+    except Exception:
+        layout = {}
+    subs = layout.get(kind) or []
+    if subs:
+        return os.path.join(d["path"], subs[0].replace("/", os.sep))
+    return d["path"]
 
 
-def _reg_hash(name):
-    p = _reg_path(name)
+def _item_root(store, name):
+    """手动条目的落盘根：登记在本地目录（local_dirs）→ 该目录（再拼集合子文件夹）；
+    否则默认库 registry/mcp。"""
+    with store.lock:
+        row = store.db.execute(
+            "SELECT d.path AS p, r.sub_path AS sub FROM registry_items r "
+            "JOIN local_dirs d ON d.id=r.dir_id WHERE r.kind=? AND r.name=?",
+            (KIND, name)).fetchone()
+    if row and row["p"]:
+        sub = (row["sub"] or "").replace("/", os.sep)
+        return os.path.join(row["p"], sub) if sub else row["p"]
+    return registry_root()
+
+
+def _dir_root(store, dir_id):
+    """新建指定的目标目录根；dir_id 为空 → 默认库。非法目录返回 (None, 错误)。"""
+    if not dir_id:
+        return registry_root(), None
+    d = local_dirs.get_dir(store, dir_id)
+    if not d:
+        return None, "本地目录不存在（id=%s）" % dir_id
+    return d["path"], None
+
+
+def _reg_path(name, root=None):
+    return os.path.join(root or registry_root(), name + ".json")
+
+
+def _reg_hash(store, name):
+    p = _reg_path(name, root=_item_root(store, name))
     if not os.path.exists(p):
         return None
     return fsutil.sha256_file(p)
@@ -474,7 +573,7 @@ def update_registry(store, names, source_id=None, force=False):
             reg = store.db.execute("SELECT * FROM registry_items WHERE kind=? AND name=?",
                                    (KIND, name)).fetchone()
             reg = dict(reg) if reg else None
-            cur_hash = _reg_hash(name)
+            cur_hash = _reg_hash(store, name)
             if reg and cur_hash and reg["hash"] and cur_hash != reg["hash"] and not force:
                 results.append({"item": name, "status": "conflict-local-modified",
                                 "reason": "本地库中该条目已被修改（force 覆盖）"})
@@ -484,10 +583,13 @@ def update_registry(store, names, source_id=None, force=False):
             if reg and reg.get("source_hash_at") == row["source_hash"] and cur_hash == reg["hash"]:
                 results.append({"item": name, "status": "unchanged", "version": reg["version"]})
                 continue
-            # materialize: registry/mcp/<name>.json（+ 旧版快照）
+            # materialize：登记在本地目录的条目写回其目录（容器目录进集合子文件夹），
+            # 否则 registry/mcp/<name>.json（+ 旧版快照）。
+            # 此前固定写 registry_root：链接目录条目 force 更新会写错位置、之后永远 stale。
             cfg = _config_of(row)
-            os.makedirs(registry_root(), exist_ok=True)
-            dest = _reg_path(name)
+            root = _item_root(store, name) if (reg and reg.get("dir_id")) else registry_root()
+            os.makedirs(root, exist_ok=True)
+            dest = _reg_path(name, root=root)
             if os.path.exists(dest):
                 vroot = versions_root(name)
                 os.makedirs(vroot, exist_ok=True)
@@ -521,10 +623,17 @@ def rollback_registry(store, name):
     if not snaps:
         return {"ok": False, "error": "版本快照为空"}
     latest = os.path.join(vroot, snaps[-1])
-    dest = _reg_path(name)
+    dest = _reg_path(name, root=_item_root(store, name))
     if os.path.exists(dest):
-        os.rename(dest, os.path.join(vroot, time.strftime("%Y%m%d-%H%M%S") + "-pre-rollback"))
-    os.rename(latest, dest)
+        # 同秒多次回退 → -n 后缀去碰撞（shutil.move 落到已存在目录会静默嵌套，必须显式避开）
+        stamp = time.strftime("%Y%m%d-%H%M%S") + "-pre-rollback"
+        target_snap = os.path.join(vroot, stamp)
+        n = 1
+        while os.path.exists(target_snap):
+            target_snap = os.path.join(vroot, "%s.%d" % (stamp, n))
+            n += 1
+        shutil.move(dest, target_snap)
+    shutil.move(latest, dest)            # 链接目录可能在另一卷：move 自带跨设备兜底
     new_hash = fsutil.sha256_file(dest)
     new_version = None
     with store.lock:
@@ -672,7 +781,7 @@ def _section_put(data, fmt_key, name, cfg):
 
 
 def _plan_mcp_json(store, name, target, force=False):
-    cfg = fsutil.read_json(_reg_path(name))
+    cfg = fsutil.read_json(_reg_path(name, root=_item_root(store, name)))
     if cfg is None:
         return {"status": "failed", "reason": "本地库中不存在该条目"}
     # server 名由 mcpServers 下的 key 表达，内嵌 name 字段是冗余 → 写入前剔除
@@ -691,7 +800,7 @@ def _plan_mcp_json(store, name, target, force=False):
             injected = json.loads(dep["detail"]).get("injected")
         except Exception:
             injected = None
-    if existing == cfg:
+    if existing == cfg and not force:
         return {"status": "skipped", "reason": "已是最新（幂等跳过）"}
     if existing is not None:
         if injected is None and not force:
@@ -727,7 +836,7 @@ def _apply_mcp_json(store, name, target, plan):
 
 
 def _plan_mcp_toml(store, name, target, force=False):
-    cfg = fsutil.read_json(_reg_path(name))
+    cfg = fsutil.read_json(_reg_path(name, root=_item_root(store, name)))
     if cfg is None:
         return {"status": "failed", "reason": "本地库中不存在该条目"}
     path = os.path.expanduser(target["path"])
@@ -736,7 +845,7 @@ def _plan_mcp_toml(store, name, target, force=False):
         text = open(path, encoding="utf-8", errors="replace").read()
     block = _find_toml_block(text, name)
     new_block = _toml_block(name, cfg)
-    if block and block.group(0) == new_block:
+    if block and block.group(0) == new_block and not force:
         return {"status": "skipped", "reason": "已是最新（幂等跳过）"}
     # 未托管原生表检测
     native = re.search(r"^\[mcp_servers\.%s\]\s*$" % re.escape(name), text, re.MULTILINE)
@@ -795,6 +904,11 @@ def distribute_mcp(store, names, target_ids, dry_run=False, force=False):
     results = []
     targets = [t for t in list_targets(store) if t["id"] in target_ids]
     for name in names:
+        # 防穿越门禁：name 直接参与 _reg_path 拼接
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", str(name) or ""):
+            results.append({"item": name, "target": None, "target_id": None,
+                            "status": "failed", "reason": "非法条目名", "dry_run": dry_run})
+            continue
         for t in targets:
             try:
                 if t["kind"] == "mcp_json":
@@ -853,10 +967,13 @@ def catalog_view(store, source_id=None):
         items = []
         if not source_id:
             for r in store.db.execute(
-                    "SELECT * FROM registry_items WHERE kind=? AND source_id IS NULL ORDER BY name",
+                    "SELECT r.*, d.name AS dir_name FROM registry_items r "
+                    "LEFT JOIN local_dirs d ON d.id=r.dir_id "
+                    "WHERE r.kind=? AND r.source_id IS NULL ORDER BY r.name",
                     (KIND,)).fetchall():
                 items.append({"name": r["name"], "version": r["version"], "path": None,
-                              "source_hash": None, "meta": None, "source_name": "本地"})
+                              "source_hash": None, "meta": None, "source_name": "本地",
+                              "dir_id": r["dir_id"], "dir_name": r["dir_name"]})
         if source_id:
             rows = store.db.execute(
                 "SELECT i.*, s.name AS source_name FROM items i JOIN sources s ON s.id=i.source_id "
@@ -879,10 +996,10 @@ def catalog_view(store, source_id=None):
         if it.get("meta"):
             cfg = json.loads(it["meta"]) if isinstance(it["meta"], str) else it["meta"]
         elif manual and reg:
-            cfg = fsutil.read_json(_reg_path(it["name"])) or {}
+            cfg = fsutil.read_json(_reg_path(it["name"], root=_item_root(store, it["name"]))) or {}
         st = "installed" if manual and reg else "not-installed"
         if not manual and reg:
-            cur = _reg_hash(it["name"])
+            cur = _reg_hash(store, it["name"])
             if cur and reg["hash"] and cur != reg["hash"]:
                 st = "local-modified"
             elif reg.get("source_hash_at") and it["source_hash"] != reg["source_hash_at"]:
@@ -893,6 +1010,8 @@ def catalog_view(store, source_id=None):
                     "source_name": it.get("source_name") or ("本地" if manual else ""),
                     "source_id": None if manual else it.get("source_id"),
                     "manual": bool(manual),
+                    "dir_id": it.get("dir_id"),
+                    "dir_name": it.get("dir_name"),
                     "transport": cfg.get("type") or ("http" if cfg.get("url") else "stdio"),
                     "target": cfg.get("url") or (cfg.get("command", "") + " " + " ".join(cfg.get("args", []))).strip(),
                     "env_keys": sorted((cfg.get("env") or {}).keys()),
@@ -914,13 +1033,14 @@ def registry_view(store):
             {"target": d["target_name"], "target_id": d["target_id"]})
     out = []
     for r in regs:
-        cur = _reg_hash(r["name"])
-        cfg = fsutil.read_json(_reg_path(r["name"])) or {}
+        cur = _reg_hash(store, r["name"])
+        cfg = fsutil.read_json(_reg_path(r["name"], root=_item_root(store, r["name"]))) or {}
         out.append({"name": r["name"], "version": (r["version"] or "")[:12],
                     "transport": cfg.get("type") or ("http" if cfg.get("url") else "stdio"),
                     "target": cfg.get("url") or (cfg.get("command", "") + " " + " ".join(cfg.get("args", []))).strip(),
                     "env_keys": sorted((cfg.get("env") or {}).keys()),
                     "manual": r["source_id"] is None,
+                    "dir_id": r.get("dir_id"),
                     "modified": bool(cur and r["hash"] and cur != r["hash"]),
                     "deployments": dep_map.get(r["name"], [])})
     return out
@@ -929,7 +1049,7 @@ def registry_view(store):
 def item_detail(store, name):
     """条目详情：优先本地库；本地库没有（远程条目尚未「更新到本地」）时回落读源仓库缓存。"""
     from_source = False
-    cfg = fsutil.read_json(_reg_path(name))
+    cfg = fsutil.read_json(_reg_path(name, root=_item_root(store, name)))
     if cfg is None:
         with store.lock:
             row = store.db.execute(
@@ -937,7 +1057,7 @@ def item_detail(store, name):
                 (KIND, name)).fetchone()
         if not row or not row["path"]:
             return None
-        base = os.path.join(sources_root(), "%s-%d" % (KIND, row["source_id"]), row["path"])
+        base = os.path.join(_source_cache(store, row["source_id"]) or "", row["path"])
         cand = [base, os.path.join(base, "mcp.json"), os.path.join(base, name + ".json"),
                 os.path.join(base, "config.json")]
         for c in cand:
@@ -950,9 +1070,18 @@ def item_detail(store, name):
     masked = {}
     for k, v in (cfg.get("env") or {}).items():
         masked[k] = fsutil.mask_secret(v)
+    with store.lock:
+        reg_row = store.db.execute("SELECT dir_id FROM registry_items WHERE kind=? AND name=?",
+                                   (KIND, name)).fetchone()
+    dir_name = None
+    dir_id = dict(reg_row)["dir_id"] if reg_row else None
+    if dir_id:
+        d = local_dirs.get_dir(store, dir_id)
+        dir_name = d["name"] if d else None
     # 预览 = 真实写入体：env 掩码单列，内嵌 name 剔除（server 名由写入时的 key 表达）
     return {"name": name, "config": {k: v for k, v in cfg.items() if k not in ("env", "name")},
-            "env_masked": masked, "from_source": from_source}
+            "env_masked": masked, "from_source": from_source,
+            "dir_id": dir_id, "dir_name": dir_name}
 
 
 # ============================================================ HTTP routes
@@ -994,8 +1123,15 @@ def handle(store, method, path, query, body):
             src = int(src)
         else:                            # "manual" = 本地手动条目
             src = str(src)
+        dv = _q("dir")                   # 本地目录过滤："default" / 数字 id
+        if dv in (None, ""):
+            dv = None
+        elif str(dv).isdigit():
+            dv = int(dv)
+        else:
+            dv = str(dv)
         return 200, items_view(store, source=src, q=_q("q") or None,
-                               page=_q("page", 1), per_page=_q("per_page", 20))
+                               page=_q("page", 1), per_page=_q("per_page", 20), dir=dv)
     if path == PREFIX + "/catalog" and method == "GET":
         return 200, {"ok": True, "items": catalog_view(store)}
     if path == PREFIX + "/registry" and method == "GET":
@@ -1017,7 +1153,8 @@ def handle(store, method, path, query, body):
         return 200, {"ok": True, **detail}
     # ---- manual items ----
     if path == PREFIX + "/registry/item" and method == "POST":
-        return _r(create_manual(store, body.get("name"), body.get("config")))
+        return _r(create_manual(store, body.get("name"), body.get("config"),
+                                dir_id=body.get("dir_id")))
     if path.startswith(PREFIX + "/registry/item/") and method == "PUT":
         return _r(update_manual(store, path[len(PREFIX + "/registry/item/"):],
                                 body.get("config")))
@@ -1049,6 +1186,9 @@ def handle(store, method, path, query, body):
         return 200, tool_items(store, (query.get("tool") or [None])[0])
     if path == PREFIX + "/extract" and method == "POST":
         return 200, extract(store, body.get("tool"), body.get("names") or [])
+    if path == PREFIX + "/tool-sync" and method == "POST":
+        return 200, sync_to_targets(store, body.get("tool"), body.get("names") or [],
+                                    body.get("target_ids") or [])
     if path == PREFIX + "/distribute" and method == "POST":
         names = body.get("names") or []
         tids = body.get("target_ids") or []
@@ -1067,13 +1207,19 @@ def handle(store, method, path, query, body):
     return 404, {"ok": False, "error": "mcp: 未知路由 %s %s" % (method, path)}
 
 
-def items_view(store, source=None, q=None, page=1, per_page=20):
-    """统一条目列表：来源过滤 + 关键词 + 分页 + 逐目标写入状态/差异。"""
+def items_view(store, source=None, q=None, page=1, per_page=20, dir=None):
+    """统一条目列表：来源过滤 + 关键词 + 分页 + 逐目标写入状态/差异。
+
+    dir：本地目录过滤（"default" = 默认目录 / 数字 id）；仅对 manual 条目生效。
+    """
     # source 可以是数字（远程源 id）或 "manual"（本地手动条目）；其它字符串按"不过滤"处理
     if isinstance(source, str) and source.lower() in ("manual", "local"):
         cat = [it for it in catalog_view(store) if it.get("manual")]
     else:
         cat = catalog_view(store, source_id=source if isinstance(source, int) else None)
+    if dir is not None and source in ("manual", None):
+        want = None if dir == "default" else dir
+        cat = [it for it in cat if it.get("manual") and it.get("dir_id") == want]
     if q:
         cat = [it for it in cat if q.lower() in it["name"].lower()
                or q.lower() in (it.get("target") or "").lower()]
@@ -1143,7 +1289,7 @@ def _dep_stale(store, name, dep, target=None):
         return False
     # 必须用「可比较形态」（去内嵌 name）：本地库文件里存了 name，写进工具端的值不带它，
     # 直接拿原始文件比 → 永远 stale。与 tool_items 的比对口径保持一致。
-    cfg = _reg_cfg(name)
+    cfg = _reg_cfg(store, name)
     if cfg is None:
         return False
     if target is not None:

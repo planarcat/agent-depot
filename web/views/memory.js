@@ -25,7 +25,20 @@
     return t.name || tid;
   };
   const kindLabel = (it) => it.kind_label || it.kind;
-  const scopeLabel = (it) => it.scope === 'global' ? '全局' : trunc22(it.scope);
+  /**
+   * 作用域标签：全局 → 「全局」；项目 → 项目名。
+   * 项目作用域可能是路径（/Users/.../foo），也可能是工具目录 slug（-Users-planarcat-Documents-Projects--planarcat-agent-depot--p2-96a9963e）；
+   * 原实现整串截断 22 字 → 标题变成 "项目记忆 · ~Users-planarcat-Docum…"，截图里看着很旧（2026-10-20 修）
+   */
+  const scopeLabel = (it) => {
+    const raw = String(it.scope || '');
+    if (!raw || raw === 'global') return '全局';
+    if (raw.includes('/')) return raw.replace(/\/+$/, '').split('/').filter(Boolean).pop() || raw;
+    // slug：按 -- 切段，去掉结尾的 p2-<hash> 之类噪声，取剩下最后一段（= 项目名）
+    const segs = raw.split('--').map(x => x.replace(/^-+|-+$/g, '')).filter(Boolean)
+      .filter(x => !/^p\d+-[0-9a-f]{6,}$/i.test(x) && !/^[0-9a-f]{8,}$/i.test(x));
+    return (segs.pop() || raw).replace(/^[0-9a-f]{8,}$/i, '') || raw;
+  };
   const itemLabel = (it) => `${kindLabel(it)} · ${scopeLabel(it)}`;
   function trunc22(s) { s = String(s || ''); return s.length > 22 ? s.slice(0, 22) + '…' : s; }
   const tilde = (p) => String(p || '').replace(/^\/Users\/[^/]+/, '~');
@@ -127,24 +140,45 @@
       openRow.classList.remove('is-open');
       const b = openRow.querySelector('.mvi__accin'); if (b) b.innerHTML = '';
     }
-    if (wasOpen) { row.classList.remove('is-open'); M.expandedId = null; return; }
+    const cb = row.querySelector('.mvi__chk');
+    if (wasOpen) {
+      // 收起 = 取消选中（与会话/Skills/MCP 同口径，用户 2026-10-20）
+      row.classList.remove('is-open'); M.expandedId = null;
+      const curId = Number(id);
+      M.selected.delete(curId);
+      if (cb) cb.checked = false;
+      row.classList.remove('is-sel');
+      renderPanel(root);          // 右栏「写入去向」跟随已选条数
+      return;
+    }
     const it = M.items.find(x => x.id === id);
     const box = row.querySelector('.mvi__accin');
     if (box && it && !box.innerHTML.trim()) box.innerHTML = detailBody(it);
     row.classList.add('is-open');
     M.expandedId = id;
+    // 展开 = 选中该条目
+    M.selected.add(Number(id));
+    if (cb) cb.checked = true;
+    row.classList.add('is-sel');
+    renderPanel(root);            // 右栏「写入去向」跟随已选条数
+    // 正文按需加载：M.detail 是「当前展开项」的详情，换条目要重新拉（原实现从不触发 → 只有占位文案）
+    if (!M.detail || String(M.detail.id) !== String(it ? it.id : id)) loadDetail(root, it ? it.id : id);
   }
 
-  function renderAll(root) {
-    const srcs = sources();
-    const list = visibleItems();
+  function buildStats() {
     const deployed = M.items.filter(it => (it.deployments || []).length).length;
-    const stats = [
+    return [
       { n: M.items.length, label: '条目 · 全部来源' },
       { n: M.tools.length, label: '来源工具' },
       { n: deployed, label: '已写回' },
       { n: M.items.length - deployed, label: '未写回', tone: M.items.length - deployed ? 'warn' : '' },
     ];
+  }
+
+  function renderAll(root) {
+    const srcs = sources();
+    const list = visibleItems();
+    const stats = buildStats();
     const top = MV.top({
       prefix: 'mv', label: '记忆来源', sources: srcs, counts: counts(), activeId: M.selTool,
       groups: [
@@ -161,6 +195,8 @@
       q: M.q, placeholder: '搜索条目 / 路径…',
     });
 
+    HubUI.drawFrames(root);   // 卡片 + 条头 chip 的描边路径（2026-10-20）
+    MV.growIn(root);          // 重建后的块补播一次选中动效
     MV.bindGroups(root);
     MV.swap(root, M.selTool || 'all');
     // 条目行：点行就地展开 / 收起（不整块重绘；保持滚动与搜索焦点）
@@ -173,34 +209,57 @@
       if (chev) chev.onclick = (e) => { e.stopPropagation(); toggleItemRow(root, row); };
     });
 
-    // 来源切换（卡片 + 侧栏）
-    root.querySelectorAll('.tcard[data-src], .sside__it[data-src]').forEach(el => {
-      el.onclick = (e) => {
-        if (e.target.closest('[data-testid="memv-scan-all"]')) return;
-        pick(root, el.dataset.src);
-      };
-    });
     root.querySelector('[data-testid="memv-scan-all"]').onclick = e => scanAll(e.currentTarget, root);
     root.querySelectorAll('[data-gact]').forEach(b => {
       b.onclick = (e) => { e.stopPropagation(); if (b.dataset.gact.split(':')[1] === '全部扫描') scanAll(b, root); };
     });
 
-    // 侧栏（选中来源后出现）：返回全部 + 来源切换 + 单工具扫描
+    // ---- 可折叠头部（对齐 Skills 视图；用户指令 2026-10-19「整套布局与切换接到其他模块」）----
+    // 详细 = 分组卡片（MV.top）↔ 简略 = 64px chip 条（MV.chipBar）；选中来源与布局模式互相独立
     const topBox = root.querySelector('#mv-top');
-    if (topBox) topBox.hidden = !!M.selTool;
-    const side = root.querySelector('#mv-side');
-    const others = srcs.filter(s => s.id !== M.selTool);
-    side.hidden = !M.selTool;
-    if (M.selTool) {
-      side.innerHTML = MV.side({ prefix: 'mv', items: others, activeId: M.selTool, counts: counts(),
-        extra: `<div class="sside__acts">
-          <button data-testid="memv-rescan-${esc(M.selTool)}" title="扫描此来源">⟳</button></div>` });
-      side.querySelector('#mv-back').onclick = () => pick(root, null);
-      side.querySelectorAll('.sside__it').forEach(b => { b.onclick = () => pick(root, b.dataset.src); });
-      const rb = side.querySelector(`[data-testid="memv-rescan-${esc(M.selTool)}"]`);
-      if (rb && M.selTool !== NOTES_ID) rb.onclick = e => scanOne(M.selTool, e.currentTarget, root);
-      else if (rb) rb.style.display = 'none';
+    let hdr = root.querySelector('#mv-hdr');
+    if (!hdr) {
+      hdr = document.createElement('div');
+      hdr.id = 'mv-hdr';
+      hdr.className = 'hdr';
+      if (topBox && topBox.parentElement) {
+        topBox.parentElement.insertBefore(hdr, topBox);
+        hdr.appendChild(topBox);                     // 卡片区（full）
+      }
+      const bar = document.createElement('div');     // 横向条（strip）
+      bar.id = 'mv-bar';
+      bar.className = 'cbar-host';
+      hdr.appendChild(bar);
     }
+    const barHost = hdr.querySelector('#mv-bar');
+    barHost.innerHTML = MV.chipBar({
+      prefix: 'mv', items: srcs, activeId: M.selTool,
+      groups: [
+        { kind: 'local', label: '本地', ids: [NOTES_ID], actions: [] },
+        { kind: 'tool', label: '工具', ids: M.tools.map(t => t.id), actions: ['全部扫描'] },
+      ],
+    });
+    barHost.querySelectorAll('.cbar__it').forEach(b => { b.onclick = () => pick(root, b.dataset.src, false); });
+    HubUI.drawFrames(barHost);   // chip 描边路径（同会话条头，2026-10-20）
+    const back = barHost.querySelector('#mv-barback');
+    if (back) {
+      back.title = '切换到详细布局';
+      back.setAttribute('aria-label', '切换到详细布局');
+      back.onclick = () => { M._layout = 'detail'; applyLayout(root, true); };
+    }
+    // 详细卡片：点新卡片 = 选中并进简略（带过渡）；点已选卡片 = 只取消，布局不变
+    topBox.querySelectorAll('.tcard[data-src]').forEach(c => {
+      c.onclick = (e) => {
+        if (e.target.closest('[data-testid="memv-scan-all"]')) return;
+        pick(root, c.dataset.src, true);
+      };
+    });
+    // 侧栏退役：来源切换由 详细卡片 / 简略 chip 承担（与 Skills 一致）
+    const side = root.querySelector('#mv-side');
+    if (side) { side.hidden = true; side.innerHTML = ''; }
+
+    applyLayout(root, false);
+    syncSelection(root);
 
     if (M.selTool === NOTES_ID) { renderNotes(root); return; }
     renderRows(root, list, stats);
@@ -224,11 +283,15 @@
           sel: M.selected.has(it.id), open: M.expandedId === it.id,
           chipText: shortOf(it.source_tool), chipCls: chipCls(it.source_tool),
           title: itemLabel(it),
-          sub: `来源 ${nameOf(it.source_tool)} · ${(it.deployments || []).length
-                ? '已写回 ' + (it.deployments || []).map(d => nameOf(d.tool)).join(', ') : '未写回'}`,
-          meta: it.name || '',
-          pillTone: it.status === 'drifted' ? 'warn' : 'ok',
-          pillText: it.status === 'drifted' ? '源已改动' : '已同步',
+          // 副标题按 Skills 对齐：`来源 · 描述`（这里描述位放摘要/文件名）；状态胶囊按指令去掉
+          sub: `${nameOf(it.source_tool)} · ${it.name || ''}`,
+          // 行头动作按 Skills 对齐（悬停显示）：编辑 / 复制（复用展开体里的同一组处理器）
+          extra: '<span class="mvi-acts">'
+            + `<button class="hub-btn btn-sm" data-act="edit" data-testid="memv-row-edit">编辑</button>`
+            + `<button class="hub-btn btn-sm" data-act="copy" data-testid="memv-row-copy">复制</button>`
+            + `<button class="hub-btn btn-sm hub-btn--danger" data-act="del" data-testid="memv-row-del"`
+            + ' title="删除 hub 中间体（不动源文件）">删除</button>'
+            + '</span>',
           body: M.expandedId === it.id ? detailBody(it) : '',
         })).join('')
       : `<div class="hub-empty">没有记忆条目<div class="hub-empty__hint">点「全部扫描」采集各工具记忆</div></div>`;
@@ -241,13 +304,38 @@
         row.classList.toggle('is-sel', e.target.checked);
         renderPanel(root, list);
       };
+      row.querySelectorAll('.mvi-acts [data-act]').forEach(b => {
+        b.onclick = async e => {
+          e.stopPropagation();
+          if (b.dataset.act === 'del') {
+            const it = M.items.find(x => String(x.id) === String(id));
+            HubUI.confirm('删除记忆中间体', `确认删除「${esc(it ? itemLabel(it) : id)}」？<br>仅删除 hub 中间体与写回记录，工具侧源文件不动。`,
+              async () => {
+                const r = await fetch('/api/memory/item/' + encodeURIComponent(id), { method: 'DELETE' });
+                const d = await r.json().catch(() => ({}));
+                if (d.ok) {
+                  HubUI.toast('已删除', 'success');
+                  M.selected.delete(Number(id));
+                  M.expandedId = null; M.detail = null;
+                  await loadOverview(true);
+                  renderAll(root);
+                }
+                else HubUI.toast('删除失败：' + (d.error || ''), 'error');
+              }, { confirmText: '删除', danger: true });
+            return;
+          }
+          if (!row.classList.contains('is-open')) await toggle(root, id);   // 先展开拿到详情内容
+          const sel2 = b.dataset.act === 'edit' ? '[data-testid="memv-edit"]' : '[data-testid="memv-copy"]';
+          const target = document.querySelector('#mv-rows ' + sel2);
+          if (target) target.click();
+        };
+      });
       row.querySelector('.mvi__chev').onclick = e => { e.stopPropagation(); toggle(root, id); };
       row.querySelector('.mvi__head').onclick = () => toggle(root, id);
     });
     bindDetail(root);
-    root.querySelector('#mv-count').textContent = String(list.length);
     root.querySelector('#mv-info').textContent =
-      `已选 ${M.selected.size} · 显示 ${list.length} 条 · 共 ${M.selTool ? list.length : M.items.length} 条`;
+      `已选 ${M.selected.size} · 显示 ${list.length} 条 · 共 ${M.selTool ? list.length : M.items.length} 条`;   // 会话口径
     root.querySelector('#mv-selall').onclick = () => { list.forEach(i => M.selected.add(i.id)); renderAll(root); };
     root.querySelector('#mv-selinv').onclick = () => {
       list.forEach(i => M.selected.has(i.id) ? M.selected.delete(i.id) : M.selected.add(i.id)); renderAll(root);
@@ -266,7 +354,7 @@
 
   function detailBody(it) {
     const d = M.detail;
-    if (!d) return '<div class="srow__load">正在读取条目内容…</div>';
+    if (!d || (it && String(d.id) !== String(it.id))) return '<div class="srow__load">正在读取条目内容…</div>';
     const drift = d.source_changed
       ? `<div class="memv-drift-tip">源文件在扫描后被工具端改动过（hub 内容 vs 源内容已分叉）。
            <button class="hub-btn btn-sm" data-testid="memv-adopt">以此为准 · 重新采集源内容</button></div>`
@@ -344,7 +432,10 @@
 
   /* 「笔记 · 本地」：保留原 hub 记忆视图（mv-* testid 都在它里面），外面加一条返回 */
   function renderNotes(root) {
-    root.innerHTML = `
+    // 渲染进行区宿主（#mv-rows），不再整页替换 —— 可折叠头部（hdr）必须保留（2026-10-19 接入布局切换）
+    const rows = root.querySelector('#mv-rows');
+    if (!rows) return;
+    rows.innerHTML = `
       <div class="mv-notehead">
         <span>笔记 · 本地 <span class="mono-xs">hub.db + ~/.agent/hub/memory/</span></span>
         <button class="hub-btn btn-sm" id="mv-back-notes">‹ 返回记忆分发</button>
@@ -364,37 +455,33 @@
     if (!show) return;
     const targets = M.tools.filter(t => t.writable);
     const chosen = new Set([...panel.querySelectorAll('.stgt.is-on')].map(x => x.dataset.target));
+    // 统一目标选择组件（用户 2026-10-20「将这个组件应用在所有模块」）
+    const picker = MV.targetPicker({
+      prefix: 'mv',
+      emptyHint: '没有可写的工具，先在 设置 → 工具 里启用',
+      items: targets.map(t => ({ id: t.id, name: t.name, dotCls: toolColorCls(t), testid: `memv-target-${t.id}` })),
+      chosen: [...chosen],
+      selLine: `已选 <b>${n}</b> 条`,
+      selLineFn: () => `已选 <b>${n}</b> 条`,
+      goText: `写入 ${n} 条到 ${chosen.size || '…'} 个目标`,
+      goTextFn: (set) => `写入 ${n} 条到 ${set.size} 个目标`,
+      onGo: (ids) => distributeTo(ids, false, root),
+    });
     panel.innerHTML = `
       <div class="spanel__in">
-        <div class="spanel__h"><h3>写入去向</h3>
-          <button class="spanel__x" id="mv-panel-close" title="收起">×</button></div>
-        <div class="spanel__sel">已选 <b>${n}</b> 条 · 可多选目标</div>
-        <ul class="spanel__targets" data-testid="memv-targets">${targets.length ? targets.map(t => `
-          <li><button class="stgt ${chosen.has(t.id) ? 'is-on' : ''}" data-target="${esc(t.id)}"
-                     data-testid="memv-target-${esc(t.id)}">
-            <span class="stgt__dot ${toolColorCls(t)}"></span>
-            <span class="stgt__nm">${esc(t.name)}</span>
-            <span class="stgt__radio"></span>
-          </button></li>`).join('') : '<li class="stgt__none">没有可写的工具</li>'}</ul>
-        <div class="spanel__go">
-          <button class="spanel__gobtn" id="mv-go" ${targets.length ? '' : 'disabled'}>
-            写入 ${n} 条到 ${chosen.size || '…'} 个目标</button>
-          <p class="nv-note" style="padding:var(--sp-2) 0 0">不可写的工具已隐藏；项目级记忆只写回其来源工具。</p>
+        <div class="spanel__h">
+          <h3>目标</h3>
+          <button class="spanel__x" id="mv-panel-close" title="收起" aria-label="收起">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
         </div>
-        <div class="spanel__lin">
-          <h4>最近台账</h4>${MV.ledger(MV.recentLedger(['memory', 'item', 'distribute', 'adopt', 'scan'], 5))}
-        </div>
+        ${picker.html}
+        <p class="nv-note" style="padding:0 var(--sp-4) var(--sp-3)">不可写的工具已隐藏；项目级记忆只写回其来源工具。</p>
+
       </div>`;
-    panel.querySelectorAll('.stgt').forEach(b => {
-      b.onclick = () => { b.classList.toggle('is-on'); renderPanel(root, list); };
-    });
+    picker.bind(panel);   // 选中切换 / 全选·清空 / 主按钮 全部由组件接管
     panel.querySelector('#mv-panel-close').onclick = () => { M.selected.clear(); renderAll(root); };
-    const go = panel.querySelector('#mv-go');
-    if (go) go.onclick = () => {
-      const tools = [...panel.querySelectorAll('.stgt.is-on')].map(x => x.dataset.target);
-      if (!tools.length) { HubUI.toast('先在右侧选一个或多个写入目标', 'warn'); return; }
-      distributeTo(tools, false, root);
-    };
+
   }
 
   async function distributeTo(tools, force, root) {
@@ -421,10 +508,68 @@
     renderAll(root);
   }
 
-  function pick(root, id) {
-    M.selTool = (M.selTool === id) ? null : id;
+  /** 可折叠头部（对齐 Skills）：布局模式存 M._layout；animate=true 时走两帧过渡（高度钉→下一帧切类名） */
+  function applyLayout(root, animate) {
+    const hdr = root && root.querySelector('#mv-hdr');
+    if (!hdr) return;
+    const topBox = hdr.querySelector('#mv-top');
+    const compact = M._layout === 'compact';
+    if (!compact) {
+      const fullH = topBox ? topBox.scrollHeight : 0;
+      if (fullH) M._fullH = fullH;                   // compact 时卡片区绝对定位量不到，提前缓存
+    }
+    if (M._fullH) hdr.style.setProperty('--hdr-full', Math.round(M._fullH) + 'px');
+    const apply = () => {
+      hdr.style.height = '';
+      hdr.classList.toggle('is-compact', compact);
+      hdr.dataset.layout = compact ? 'compact' : 'detail';
+    };
+    if (!animate) apply();
+    else {
+      hdr.style.height = Math.round(hdr.getBoundingClientRect().height) + 'px';
+      requestAnimationFrame(() => requestAnimationFrame(apply));
+    }
+    // 详细布局左上角的切换按钮（悬停工具区才浮现；用户指令 2026-10-20）
+    if (compact) { const dt = hdr.querySelector('#mv-hdrtoggle'); if (dt) dt.hidden = true; }
+    else if (root) MV.hdrToggle(hdr, 'mv', () => { M._layout = 'compact'; applyLayout(root, true); });
+    const bar = hdr.querySelector('#mv-bar');
+    if (bar) {
+      const prevLayout = hdr.dataset.layout || '';
+      bar.hidden = !compact;
+      // 条在详细布局里是 display:none → 量不到尺寸，描边路径建不出来；显示后补建并补播一次选中动效
+      if (compact && prevLayout !== 'compact') { HubUI.drawFrames(bar); MV.growIn(bar); }
+    }
+  }
+
+  /** 选中态就地同步：详细卡片 / 简略 chip 的 is-on（不整页重绘，保住过渡动画） */
+  function syncSelection(root) {
+    const host = root || document.getElementById('view-memory');
+    if (!host) return;
+    host.querySelectorAll('#mv-top .tcard[data-src]').forEach(c => {
+      c.classList.toggle('is-on', M.selTool != null && String(c.dataset.src) === String(M.selTool));
+    });
+    host.querySelectorAll('#mv-bar .cbar__it').forEach(b => {
+      b.classList.toggle('is-on', M.selTool != null && String(b.dataset.src) === String(M.selTool));
+    });
+  }
+
+  /** 选中变化后的就地刷新：条目区（笔记特例走 renderNotes；不重建外壳以保住过渡） */
+  function syncAfterPick(root) {
+    if (M.selTool === NOTES_ID) { renderNotes(root); return; }
+    renderRows(root, visibleItems(), buildStats());
+  }
+
+  /** 选中 / 取消选中（口径对齐 Skills 视图）：
+   *  · 点已选中的 → 只取消选中，布局不变
+   *  · 详细布局里点新卡片 → 选中并进入简略布局（带过渡）
+   *  · 简略布局里点 chip → 换选中，保持简略 */
+  function pick(root, id, fromCards) {
+    const same = M.selTool != null && String(M.selTool) === String(id);
+    M.selTool = same ? null : id;
     M.expandedId = null; M.detail = null;
-    renderAll(root);
+    // 改动：点卡片只「选中来源」，不再自动进入简略布局（用户指令 2026-10-20「取消点击卡片进入简略布局」）
+    syncSelection(root);
+    syncAfterPick(root);
   }
 
   window.MemoryView = { render };

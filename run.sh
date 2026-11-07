@@ -5,6 +5,8 @@
 #   ./run.sh --open   start (if needed) and open browser window
 set -euo pipefail
 cd "$(dirname "$0")"
+# 开发启动器默认使用开发版应用目录 ~/.agent-depot-dev（正式版默认 ~/.agent-depot）
+export AGENT_DEPOT_ENV="${AGENT_DEPOT_ENV:-dev}"
 PORT="${HUB_PORT:-8317}"
 PID_FILE=".hub.pid"
 LOG_FILE=".hub.log"

@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · Skills 页四区布局（源在上 / 管理在左 / 条目在右 / 工具在下）</title>
+<style>
+:root {
+  --c-ink: #171d1f; --c-ink-2: #3c4447; --c-ink-3: #5b6669; --c-ink-4: #8a9497;
+  --c-bg: #f2f4f4; --c-surface: #f9fafa; --c-surface-2: #ffffff;
+  --c-line: #d9dedf; --c-line-soft: #e6eaeb; --c-rail: #f4f3f0;
+  --c-accent: #0d6a63; --c-accent-strong: #0a544e; --c-accent-soft: #eaf2f1;
+  --c-accent-line: #bfd6d2; --c-on-accent: #ffffff;
+  --c-err: #a03d2e; --c-err-soft: #f8ece9; --c-err-line: #f0c8bf;
+  --c-ok: #1a7f4b;
+  --c-t-agents: #4a7d8c; --c-t-claude: #d97757; --c-t-pi: #6f8a4f;
+  --c-t-wb: #4a7d8c; --c-t-zcode: #9a6b3f;
+  --fs-xs: 10px; --fs-s: 11px; --fs-md: 12px; --fs-body: 13px; --fs-m: 14px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px;
+  --tcard: 136px;
+  --r-xs: 6px; --r-s: 4px; --r-m: 8px; --r-l: 12px;
+  --t-quick: 150ms cubic-bezier(.2,.6,.3,1); --t-base: 250ms cubic-bezier(.2,.6,.3,1);
+  --sh-hover: 0 4px 12px rgba(23,29,31,.08), 0 1px 2px rgba(23,29,31,.04);
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--c-bg); color: var(--c-ink); font-family: var(--font-sans);
+  font-size: var(--fs-body); padding: var(--sp-4); }
+button { font-family: var(--font-sans); }
+.tool-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block;
+  vertical-align: -1px; }
+.dot--agents { background: var(--c-t-agents); } .dot--claude { background: var(--c-t-claude); }
+.dot--pi { background: var(--c-t-pi); } .dot--wb { background: var(--c-t-wb); }
+.dot--zcode { background: var(--c-t-zcode); }
+
+/* ==== 顶栏 ==== */
+.topbar { display: flex; align-items: center; gap: var(--sp-4); background: var(--c-surface-2);
+  border: 1px solid var(--c-line); border-radius: var(--r-l); padding: var(--sp-2) var(--sp-4); }
+.topbar b { font-size: var(--fs-l); }
+.topbar nav { display: flex; gap: var(--sp-3); color: var(--c-ink-3); }
+.topbar nav .on { color: var(--c-accent); font-weight: 600; }
+.topbar .engine { margin-left: auto; font-size: var(--fs-s); color: var(--c-ok); }
+
+/* ==== 源卡区（现状样式保留） ==== */
+.srcrow { margin-top: var(--sp-3); display: flex; gap: var(--sp-3); align-items: stretch; }
+.group { border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-surface);
+  padding: var(--sp-2); width: 170px; flex: none; display: flex; flex-direction: column; }
+.group .nm { font-weight: 600; }
+.group .meta { font-family: var(--font-mono); font-size: var(--fs-s); color: var(--c-ink-4);
+  margin: var(--sp-1) 0; }
+.group .d { font-size: var(--fs-s); color: var(--c-ink-4); line-height: 1.5; }
+.group .acts { margin-top: auto; padding-top: var(--sp-2); display: flex; flex-direction: column;
+  gap: var(--sp-1); }
+.grid { display: flex; gap: var(--sp-3); }
+
+/* ==== 卡片（目录卡与工具卡同一样式） ==== */
+.tcard { width: var(--tcard); border: 1px solid var(--c-line); border-radius: var(--r-m);
+  background: var(--c-surface-2); position: relative; cursor: pointer; padding: var(--sp-2);
+  transition: transform var(--t-quick), box-shadow var(--t-quick), opacity var(--t-base); }
+.tcard:hover { transform: translateY(-2px); box-shadow: var(--sh-hover); z-index: 5; }
+.tcard.is-focus { box-shadow: 0 0 0 2px var(--c-accent); }
+.tcard.is-lit { box-shadow: 0 0 0 1.5px var(--c-accent); transform: translateY(-2px); }
+.tcard.is-dim { opacity: .35; }
+.cnt { display: inline-flex; min-width: 28px; height: 28px; border-radius: var(--r-xs);
+  border: 1px solid var(--c-line); background: var(--c-surface);
+  align-items: center; justify-content: center; font-family: var(--font-mono);
+  font-size: var(--fs-md); font-weight: 600; color: var(--c-accent); }
+.cnt.ink { color: var(--c-ink-2); }
+.chip { width: 44px; height: 44px; border-radius: var(--r-m); margin: var(--sp-2) auto 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: var(--fs-m); font-weight: 600; }
+.chip.ve { background: var(--c-t-claude); }
+.chip.agents { background: var(--c-t-agents); }
+.chip.claude { background: var(--c-t-claude); }
+.chip.pi { background: var(--c-t-pi); }
+.chip.wb { background: var(--c-t-wb); }
+.chip.zc { background: var(--c-t-zcode); }
+.tnm { font-size: var(--fs-body); font-weight: 600; text-align: center; margin-top: var(--sp-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tcard__tag { position: absolute; left: var(--sp-2); bottom: var(--sp-1);
+  display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap;
+  font-size: var(--fs-s); font-weight: 600; color: var(--c-accent); }
+.tcard__tag .tool-dot { width: 7px; height: 7px; }
+.tcard__tag .plus { color: var(--c-ink-4); font-weight: 400; }
+.instbtn { position: absolute; right: var(--sp-2); bottom: var(--sp-1); display: none;
+  border: 0; background: var(--c-accent); color: var(--c-on-accent);
+  border-radius: var(--r-xs); font-size: var(--fs-s); padding: 3px 9px; cursor: pointer;
+  font-family: var(--font-sans); animation: dpop 260ms cubic-bezier(.34,1.56,.64,1); }
+.instbtn.is-in { display: inline-flex; align-items: center; }
+.instbtn:hover { background: var(--c-accent-strong); }
+@keyframes dpop { from { opacity: 0; transform: scale(.85); } }
+
+/* ==== 统计条 ==== */
+.stats { display: flex; gap: var(--sp-4); margin: var(--sp-3) 0; align-items: center; }
+.stats b { font-size: 16px; margin-right: 4px; }
+.stats .muted { color: var(--c-ink-3); }
+.stats .tip { margin-left: auto; color: var(--c-ink-4); font-size: var(--fs-s); }
+
+/* ==== 主区：左管理 + 右条目 ==== */
+.main { display: flex; gap: var(--sp-3); align-items: flex-start; }
+.focus { width: 300px; flex: none; border: 1px solid var(--c-line); border-radius: var(--r-l);
+  background: var(--c-surface-2); padding: var(--sp-3); min-height: 300px; }
+.focus h3 { font-size: var(--fs-m); margin-bottom: var(--sp-1); }
+.focus .p { font-size: var(--fs-s); color: var(--c-ink-4); font-family: var(--font-mono);
+  margin-bottom: var(--sp-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.focus .sec { font-size: var(--fs-s); font-weight: 600; color: var(--c-ink-3);
+  margin: var(--sp-2) 0 var(--sp-1); }
+.focus .hint { color: var(--c-ink-4); font-size: var(--fs-body); line-height: 1.6; }
+.list { flex: 1; min-width: 0; }
+.search { border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-surface-2);
+  padding: var(--sp-2) var(--sp-3); color: var(--c-ink-4); margin-bottom: var(--sp-2); }
+.item { border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-surface-2);
+  padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-2); display: flex; gap: var(--sp-2); }
+.item.sel { box-shadow: var(--sh-active); }
+.item .chk { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--c-line);
+  flex: none; margin-top: 2px; cursor: pointer; display: flex; align-items: center;
+  justify-content: center; color: transparent; font-size: var(--fs-xs); }
+.item.sel .chk { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+.item .chip2 { flex: none; width: 30px; height: 30px; border-radius: var(--r-xs); background: #3c4447;
+  color: #fff; font-size: var(--fs-s); font-weight: 600; display: flex; align-items: center;
+  justify-content: center; margin-top: 2px; }
+.item .mid { flex: 1; min-width: 0; }
+.item .ttl { font-size: var(--fs-m); font-weight: 600; }
+.item .sb { color: var(--c-ink-3); font-size: var(--fs-body); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.follows { display: flex; align-items: center; gap: var(--sp-1); margin-top: var(--sp-1);
+  flex-wrap: wrap; }
+.follows .lbl { font-size: var(--fs-xs); color: var(--c-ink-4); }
+.fdot { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--c-line);
+  border-radius: 999px; padding: 1px 7px 1px 5px; font-size: var(--fs-xs); color: var(--c-ink-2);
+  background: var(--c-surface); cursor: pointer; position: relative;
+  animation: pin 260ms cubic-bezier(.34,1.56,.64,1); }
+@keyframes pin { from { opacity: 0; transform: scale(.8); } }
+.fdot:hover { border-color: var(--c-err-line); color: var(--c-err); }
+.fdot:hover::after { content: " 移除跟随"; }
+.fdot .via { color: var(--c-ink-4); font-size: 9px; }
+.foot { display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-2);
+  font-size: var(--fs-s); color: var(--c-ink-3); }
+
+/* ==== 下方工具卡区 ==== */
+.toolsrow { margin-top: var(--sp-4); }
+.toolsrow .rl { font-size: var(--fs-s); font-weight: 600; color: var(--c-ink-3);
+  margin-bottom: var(--sp-2); }
+.toolsrow .rl small { color: var(--c-ink-4); font-weight: 400; }
+
+/* ==== toast ==== */
+.toast { position: fixed; right: var(--sp-5); bottom: var(--sp-5); z-index: 90;
+  background: var(--c-surface-2); border-radius: var(--r-m); box-shadow: var(--sh-float);
+  padding: var(--sp-2) var(--sp-3); font-size: var(--fs-body); display: none; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <b>Agent Depot</b>
+  <nav><span>会话</span><span>记忆</span><span class="on">Skills</span><span>MCP</span><span>台账</span><span>统计</span><span>设置</span></nav>
+  <span class="engine">引擎 casr · 已连接</span>
+</div>
+
+<!-- 源卡区（现状保留：本地目录 + 远程仓库） -->
+<div class="srcrow">
+  <div class="group">
+    <div class="nm">本地</div>
+    <div class="meta">3 源 · 52 条</div>
+    <div class="d">默认目录 + 已链接目录；目录内条目变化实时同步</div>
+    <div class="acts"><button class="btn">目录管理</button><button class="btn">新建</button><button class="btn">导入</button></div>
+  </div>
+  <div class="grid" id="dircards"></div>
+  <div class="group">
+    <div class="nm">远程仓库</div>
+    <div class="meta">1 源 · 9 条</div>
+    <div class="d">Git 仓库拉取，只读跟随上游</div>
+    <div class="acts"><button class="btn">添加仓库</button><button class="btn">全部拉取</button></div>
+  </div>
+  <div class="grid" id="repocards"></div>
+</div>
+
+<div class="stats">
+  <span><b>61</b>条目 · 全部来源</span><span class="muted"><b>52</b>本地</span>
+  <span><b>10</b>远程拉取</span><span><b>88</b>已部署到工具</span><span class="muted"><b>394</b>待更新 / 待安装</span>
+  <span class="tip">点目录卡 = 选中源并过滤右侧条目 · 点工具卡 = 管理该工具的接入与安装</span>
+</div>
+
+<!-- 主区：左 = 聚焦管理面板；右 = 条目列表 -->
+<div class="main">
+  <div class="focus" id="focus"></div>
+  <div class="list">
+    <div class="search">搜索条目…</div>
+    <div id="items"></div>
+    <div class="foot"><span>已选 <b id="seln">0</b></span><span>显示 <span id="shown">7</span> 条</span><span>共 <span id="total">10</span> 条</span></div>
+  </div>
+</div>
+
+<!-- 工具卡区（下方 · 样式同目录卡） -->
+<div class="toolsrow">
+  <div class="rl">工具目标 <small>样式同目录卡 · 勾选条目后点卡片上的「安装」即装；点卡片本体 = 管理该工具</small></div>
+  <div class="grid" id="toolcards"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ==== 数据 ==== */
+const DIRS = [
+  { id: 'd-def', name: '默认目录', n: 16, chip: '默认', binds: [] },
+  { id: 'd-ag', name: 'agent-skills', n: 17, chip: 'AG', binds: ['pi'] },
+  { id: 'd-li', name: 'lingchuang-skills', n: 11, chip: 'LI', binds: ['pi'] },
+];
+const REPOS = [
+  { id: 'r-ve', name: 'Vercel Skills', n: 9, chip: 'VE', dot: '', binds: ['agents'] },
+];
+const TOOLS = [
+  { id: 'agents', name: 'Agents', chipCls: 'agents', dot: 'dot--agents', path: '~/.agents/skills 共享' },
+  { id: 'claude', name: 'Claude Code', chipCls: 'claude', dot: 'dot--claude', path: '~/.claude/skills' },
+  { id: 'pi', name: 'Pi-Agent', chipCls: 'pi', dot: 'dot--pi', path: '~/.pi/agent/skills' },
+  { id: 'workbuddy', name: 'WorkBuddy', chipCls: 'wb', dot: 'dot--wb', path: '~/.workbuddy/skills' },
+  { id: 'zcode', name: 'ZCode', chipCls: 'zc', dot: 'dot--zcode', path: '~/.zcode/skills' },
+];
+const ITEMS = [
+  { id: 'i1', dir: 'd-ag', name: 'agent-html-skills', desc: '单文件 HTML 产物工具集（19 个子技能收编自 f-labs-io/agent-html-skills, MIT）…' },
+  { id: 'i2', dir: 'd-ag', name: 'api-snapshot', desc: '接口调用快照留存。测试、验证、排查、需求查证时…' },
+  { id: 'i3', dir: 'd-ag', name: 'capturing-takeaways', desc: '把当前对话里值得长期记住的结论沉淀进知识库…' },
+  { id: 'i4', dir: 'd-ag', name: 'change-advice', desc: '当用户说「告诉我怎么改」…给出修改方案、改动点和风险分析…' },
+  { id: 'i5', dir: 'd-ag', name: 'design-guardrails', desc: 'Mandatory design guardrails for any UI work…' },
+  { id: 'i6', dir: 'd-ag', name: 'development-guardrails', desc: 'Mandatory guardrails before editing source code…' },
+  { id: 'i7', dir: 'd-ag', name: 'full-code-review', desc: '代码审查（智能分级 L0–L3）+ 改后收尾…' },
+  { id: 'i8', dir: 'd-def', name: 'scratch-note', desc: '默认目录里的临时条目…' },
+];
+/* 手动安装/跟随（条目×工具，一次性快照升级为跟随前的旧语义也记在此） */
+let MANUAL = [
+  { item: 'i1', tool: 'agents' },
+];
+const T = id => TOOLS.find(t => t.id === id);
+const D = id => DIRS.find(d => d.id === id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(m) { const t = document.getElementById('toast');
+  t.textContent = m; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 2600); }
+
+/* 状态 */
+let selDir = null, selTool = null;
+const CHECKED = new Set();
+
+/* 派生：条目的跟随（经目录 + 手动） */
+function followsOf(item) {
+  const it = ITEMS.find(x => x.id === item);
+  const out = (D(it.dir).binds || []).map(tid => ({ tool: tid, via: 'dir' }));
+  MANUAL.filter(m => m.item === item).forEach(m => {
+    if (!out.find(o => o.tool === m.tool)) out.push({ tool: m.tool, via: 'manual' });
+  });
+  return out;
+}
+function toolItemCount(tid) {
+  let n = 0;
+  DIRS.forEach(d => { if ((d.binds || []).includes(tid)) n += d.n; });
+  n += MANUAL.filter(m => m.tool === tid).length;
+  return n;
+}
+
+/* ==== 渲染：源卡区 ==== */
+function renderSrc() {
+  document.getElementById('dircards').innerHTML = DIRS.map(d => {
+    const dots = (d.binds || []).map(tid => `<span class="tool-dot ${T(tid).dot}"></span>`).join('');
+    const cls = selDir === d.id ? 'is-focus' : (selTool && (d.binds || []).includes(selTool) ? 'is-lit' : '');
+    return `<div class="tcard ${cls}" data-focus="dir:${d.id}">
+      <span class="cnt">${d.n}</span>
+      <div class="chip">${d.chip}</div>
+      <div class="tnm">${d.name}</div>
+      ${(d.binds || []).length ? `<span class="tcard__tag"><span class="arr">→</span>${dots}</span>` : ''}
+    </div>`;
+  }).join('');
+  document.getElementById('repocards').innerHTML = REPOS.map(r => {
+    const dots = (r.binds || []).map(tid => `<span class="tool-dot ${T(tid).dot}"></span>`).join('');
+    const cls = selTool && (r.binds || []).includes(selTool) ? 'is-lit' : '';
+    return `<div class="tcard ${cls}" data-focus="src:${r.id}">
+      <span class="cnt ink">${r.n}</span>
+      <div class="chip ve">${r.chip}</div>
+      <div class="tnm">${r.name}</div>
+      ${(r.binds || []).length ? `<span class="tcard__tag"><span class="back">⇐</span>${dots}</span>` : ''}
+    </div>`;
+  }).join('');
+  wireCards();
+}
+
+/* ==== 渲染：工具卡区（下方，样式同目录卡） ==== */
+function renderTools() {
+  const hasSel = CHECKED.size > 0;
+  document.getElementById('toolcards').innerHTML = TOOLS.map(t => {
+    const n = toolItemCount(t.id);
+    const boundSrcs = [
+      ...DIRS.filter(d => (d.binds || []).includes(t.id)).map(d => ({ name: d.name, dot: '' })),
+      ...[...new Set(MANUAL.filter(m => m.tool === t.id).map(m => ITEMS.find(i => i.id === m.item).dir))]
+        .map(did => ({ name: D(did).name, dot: '' })),
+    ];
+    const dots = boundSrcs.slice(0, 3).map(s => `<span class="tool-dot ${s.dot || 'dot--agents'}" style="opacity:.55"></span>`).join('');
+    const cls = selTool === t.id ? 'is-focus'
+      : (selDir && (D(selDir).binds || []).includes(t.id) ? 'is-lit' : '');
+    const inst = hasSel
+      ? `<button class="instbtn is-in" data-inst="${t.id}">安装 ${CHECKED.size} 条</button>` : '';
+    return `<div class="tcard ${cls}" data-focus="tool:${t.id}">
+      <span class="cnt ink">${n}</span>
+      <div class="chip ${t.chipCls}">${t.name.slice(0, 2).toUpperCase()}</div>
+      <div class="tnm">${t.name}</div>
+      ${boundSrcs.length ? `<span class="tcard__tag"><span class="back">⇐</span>${dots}</span>` : ''}
+      ${inst}
+    </div>`;
+  }).join('');
+  document.querySelectorAll('[data-inst]').forEach(b => b.onclick = (e) => {
+    e.stopPropagation();
+    const tid = b.dataset.inst;
+    CHECKED.forEach(it => {
+      if (!MANUAL.find(m => m.item === it && m.tool === tid)) MANUAL.push({ item: it, tool: tid });
+    });
+    toast(`已安装 ${CHECKED.size} 条到 ${T(tid).name}（一次性快照）`);
+    renderTools(); renderItems(); renderFocus();
+  });
+  wireCards();
+}
+
+/* ==== 渲染：条目列表 ==== */
+function renderItems() {
+  const host = document.getElementById('items');
+  const visible = ITEMS.filter(it => !selDir || it.dir === selDir);
+  document.getElementById('shown').textContent = visible.length;
+  document.getElementById('total').textContent = ITEMS.length;
+  host.innerHTML = visible.map(it => {
+    const sel = CHECKED.has(it.id);
+    const fs = followsOf(it.id);
+    const fol = fs.map(f => {
+      const viaDir = f.via === 'dir';
+      const dname = viaDir ? D(it.dir).name : '';
+      return `<span class="fdot" ${viaDir ? `title="经目录 ${dname} 整源跟随（在目录管理中调整）"` : `title="单条跟随 · 悬停移除"`} data-u="${it.id}|${f.tool}|${f.via}">
+        <span class="tool-dot ${T(f.tool).dot}"></span>${T(f.tool).name}${viaDir ? '<span class="via">经目录</span>' : ''}</span>`;
+    }).join('');
+    const add = `<button class="fdot" style="border-style:dashed;border-color:var(--c-accent-line);color:var(--c-accent);background:transparent" data-a="${it.id}">＋ 跟随</button>`;
+    const focusLit = selTool && fs.find(f => f.tool === selTool) ? 'sel' : '';
+    return `<div class="item ${sel ? 'sel' : ''} ${focusLit}">
+      <span class="chk" data-chk="${it.id}">${sel ? '✓' : ''}</span>
+      <span class="chip2">${it.dir === 'd-ag' ? 'AG' : 'DF'}</span>
+      <div class="mid">
+        <div class="ttl">${it.name}</div>
+        <div class="sb">${it.dir === 'd-ag' ? 'agent-skills' : '默认目录'} · ${esc(it.desc)}</div>
+        <div class="follows"><span class="lbl">跟随</span>${fol}${add}</div>
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('seln').textContent = CHECKED.size;
+  host.querySelectorAll('[data-chk]').forEach(c => c.onclick = () => {
+    const id = c.dataset.chk;
+    CHECKED.has(id) ? CHECKED.delete(id) : CHECKED.add(id);
+    renderItems(); renderTools(); renderFocus();
+  });
+  host.querySelectorAll('[data-a]').forEach(b => b.onclick = (e) => {
+    e.stopPropagation();
+    const it = b.dataset.a;
+    const fs = followsOf(it);
+    if (fs.length) { toast('该条目已在跟随中 · 悬停跟随点可移除'); return; }
+    // 单条跟随默认加到 Pi-Agent（演示）；实际由浮层选择
+    MANUAL.push({ item: it, tool: 'pi' });
+    toast(`已跟随 → Pi-Agent（持续自动同步）`);
+    renderItems(); renderTools();
+  });
+  host.querySelectorAll('[data-u]').forEach(x => x.onclick = (e) => {
+    e.stopPropagation();
+    const [item, tool, via] = x.dataset.u.split('|');
+    if (via === 'dir') { toast('整源跟随：请在目录管理中调整'); return; }
+    MANUAL = MANUAL.filter(m => !(m.item === item && m.tool === tool));
+    renderItems(); renderTools();
+  });
+}
+
+/* ==== 渲染：左管理面板 ==== */
+function renderFocus() {
+  const host = document.getElementById('focus');
+  if (selDir) {
+    const d = D(selDir);
+    const bs = (d.binds || []).map(tid => T(tid));
+    const un = TOOLS.filter(t => !(d.binds || []).includes(t.id));
+    host.innerHTML = `
+      <h3>目录 · ${d.name}</h3>
+      <div class="p">${d.n} 个 skill · 点亮下方已连接的工具</div>
+      <div class="sec">整源跟随（绑定）</div>
+      ${bs.map(t => `<div class="frow" style="border:1px solid var(--c-line-soft);border-radius:var(--r-xs);padding:var(--sp-1) var(--sp-2)">
+          <span class="tool-dot ${t.dot}"></span><span class="nm" style="flex:1">${t.name}</span>
+          <span class="st" style="font-size:var(--fs-xs);color:var(--c-ok)">● 跟随中</span>
+          <button class="btn sm danger" data-unbind="${t.id}">断开</button></div>`).join('')
+        || '<div class="note" style="color:var(--c-ink-4);font-size:var(--fs-s)">尚未连接工具</div>'}
+      <div class="sec">连接更多工具</div>
+      <div class="pills" style="display:flex;gap:var(--sp-1);flex-wrap:wrap">
+        ${un.map(t => `<button class="btn sm" data-bind="${t.id}" style="width:auto">＋ ${t.name}</button>`).join('')}
+      </div>
+      <div class="sec">说明</div>
+      <div class="hint">整源跟随：目录内全部条目（含新增）自动同步到该工具；右侧条目的「经目录」跟随点由此产生。</div>`;
+    host.querySelectorAll('[data-bind]').forEach(b => b.onclick = () => {
+      (d.binds = d.binds || []).push(b.dataset.bind);
+      toast(`已连接 → ${T(b.dataset.bind).name} · 全量同步 ${d.n} 个 skill`);
+      renderAll();
+    });
+    host.querySelectorAll('[data-unbind]').forEach(b => b.onclick = () => {
+      d.binds = d.binds.filter(x => x !== b.dataset.unbind);
+      toast(`已断开 ⇄ ${T(b.dataset.unbind).name}（文件保留）`);
+      renderAll();
+    });
+    return;
+  }
+  if (selTool) {
+    const t = T(selTool);
+    const srcs = DIRS.filter(d => (d.binds || []).includes(t.id));
+    const folItems = ITEMS.filter(it => followsOf(it.id).find(f => f.tool === t.id));
+    const pending = [...CHECKED];
+    host.innerHTML = `
+      <h3>工具 · ${t.name}</h3>
+      <div class="p">${t.path}</div>
+      <div class="sec">已接入的源（整源跟随）</div>
+      ${srcs.map(d => `<div class="frow" style="border:1px solid var(--c-line-soft);border-radius:var(--r-xs);padding:var(--sp-1) var(--sp-2)">
+          <span class="nm" style="flex:1">${d.name}</span><span class="badge">${d.n} skill</span>
+          <button class="btn sm danger" data-unsrc="${d.id}">断开</button></div>`).join('')
+        || '<div class="note" style="color:var(--c-ink-4);font-size:var(--fs-s)">尚未接入源</div>'}
+      ${srcs.length ? `<button class="btn sm" style="width:auto;margin-top:var(--sp-1)" data-addsrc="1">＋ 接入源</button>` : ''}
+      <div class="sec">跟随中的条目（${folItems.length}）</div>
+      <div style="font-size:var(--fs-s);color:var(--c-ink-2);line-height:1.8">${folItems.map(i => '· ' + i.name).join('<br>') || '—'}</div>
+      ${CHECKED.size ? `<div class="sec">待安装</div>
+        <button class="btn primary" style="width:100%" data-inst2="1">安装 ${CHECKED.size} 条到此工具</button>` : ''}`;
+    host.querySelectorAll('[data-unsrc]').forEach(b => b.onclick = () => {
+      const d = D(b.dataset.unsrc);
+      d.binds = (d.binds || []).filter(x => x !== t.id);
+      toast(`已断开 ${d.name} ⇄ ${t.name}（文件保留）`); renderAll();
+    });
+    const add = host.querySelector('[data-addsrc]');
+    if (add) add.onclick = () => {
+      const un = DIRS.filter(d => !(d.binds || []).includes(t.id));
+      if (!un.length) { toast('所有目录都已接入'); return; }
+      un[0].binds = un[0].binds || [];
+      un[0].binds.push(t.id);
+      toast(`已接入 ${un[0].name} · 全量同步 ${un[0].n} 个 skill`); renderAll();
+    };
+    const inst2 = host.querySelector('[data-inst2]');
+    if (inst2) inst2.onclick = () => {
+      CHECKED.forEach(it => {
+        if (!MANUAL.find(m => m.item === it && m.tool === t.id)) MANUAL.push({ item: it, tool: t.id });
+      });
+      toast(`已安装 ${CHECKED.size} 条到 ${t.name}`); renderAll();
+    };
+    return;
+  }
+  const totalFollows = ITEMS.reduce((n, it) => n + followsOf(it.id).length, 0);
+  host.innerHTML = `
+    <h3>连接总览</h3>
+    <div class="hint">
+      · 点<b>上方目录卡</b>：选中源、过滤右侧条目、点亮已连接的工具<br>
+      · 点<b>下方工具卡</b>：管理该工具的接入源与跟随条目<br>
+      · <b>勾选条目</b>后，工具卡上出现「安装 N 条」按钮<br>
+      · 当前跟随关系：<b>${totalFollows}</b> 条
+    </div>`;
+}
+
+/* ==== 事件与装配 ==== */
+function wireCards() {
+  document.querySelectorAll('[data-focus]').forEach(c => c.onclick = (e) => {
+    if (e.target.closest('.instbtn')) return;
+    const [kind, id] = c.dataset.focus.split(':');
+    if (kind === 'dir') { selDir = (selDir === id) ? null : id; selTool = null; }
+    else { selTool = (selTool === id) ? null : selTool; selDir = null; }
+    renderAll();
+  });
+}
+function renderAll() { renderSrc(); renderTools(); renderItems(); renderFocus(); }
+wireCards();
+renderSrc(); renderTools(); renderItems(); renderFocus();
+</script>
+</body>
+</html>

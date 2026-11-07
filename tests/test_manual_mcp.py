@@ -113,5 +113,66 @@ class McpManualItems(unittest.TestCase):
         shutil.rmtree(TMP, ignore_errors=True)
 
 
+class McpLocalDirs(unittest.TestCase):
+    """MCP 条目建进链接目录：落盘位置 / 重名拦截 / 与默认库互不可见（2026-10-31 口径）。
+
+    创建目录已取消（FIGMA_OVERRIDES #39）：目录一律来自链接磁盘已有文件夹。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.store = Store()
+        schema.ensure(cls.store)
+        from hub.core import local_dirs as LD
+        cls.LD = LD
+        root = os.path.join(TMP, "mcp-dir-root")
+        os.makedirs(root, exist_ok=True)
+        r = LD.link_dir(cls.store, root, "mcp-dir")
+        assert r["ok"], r
+        cls.dir_id = r["id"]
+        cls.dir_root = root
+
+    def test_o01_create_into_dir(self):
+        r = M.create_manual(self.store, "dir-mcp", {"command": "node", "args": ["x"]},
+                            dir_id=self.dir_id)
+        self.assertTrue(r["ok"], r)
+        dpath = os.path.join(self.dir_root, "dir-mcp.json")
+        self.assertTrue(os.path.isfile(dpath))
+        self.assertFalse(os.path.exists(os.path.join(M.registry_root(), "dir-mcp.json")))
+        reg = self.store.db.execute(
+            "SELECT dir_id FROM registry_items WHERE kind='mcp' AND name='dir-mcp'").fetchone()
+        self.assertEqual(reg["dir_id"], self.dir_id)
+        # 目录过滤：dir=<id> 可见、default 不可见
+        v = M.items_view(self.store, source="manual", dir=self.dir_id)
+        self.assertIn("dir-mcp", [it["name"] for it in v["items"]])
+        vd = M.items_view(self.store, source="manual", dir="default")
+        self.assertNotIn("dir-mcp", [it["name"] for it in vd["items"]])
+        # 编辑保持原目录（不换落点）
+        r2 = M.update_manual(self.store, "dir-mcp", {"command": "node2"})
+        self.assertTrue(r2["ok"], r2)
+        self.assertTrue(os.path.isfile(dpath))
+        # 与默认库重名拦截（自建默认库条目，不跨类依赖执行顺序）
+        self.assertTrue(M.create_manual(self.store, "o1-default", {"command": "x"})["ok"])
+        r3 = M.create_manual(self.store, "o1-default", {"command": "x"}, dir_id=self.dir_id)
+        self.assertFalse(r3["ok"])
+
+    def test_o02_scan_registers_mcp_json(self):
+        """链接目录里的一级合法 mcp json 自动登记；非法/非 dict 跳过。"""
+        root = os.path.join(TMP, "mcp-ext")
+        os.makedirs(root, exist_ok=True)
+        with open(os.path.join(root, "ext-mcp.json"), "w") as f:
+            json.dump({"command": "npx", "args": ["-y", "p"]}, f)
+        with open(os.path.join(root, "bad.json"), "w") as f:
+            f.write("[]")
+        r = self.LD.link_dir(self.store, root, "mcp-ext")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["added"], 1, r)
+        cat = M.catalog_view(self.store)
+        row = [x for x in cat if x["name"] == "ext-mcp"][0]
+        self.assertTrue(row["manual"])
+        self.assertEqual(row["dir_name"], "mcp-ext")
+        self.assertEqual(row["transport"], "stdio")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -225,14 +225,24 @@ const failures = () => results.filter(r => !r.ok);
   });
 
   S('long-title-no-overflow', async () => {
-    // v0.8：会话行标题在 .srow__ti（列表行内，旧 .nv-name 随三栏布局一并重命名）
+    // 先回到会话页：上一条用例可能停在记忆/设置页，页面宽度会被那些页面的边框/面板影响，
+    // 让这条断言依赖了无关状态（曾因此报 1482 的 2px 溢出）
+    await click('[data-testid="nav-sessions"]');
+    await waitFor(`!!document.querySelector('[data-testid="row"]')`, 6000, '会话列表');
+    // v0.8：会话行标题在 .mvi__title（列表行内，旧 .nv-name 随三栏布局一并重命名）
     await evaluate(`(() => {
-      const t = document.querySelector('[data-testid="row"] .srow__ti');
+      const t = document.querySelector('[data-testid="row"] .mvi__title');
       if (!t) throw new Error('no session title node');
       t.textContent = '这是一个非常非常非常长的会话标题用来测试省略号与不换行约束在窄屏下的表现'.repeat(3);
     })()`);
     const overflow = await evaluate(`document.documentElement.scrollWidth`);
-    if (overflow > 1481) throw new Error('横向溢出: ' + overflow);
+    if (overflow > 1481) {
+      const who = await evaluate(`JSON.stringify({client:document.documentElement.clientWidth,
+        offenders:[...document.querySelectorAll('body *')].filter(e=>{const r=e.getBoundingClientRect();
+          return r.right > document.documentElement.clientWidth+0.5;})
+          .slice(0,4).map(e=>e.tagName+'.'+String(e.className).slice(0,36)+' right='+Math.round(e.getBoundingClientRect().right))})`);
+      throw new Error('横向溢出: ' + overflow + ' · ' + who);
+    }
     await shot('sandbox-long-title.png');
     return '长标题省略正常，无溢出';
   });

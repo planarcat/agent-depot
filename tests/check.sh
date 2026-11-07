@@ -23,6 +23,9 @@ echo; echo "========== 1/4 lint 基线（样式规则，见 tests/lint_styles.py
 python3 scripts/lint_baseline.py || FAIL=1
 echo; echo "========== 2/4 API 集成测试（沙箱隔离） =========="
 python3 tests/test_hub.py 2>&1 | tail -4 || FAIL=1
+echo; echo "========== 2.5/4 行为规格套件（黑盒 HTTP，Rust 切换闸门） =========="
+python3 -m unittest discover -s tests/spec -p "spec_*.py" 2>&1 | tail -3 || FAIL=1
+python3 tests/spec/_matrix.py || FAIL=1
 echo; echo "========== 3/4 模块集成 + 门禁自测（Skills + MCP + Manual + Extras + Watcher + lint 基线） =========="
 run_suite tests/test_skills.py
 run_suite tests/test_mcp.py

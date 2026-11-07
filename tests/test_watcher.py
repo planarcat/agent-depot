@@ -204,7 +204,9 @@ class WatcherServerRootsTest(unittest.TestCase):
             self.assertTrue(any(k.startswith("tool:") for k in roots))
             self.assertIn("memory:hub", roots)
             for scope, paths in roots.items():
-                self.assertTrue(scope.startswith(("tool:", "memory:")), scope)
+                # 口径（2026-10-17）：新增 hub:sources / hub:registry —— 源仓库缓存与本地条目库，
+                # 在应用外 git pull / 手改 SKILL.md 也要能触发刷新。
+                self.assertTrue(scope.startswith(("tool:", "memory:", "hub:")), scope)
                 self.assertTrue(paths)
         finally:
             hub_server.WATCHER and hub_server.WATCHER.stop()

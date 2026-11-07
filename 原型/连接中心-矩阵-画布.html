@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 连接中心（源 ⇄ 工具 绑定矩阵）</title>
+<style>
+:root {
+  --c-ink: #171d1f; --c-ink-2: #3c4447; --c-ink-3: #5b6669; --c-ink-4: #8a9497;
+  --c-bg: #f2f4f4; --c-surface: #f9fafa; --c-surface-2: #ffffff;
+  --c-line: #d9dedf; --c-line-soft: #e6eaeb; --c-rail: #f4f3f0;
+  --c-accent: #0d6a63; --c-accent-strong: #0a544e; --c-accent-soft: #eaf2f1;
+  --c-accent-line: #bfd6d2; --c-on-accent: #ffffff;
+  --c-err: #a03d2e; --c-err-soft: #f8ece9; --c-err-line: #f0c8bf;
+  --c-ok: #1a7f4b; --c-warn: #8a6d1f; --c-warn-soft: #f6f1e2;
+  --c-t-claude: #d97757; --c-t-codex: #171d1f; --c-t-opencode: #7c5cff;
+  --c-t-p4: #4a7d8c; --c-t-p5: #9a6b3f; --c-t-p6: #6f8a4f; --c-t-p7: #a35d7a;
+  --fs-xs: 10px; --fs-s: 11px; --fs-md: 12px; --fs-body: 13px; --fs-m: 14px;
+  --fs-l: 16px; --fs-xl: 20px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+  --r-xs: 6px; --r-s: 4px; --r-m: 8px; --r-l: 12px;
+  --t-quick: 150ms cubic-bezier(.2,.6,.3,1); --t-base: 250ms cubic-bezier(.2,.6,.3,1);
+  --sh-hover: 0 4px 12px rgba(23,29,31,.08); --sh-float: 0 12px 32px rgba(23,29,31,.14);
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--c-bg); color: var(--c-ink); font-family: var(--font-sans);
+  font-size: var(--fs-body); padding: var(--sp-5); }
+h1 { font-size: var(--fs-xl); font-weight: 600; }
+.sub { color: var(--c-ink-3); margin-top: var(--sp-1); }
+.note { color: var(--c-ink-4); font-size: var(--fs-s); }
+
+/* ==== 画布 ==== */
+.canvas { display: flex; flex-direction: column; gap: var(--sp-5); margin-top: var(--sp-5); }
+.screen { background: var(--c-surface-2); border: 1px solid var(--c-line);
+  border-radius: var(--r-l); padding: var(--sp-4); }
+.screen > h2 { font-size: var(--fs-l); font-weight: 600; margin-bottom: var(--sp-1); }
+.screen h2 .no { display: inline-flex; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--c-accent); color: var(--c-on-accent); font-size: var(--fs-s);
+  align-items: center; justify-content: center; margin-right: var(--sp-2); vertical-align: 2px; }
+.why { color: var(--c-ink-3); font-size: var(--fs-body); margin-bottom: var(--sp-3); }
+.annotate { margin-top: var(--sp-3); border-top: 1px solid var(--c-line-soft);
+  padding-top: var(--sp-2); display: grid; gap: var(--sp-1); }
+.annotate b { font-size: var(--fs-s); color: var(--c-accent); }
+.annotate span { font-size: var(--fs-s); color: var(--c-ink-3); }
+
+/* ==== 绑定矩阵 ==== */
+.matrix { display: grid; grid-template-columns: 250px repeat(7, 104px);
+  border: 1px solid var(--c-line); border-radius: var(--r-m);
+  overflow-x: auto; background: var(--c-surface); width: 100%; }
+.mx-corner { position: sticky; left: 0; background: var(--c-rail); z-index: 2;
+  padding: var(--sp-2) var(--sp-3); font-size: var(--fs-s); color: var(--c-ink-3);
+  border-bottom: 1px solid var(--c-line); border-right: 1px solid var(--c-line); }
+.mx-corner small { display: block; color: var(--c-ink-4); }
+.mx-col { display: flex; align-items: center; gap: var(--sp-1); justify-content: center;
+  padding: var(--sp-2) var(--sp-1); border-bottom: 1px solid var(--c-line);
+  font-size: var(--fs-s); font-weight: 600; color: var(--c-ink-2);
+  min-width: 0; cursor: pointer; }
+.mx-col .tool-dot { width: 9px; height: 9px; }
+.mx-col small { display: block; text-align: center; color: var(--c-ink-4); font-weight: 400; }
+.mx-group { grid-column: 1 / -1; padding: var(--sp-1) var(--sp-3);
+  background: var(--c-rail); font-size: var(--fs-s); font-weight: 600; color: var(--c-ink-3);
+  border-bottom: 1px solid var(--c-line); }
+.mx-rowname { position: sticky; left: 0; background: var(--c-surface); z-index: 1;
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3); border-right: 1px solid var(--c-line);
+  border-bottom: 1px solid var(--c-line-soft); min-width: 0; cursor: pointer; }
+.mx-rowname:hover { background: var(--c-surface-2); }
+.mx-rowname .cnt { font-family: var(--font-mono); font-size: var(--fs-s); color: var(--c-ink-4); }
+.mx-rowname .rn { font-size: var(--fs-body); font-weight: 600; }
+.mx-rowname .tag { font-size: var(--fs-xs); color: var(--c-ink-4);
+  border: 1px solid var(--c-line); border-radius: var(--r-s); padding: 0 5px; }
+.cell { display: flex; align-items: center; justify-content: center; gap: var(--sp-1);
+  border-bottom: 1px solid var(--c-line-soft); border-right: 1px solid var(--c-line-soft);
+  min-width: 0; height: 40px; font-size: var(--fs-s); position: relative; cursor: pointer;
+  transition: background var(--t-base); }
+.cell:hover { background: var(--c-accent-soft); }
+.cell.empty::after { content: "＋"; color: var(--c-ink-4); opacity: 0;
+  transition: opacity var(--t-quick); font-size: var(--fs-body); }
+.cell.empty:hover::after { opacity: 1; }
+.cell.on { background: var(--c-accent-soft); }
+.cell.on .st { display: inline-flex; align-items: center; gap: var(--sp-1);
+  color: var(--c-accent); font-weight: 600; }
+.cell.on .st .mode { font-size: var(--fs-xs); color: var(--c-ink-3); font-weight: 400; }
+.cell.on:hover .acts { display: inline-flex; }
+.cell.on:hover .st .lbl { display: none; }
+.cell .acts { display: none; gap: var(--sp-1); }
+.cell .acts button { border: 1px solid var(--c-line); background: var(--c-surface-2);
+  border-radius: var(--r-xs); font-size: var(--fs-xs); padding: 2px 7px; cursor: pointer;
+  font-family: var(--font-sans); color: var(--c-ink-2); }
+.cell .acts button:hover { border-color: var(--c-accent); color: var(--c-accent); }
+.cell .acts button.x:hover { border-color: var(--c-err-line); color: var(--c-err); }
+.cell.fail { background: var(--c-warn-soft); }
+.cell.fail .st { color: var(--c-warn); }
+.cell.fail:hover .why-tip { display: block; }
+.why-tip { display: none; position: absolute; top: calc(100% + 4px); left: 50%;
+  transform: translateX(-50%); z-index: 30; background: var(--c-surface-2);
+  border: 1px solid var(--c-line); border-radius: var(--r-m); box-shadow: var(--sh-float);
+  padding: var(--sp-2) var(--sp-3); font-size: var(--fs-s); color: var(--c-ink-2);
+  white-space: nowrap; }
+.cell.syncing::before { content: ""; position: absolute; inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(13,106,99,.14) 50%, transparent 70%);
+  background-size: 220% 100%; animation: sweep 900ms cubic-bezier(.2,.6,.3,1) 1; }
+@keyframes sweep { from { background-position: 130% 0; } to { background-position: -30% 0; } }
+.tool-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+.tool-dot--claude { background: var(--c-t-claude); }
+.tool-dot--codex { background: var(--c-t-codex); }
+.tool-dot--opencode { background: var(--c-t-opencode); }
+.tool-dot--p4 { background: var(--c-t-p4); }
+.tool-dot--p5 { background: var(--c-t-p5); }
+.tool-dot--p6 { background: var(--c-t-p6); }
+.tool-dot--p7 { background: var(--c-t-p7); }
+
+/* ==== 原位浮窗（连接/断开 唯一的一层交互） ==== */
+.pop { position: fixed; z-index: 60; background: var(--c-surface-2);
+  border: 1px solid var(--c-line); border-radius: var(--r-m); box-shadow: var(--sh-float);
+  padding: var(--sp-3); width: 320px; display: none; }
+.pop.is-in { display: block; }
+.pop h3 { font-size: var(--fs-body); font-weight: 600; margin-bottom: var(--sp-2); }
+.pop h3 .arr { color: var(--c-accent); }
+.frow { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-2) 0; }
+.frow label { font-size: var(--fs-s); color: var(--c-ink-2); width: 64px; flex: none; }
+.seg { display: inline-flex; border: 1px solid var(--c-line); border-radius: var(--r-xs); overflow: hidden; }
+.seg button { border: 0; background: var(--c-surface-2); padding: 4px 12px; cursor: pointer;
+  font-size: var(--fs-s); font-family: var(--font-sans); color: var(--c-ink-2); }
+.seg button.is-on { background: var(--c-accent-soft); color: var(--c-accent); font-weight: 600; }
+.pop .go { width: 100%; margin-top: var(--sp-2); border: 1px solid var(--c-accent);
+  background: var(--c-accent); color: var(--c-on-accent); border-radius: var(--r-xs);
+  padding: 7px 0; cursor: pointer; font-size: var(--fs-body); font-family: var(--font-sans); }
+.pop .go:hover { background: var(--c-accent-strong); }
+.pop .note { font-size: var(--fs-xs); color: var(--c-ink-4); margin-top: var(--sp-2); line-height: 1.5; }
+
+/* ==== 动效规范展示 ==== */
+.motion { display: flex; gap: var(--sp-4); flex-wrap: wrap; }
+.mo { border: 1px solid var(--c-line); border-radius: var(--r-m); padding: var(--sp-3);
+  width: 200px; background: var(--c-surface); }
+.mo .demo { height: 44px; border-radius: var(--r-xs); border: 1px solid var(--c-line);
+  background: var(--c-surface-2); display: flex; align-items: center; justify-content: center;
+  font-size: var(--fs-s); color: var(--c-ink-3); position: relative; overflow: hidden; }
+.mo b { display: block; font-size: var(--fs-body); margin: var(--sp-2) 0 2px; }
+.mo span { font-size: var(--fs-s); color: var(--c-ink-4); }
+.mo .fill { background: var(--c-accent-soft); border: 1.5px solid var(--c-accent); color: var(--c-accent); font-weight: 600; }
+@keyframes sweep2 { from { background-position: 130% 0; } to { background-position: -30% 0; } }
+.mo .pulse-demo { background: linear-gradient(100deg, transparent 30%, rgba(13,106,99,.14) 50%, transparent 70%);
+  background-size: 220% 100%; animation: sweep2 1.2s cubic-bezier(.2,.6,.3,1) infinite; }
+.fadeout { opacity: .25; }
+</style>
+</head>
+<body>
+<h1>原型 · 连接中心（源 ⇄ 工具 绑定矩阵）</h1>
+<p class="sub">目录 / 远程仓库 / 工具的绑定关系一屏管理：零下钻、双向对称、统一动效。<span class="note">2026-11-02 · 方案：Plans/目录连接工具/连接中心-重构方案.md</span></p>
+
+<div class="canvas">
+
+  <!-- ① 绑定矩阵 -->
+  <section class="screen">
+    <h2><span class="no">①</span>一级视图「连接」：源 × 工具 绑定矩阵（主体界面）</h2>
+    <p class="why">行 = 源（本地目录 + 远程仓库），列 = 工具目标，格子 = 连接。点空格建连、点已连格管理——全部关系一屏可见，最深交互只有一层原位浮窗。悬停任一空格试试。</p>
+    <div class="matrix" id="mx">
+      <div class="mx-corner">源 \ 工具<small>悬停格子 · 点空格建连</small></div>
+      <div class="mx-col"><span class="tool-dot tool-dot--claude"></span><span>Claude Code<small>~/.claude/skills</small></span></div>
+      <div class="mx-col"><span class="tool-dot tool-dot--codex"></span><span>Codex CLI<small>~/.agents/skills 共享</small></span></div>
+      <div class="mx-col"><span class="tool-dot tool-dot--opencode"></span><span>OpenCode<small>~/.agents/skills 共享</small></span></div>
+      <div class="mx-col"><span class="tool-dot tool-dot--p4"></span><span>WorkBuddy<small>~/.workbuddy/skills</small></span></div>
+      <div class="mx-col"><span class="tool-dot tool-dot--p5"></span><span>ZCode<small>~/.zcode/skills</small></span></div>
+      <div class="mx-col"><span class="tool-dot tool-dot--p7"></span><span>Trae CN<small>~/.trae-cn/skills</small></span></div>
+      <div class="mx-col"><span class="tool-dot tool-dot--p6"></span><span>Pi-Agent<small>~/.pi/agent/skills</small></span></div>
+
+      <div class="mx-group">本地目录 · 内容变化实时跟随（外部改 / hub 内改 / 增删）</div>
+      <div class="mx-rowname" title="点击行 = 聚焦该源"><span class="rn">默认目录</span><span class="cnt">16</span><span class="tag">内置</span></div>
+      <div class="cell on" data-sync><span class="st"><span class="lbl">已连接</span><span class="mode">复制</span></span></div>
+      <div class="cell on" data-sync><span class="st"><span class="lbl">已连接</span><span class="mode">复制</span></span></div>
+      <div class="cell empty" data-src="默认目录" data-tgt="OpenCode"></div>
+      <div class="cell empty" data-src="默认目录" data-tgt="WorkBuddy"></div>
+      <div class="cell empty" data-src="默认目录" data-tgt="ZCode"></div>
+      <div class="cell empty" data-src="默认目录" data-tgt="Trae CN"></div>
+      <div class="cell empty" data-src="默认目录" data-tgt="Pi-Agent"></div>
+
+      <div class="mx-rowname" title="点击行 = 聚焦该源"><span class="rn">agent-skills</span><span class="cnt">17</span><span class="tag">链接</span></div>
+      <div class="cell on syncing" data-sync><span class="st"><span class="lbl">同步中</span><span class="mode">复制</span></span></div>
+      <div class="cell empty" data-src="agent-skills" data-tgt="Codex CLI"></div>
+      <div class="cell empty" data-src="agent-skills" data-tgt="OpenCode"></div>
+      <div class="cell empty" data-src="agent-skills" data-tgt="WorkBuddy"></div>
+      <div class="cell on" data-sync><span class="st"><span class="lbl">已连接</span><span class="mode">链接</span></span></div>
+      <div class="cell empty" data-src="agent-skills" data-tgt="Trae CN"></div>
+      <div class="cell empty" data-src="agent-skills" data-tgt="Pi-Agent"></div>
+
+      <div class="mx-rowname" title="点击行 = 聚焦该源"><span class="rn">lingchuang-skills</span><span class="cnt">11</span><span class="tag">链接</span></div>
+      <div class="cell empty" data-src="lingchuang-skills" data-tgt="Claude Code"></div>
+      <div class="cell fail"><span class="st">上次失败</span>
+        <span class="why-tip">同步失败：目标目录只读（权限拒绝）· 17:42:11 · 下次变化自动重试</span></div>
+      <div class="cell empty" data-src="lingchuang-skills" data-tgt="OpenCode"></div>
+      <div class="cell empty" data-src="lingchuang-skills" data-tgt="WorkBuddy"></div>
+      <div class="cell empty" data-src="lingchuang-skills" data-tgt="ZCode"></div>
+      <div class="cell empty" data-src="lingchuang-skills" data-tgt="Trae CN"></div>
+      <div class="cell empty" data-src="lingchuang-skills" data-tgt="Pi-Agent"></div>
+
+      <div class="mx-group">远程仓库 · 绑定同步「已拉取到本地库」的条目；上游更新 → 拉取 → 自动跟随分发</div>
+      <div class="mx-rowname" title="点击行 = 聚焦该源"><span class="rn">planarcat skills</span><span class="cnt">17</span><span class="tag">远仓</span></div>
+      <div class="cell empty" data-src="planarcat skills" data-tgt="Claude Code"></div>
+      <div class="cell on" data-sync><span class="st"><span class="lbl">已连接</span><span class="mode">复制</span></span></div>
+      <div class="cell empty" data-src="planarcat skills" data-tgt="OpenCode"></div>
+      <div class="cell empty" data-src="planarcat skills" data-tgt="WorkBuddy"></div>
+      <div class="cell empty" data-src="planarcat skills" data-tgt="ZCode"></div>
+      <div class="cell empty" data-src="planarcat skills" data-tgt="Trae CN"></div>
+      <div class="cell empty" data-src="planarcat skills" data-tgt="Pi-Agent"></div>
+
+      <div class="mx-rowname" title="点击行 = 聚焦该源"><span class="rn">灵创Skills</span><span class="cnt">11</span><span class="tag">远仓</span></div>
+      <div class="cell empty" data-src="灵创Skills" data-tgt="Claude Code"></div>
+      <div class="cell empty" data-src="灵创Skills" data-tgt="Codex CLI"></div>
+      <div class="cell empty" data-src="灵创Skills" data-tgt="OpenCode"></div>
+      <div class="cell empty" data-src="灵创Skills" data-tgt="WorkBuddy"></div>
+      <div class="cell empty" data-src="灵创Skills" data-tgt="ZCode"></div>
+      <div class="cell empty" data-src="灵创Skills" data-tgt="Trae CN"></div>
+      <div class="cell empty" data-src="灵创Skills" data-tgt="Pi-Agent"></div>
+
+      <div class="mx-rowname" title="点击行 = 聚焦该源"><span class="rn">Vercel Skills</span><span class="cnt">9</span><span class="tag">远仓</span></div>
+      <div class="cell empty" data-src="Vercel Skills" data-tgt="Claude Code"></div>
+      <div class="cell empty" data-src="Vercel Skills" data-tgt="Codex CLI"></div>
+      <div class="cell empty" data-src="Vercel Skills" data-tgt="OpenCode"></div>
+      <div class="cell empty" data-src="Vercel Skills" data-tgt="WorkBuddy"></div>
+      <div class="cell empty" data-src="Vercel Skills" data-tgt="ZCode"></div>
+      <div class="cell empty" data-src="Vercel Skills" data-tgt="Trae CN"></div>
+      <div class="cell empty" data-src="Vercel Skills" data-tgt="Pi-Agent"></div>
+    </div>
+    <div class="annotate">
+      <b>点空格</b><span>→ 原位浮窗（唯一一层）：写入方式 + 同名冲突策略 → 连接并同步</span>
+      <b>点已连格</b><span>→ 格内出现 [立即同步] [断开]；断开可选保留文件或清理受管内容</span>
+      <b>黄格</b><span>= 上次同步失败，悬停看原因；下次源变化自动重试</span>
+      <b>双向对称</b><span>点列头 = 聚焦该工具（高亮整列），行列视角等价——多源绑一工具、一源绑多工具同一操作</span>
+    </div>
+  </section>
+
+  <!-- ② 动效规范 -->
+  <section class="screen">
+    <h2><span class="no">②</span>统一动效规范（一条曲线 · 两档时长 · 四种语义）</h2>
+    <p class="why">全部连接类交互共用同一语言：曲线 cubic-bezier(.2,.6,.3,1)，快档 150ms（悬停/淡出）、标准档 250ms（连接/填充）。与既有「描边生长」选中语言同源。</p>
+    <div class="motion">
+      <div class="mo"><div class="demo fill" id="m1">已连接 · 复制</div><b>连接</b><span>描边生长 + 底色填充 · 250ms · 建连/恢复时播放</span></div>
+      <div class="mo"><div class="demo"><div class="pulse-demo" style="position:absolute;inset:0"></div><span style="position:relative">同步中</span></div><b>自动同步</b><span>单次扫光 · ≤900ms · 完成即静默，不打扰</span></div>
+      <div class="mo"><div class="demo fadeout">已断开</div><b>断开</b><span>填充淡出 · 150ms · 行列计数同步更新</span></div>
+      <div class="mo"><div class="demo" style="background:var(--c-warn-soft);color:var(--c-warn);font-weight:600">上次失败</div><b>失败态</b><span>黄底常亮 + 悬停原因 · 无动效（状态不打扰）</span></div>
+    </div>
+    <div class="annotate">
+      <b>克制原则</b><span>自动同步不弹 toast（除非冲突/失败）；矩阵格是唯一的状态承载体——状态住在格子里，不靠通知轰炸</span>
+    </div>
+  </section>
+
+  <!-- ③ 信息架构 -->
+  <section class="screen">
+    <h2><span class="no">③</span>信息架构 · 入口与联动</h2>
+    <p class="why">「连接」升级为一级视图（跨目录/远仓/工具的横向能力，值得独立入口）；各页卡片保留连接标记，点击直达矩阵并高亮对应行/列。</p>
+    <div class="stage" style="border:1px solid var(--c-line);border-radius:var(--r-m);background:var(--c-surface);padding:var(--sp-3)">
+      <div style="display:flex;gap:var(--sp-4);align-items:center;font-size:var(--fs-body)">
+        <span style="color:var(--c-ink-4)">会话 · 记忆 · Skills · MCP · 台账 · 统计 · 设置</span>
+        <span style="background:var(--c-accent);color:var(--c-on-accent);border-radius:var(--r-xs);padding:3px 10px;font-weight:600">连接</span>
+      </div>
+      <div class="hub-modal__sub" style="margin:var(--sp-3) 0 0;color:var(--c-ink-3);font-size:var(--fs-s);line-height:1.6">
+        · Skills 页目录卡 / 工具卡上的连接色点 → 点击跳转连接视图并高亮该行（或列）<br>
+        · 「目录管理」「添加仓库」等既有弹窗保留，但不再承载连接职责——连接只住在矩阵里<br>
+        · MCP 条目绑定（mcp 目标）= 矩阵的第二页签（M2），同一交互语言
+      </div>
+    </div>
+    <div class="annotate">
+      <b>消除下钻</b><span>原「目录管理 → 连接工具…」两层入口废弃；一切连接操作 = 矩阵格一次点击（+ 一层原位浮窗）</span>
+      <b>远仓等价</b><span>远仓行与目录行同权：同步的是「已拉取到本地库」的条目，上游更新 → 拉取 → 自动分发</span>
+    </div>
+  </section>
+
+</div>
+
+<!-- 原位浮窗：连接 -->
+<div class="pop" id="pop-connect">
+  <h3><span id="pc-title">源 → 工具</span></h3>
+  <div class="frow"><label>写入方式</label>
+    <span class="seg" data-v="copy"><button class="is-on" data-v="copy">直接复制</button><button data-v="link">软链接</button></span></div>
+  <div class="frow"><label>同名冲突</label>
+    <span class="seg" data-v="skip"><button class="is-on" data-v="skip">跳过并报告</button><button data-v="force">覆盖</button></span></div>
+  <button class="go" id="pc-go">连接并同步</button>
+  <div class="note" id="pc-note">建连即全量同步；此后源内容变化自动跟随（≤5s），全程记入台账。</div>
+</div>
+
+<!-- 原位浮窗：断开 -->
+<div class="pop" id="pop-disconnect">
+  <h3><span id="pd-title">断开连接</span></h3>
+  <div class="frow"><label>目标内容</label>
+    <span class="seg" data-v="keep"><button class="is-on" data-v="keep">保留文件</button><button data-v="clean">清理受管</button></span></div>
+  <button class="go" id="pd-go" style="background:var(--c-err);border-color:var(--c-err)">断开连接</button>
+  <div class="note">清理受管 = 只删本连接落过的内容；非托管文件一个不碰。</div>
+</div>
+
+<div class="toast" id="toast" style="position:fixed;right:24px;bottom:24px;z-index:70;background:var(--c-surface-2);border-radius:var(--r-m);box-shadow:var(--sh-float);padding:var(--sp-2) var(--sp-3);display:none;align-items:center;gap:8px"><span style="color:var(--c-ok);font-weight:600">✓</span><span id="toast-msg"></span></div>
+
+<script>
+// 交互演示：空格 → 建连浮窗；已连格 → 管理；断开 → 确认浮窗
+let cur = null;
+function posPop(pop, cell) {
+  const r = cell.getBoundingClientRect();
+  pop.classList.add('is-in');
+  const w = 320, x = Math.min(r.left, innerWidth - w - 16);
+  pop.style.left = Math.max(8, x) + 'px';
+  pop.style.top = Math.min(r.bottom + 8, innerHeight - 240) + 'px';
+}
+function segWire(seg) {
+  seg.querySelectorAll('button').forEach(b => b.onclick = () => {
+    seg.querySelectorAll('button').forEach(x => x.classList.remove('is-on'));
+    b.classList.add('is-on'); seg.dataset.v = b.dataset.v;
+  });
+}
+document.querySelectorAll('.seg').forEach(segWire);
+document.querySelectorAll('.cell.empty').forEach(c => {
+  c.onclick = (e) => {
+    e.stopPropagation(); hidePops();
+    cur = c;
+    document.getElementById('pc-title').textContent = c.dataset.src + ' → ' + c.dataset.tgt;
+    posPop(document.getElementById('pop-connect'), c);
+  };
+});
+document.querySelectorAll('.cell.on').forEach(c => {
+  c.onclick = (e) => { e.stopPropagation(); };
+});
+document.getElementById('pc-go').onclick = () => {
+  if (!cur) return hidePops();
+  cur.classList.remove('empty'); cur.classList.add('on', 'syncing');
+  cur.innerHTML = '<span class="st"><span class="lbl">已连接</span><span class="mode">复制</span></span>';
+  setTimeout(() => cur.classList.remove('syncing'), 900);
+  toast(cur.dataset.src + ' → ' + cur.dataset.tgt + ' · 已连接并同步');
+  hidePops();
+};
+function toast(m) { const t = document.getElementById('toast');
+  document.getElementById('toast-msg').textContent = m;
+  t.style.display = 'flex'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', 3000); }
+function hidePops() { document.querySelectorAll('.pop').forEach(p => p.classList.remove('is-in')); }
+document.addEventListener('click', e => { if (!e.target.closest('.pop') && !e.target.closest('.cell')) hidePops(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePops(); });
+</script>
+</body>
+</html>

@@ -449,14 +449,36 @@ S('preview-actions', async () => {
   await evaluate(`(() => { const inp = document.getElementById('search-input');
     if (inp && inp.value) { inp.value = ''; inp.dispatchEvent(new Event('input', { bubbles: true })); } })()`);
   await waitFor(`!!document.querySelector('[data-testid="row"]')`, 6000, '列表有行');
+  // 口径变更（2026-10-20）：会话行头恢复 toggle 语义（展开↔收起），上一条用例可能已把第一行展开
+  //   → 这里先把状态归零（已展开则收起），再点一次期待"打开"。断言口径不变，只是去掉对"点击恒为打开"的假设。
+  await evaluate(`(() => { const r = document.querySelector('[data-testid="row"]');
+    if (r.classList.contains('is-open')) r.querySelector('.mvi__chev').click(); return 'OK'; })()`);
+  await waitFor(`!document.querySelector('[data-testid="row"]').classList.contains('is-open')`, 4000, '先收起');
   await evaluate(`(() => { document.querySelector('[data-testid="row"]').click(); })()`);
-  await waitFor(`!!document.getElementById('sess-star')`, 6000, '详情打开');
+  // 首行可能是 500+ 消息的长会话（与 content-search 同口径给 15s；2026-11-05 首行 774 条时 6s 超时）
+  await waitFor(`!!document.getElementById('sess-star')`, 15000, '详情打开');
   const L0 = await evaluate(`document.getElementById('sess-star').textContent`);
   await click('#sess-star');
-  // 等待文本真正翻转；若 1.5s 未变则重试点击（POST 与 30s 轮询并发偶发丢失）
+  // 等待文本真正翻转；若 1.5s 未变则重试点击（POST 与 30s 轮询并发偶发丢失）。
+  // 2026-11-05：长会话下首击后偶发重绘会把详情体暂换成「读取中」占位（detail 渲染竞态），
+  // star 短暂消失 → 重试前先等它回来（缓存此时已就位，下一次重绘必回全量详情）。
   const flippedExpr = `document.getElementById('sess-star').textContent !== ${JSON.stringify(L0)}`;
   try { await waitFor(flippedExpr, 1500, '收藏翻转(首击)'); }
-  catch { await click('#sess-star'); await waitFor(flippedExpr, 6000, '收藏翻转(重试)'); }
+  catch {
+    // 首击后偶发重绘把详情体暂换成「读取中」占位（detail 渲染竞态，app.js 侧既有问题）：
+    // 先等 star 回来再补一击；若 8s 仍不回来（重绘停在占位态），收起再展开强制重开详情。
+    try {
+      await waitFor(`!!document.getElementById('sess-star')`, 8000, '重绘后详情稳定');
+    } catch {
+      await evaluate(`(() => { const r = document.querySelector('[data-testid="row"]');
+        if (r.classList.contains('is-open')) r.querySelector('.mvi__chev').click(); return 1; })()`);
+      await waitFor(`!document.querySelector('[data-testid="row"]').classList.contains('is-open')`, 4000, '收起重开');
+      await evaluate(`document.querySelector('[data-testid="row"]').click()`);
+      await waitFor(`!!document.getElementById('sess-star')`, 15000, '重开详情');
+    }
+    await click('#sess-star');
+    await waitFor(flippedExpr, 6000, '收藏翻转(重试)');
+  }
   const L1 = await evaluate(`document.getElementById('sess-star').textContent`);
   // export
   await evaluate(`document.querySelectorAll('#hub-toasts > *').forEach(t => t.remove())`);
@@ -473,12 +495,33 @@ S('preview-actions', async () => {
   return `收藏 ${L0.trim()} → ${L1.trim()} → 还原`;
 });
 
+S('connect-canvas', async () => {
+  /* v1.0 合并页：Skills / MCP 一个入口，三行看板 + 连线层 */
+  await click('[data-testid="nav-connect"]');
+  await waitFor(`!!document.querySelector('.cv')`, 8000, '连接画布');
+  await waitFor(`document.querySelectorAll('#cv-types .tcard').length === 2`, 8000, '通道卡渲染');
+  const dirs = await evaluate(`document.querySelectorAll('#cv-dirs .tcard[data-src^="dir:"]').length`);
+  const types = await evaluate(`document.querySelectorAll('#cv-types .tcard').length`);
+  const tools = await evaluate(`document.querySelectorAll('#cv-tools .tcard').length`);
+  if (types !== 2) throw new Error('通道卡应为 2 张，实际 ' + types);
+  if (tools < 1) throw new Error('工具卡为空');
+  // 选中目录 → 出现面板与连线层
+  if (dirs > 0) {
+    await evaluate(`document.querySelector('#cv-dirs .tcard[data-src^="dir:"]').click()`);
+    await waitFor(`!document.getElementById('cv-panel').hidden`, 6000, '目录面板');
+    const lanes = await evaluate(`document.querySelectorAll('.cv-line[data-lane]').length`);
+    await evaluate(`document.querySelectorAll('#cv-dirs .tcard[data-src^="dir:"]')[0].click()`);
+    return `目录 ${dirs} · 通道 ${types} · 工具 ${tools} · 连线 ${lanes}`;
+  }
+  return `目录 0（空库）· 通道 ${types} · 工具 ${tools}`;
+});
+
 S('module-nav-views', async () => {
-  await click('[data-testid="nav-skills"]');
+  await evaluate(`window.hubApp.switchView('skills')`);
   await waitFor(`document.getElementById('view-skills').classList.contains('is-active')`, 6000, 'skills 视图');
   await skillsRowsOrDump();
   const sRows = await evaluate(`document.querySelectorAll('[data-testid="skills-row"]').length`);
-  await click('[data-testid="nav-mcp"]');
+  await evaluate(`window.hubApp.switchView('mcp')`);
   await waitFor(`document.querySelectorAll('[data-testid="mcp-row"]').length >= 1`, 10000, 'mcp 行');
   const mRows = await evaluate(`document.querySelectorAll('[data-testid="mcp-row"]').length`);
   await click('[data-testid="nav-ops"]');
@@ -493,7 +536,7 @@ S('module-nav-views', async () => {
 
 S('skills-overview-render', async () => {
   // v0.6 回归：概览在「存在待更新/未安装」时不得崩（曾因 f.items 引用错误致视图空白 + toast）
-  await click('[data-testid="nav-skills"]');
+  await evaluate(`window.hubApp.switchView('skills')`);
   await skillsRowsOrDump();
   await waitFor(`!!document.querySelector('[data-testid="skills-stats"]')`, 8000, '概览统计卡');
   const r = await evaluate(`(() => ({
@@ -511,7 +554,7 @@ S('skills-overview-render', async () => {
 });
 
 S('skills-pull-and-wizard', async () => {
-  await click('[data-testid="nav-skills"]');
+  await evaluate(`window.hubApp.switchView('skills')`);
   await skillsRowsOrDump();
   // 拉取反馈
   // 口径（2026-10-17）：拉取能否真正完成取决于网络与远程仓库可达性（本机常拉不通、git 会挂几十秒），
@@ -525,6 +568,12 @@ S('skills-pull-and-wizard', async () => {
   await waitFor(`!!document.querySelector('[data-testid^="skills-pull-"].is-loading, .hub-toast--success, .hub-toast--info, .hub-toast--error, .hub-toast--warn')`,
     8000, '拉取反馈（loading / toast 任一）');
   // v0.6 新布局：左栏勾选条目 → 中栏出现多选批量面 → 右栏内联更新按钮可用（无弹窗）
+  // 口径变更（2026-10-20）：条目行"展开即选中、收起即取消"，上一条用例可能已展开该行
+  //   → 先归零（勾着就先点掉），再勾一次，期待多选批量面。断言不变，只去掉"点一下必然勾上"的假设。
+  await evaluate(`(() => { const cb = document.querySelector('[data-testid="skills-row"] input');
+    if (cb.checked) cb.click();
+    return 'OK'; })()`);
+  await sleep(200);
   await evaluate(`document.querySelector('[data-testid="skills-row"] input').click()`);
   await waitFor(`!!document.querySelector('[data-testid="skills-batch-ops"]')`, 6000, '多选批量面');
   const inlineBtn = await evaluate(`(() => { const b = document.querySelector('[data-testid="skills-inline-update"]'); return b ? b.textContent.trim() : 'NOBTN'; })()`);

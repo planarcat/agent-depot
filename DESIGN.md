@@ -213,7 +213,7 @@ python3 tests/lint_styles.py   # 游离色值/字号检查（CI 化）
     │   └── .setwin__item > .setwin__label(13) + .setwin__desc(11)
     └── .setwin__main
         ├── .setwin__head  标题 + .setwin__sub 副标题 + .setwin__x(× 关闭)
-        └── .setwin__body  四个面：模块 / 工具 / 定时调度 / 关于
+        └── .setwin__body  当前四个面：模块 / 工具 / 远程仓库 / 关于（定时调度暂未接入）
             ├── .setcard--list  卡片（实线分隔、无逐行边框）
             ├── .setrow          通用行（名称 + 描述 + 右侧控件）
             ├── .trow            工具行：grip + 序号 + 色块 + 名称(+内置) + 路径/Skills/MCP + 箭头 + 编辑 + 启停
@@ -273,6 +273,16 @@ python3 tests/lint_styles.py   # 游离色值/字号检查（CI 化）
 | 重复造 `@keyframes` | 复用 `app.css` 已有动画名 | §4 |
 | 动效超过 300ms、或所有元素都加动效 | 150–300ms，只动需要解释状态变化的地方 | §4 |
 | 把工具界面当落地页做：破对称、加纹理、堆氛围动效、追求"每页不同" | 工具界面要克制一致；见 §0.1 场景基调 | §0.1 |
+
+#### 选中态统一口径（2026-10-20）
+
+目标行 / 来源卡片 / 条头 chip 的「选中」一律是同一套动效，不许各写各的：
+
+- **描边生长**：`<svg class="stgt-frame">` 内两条 `<path pathLength="1">`（上/下各一条，从左边框中心绕圆角画向右边框中心），`stroke-dashoffset 1 → 0`。
+- **像素级 viewBox**：由 `HubUI.drawFrames(root)` 按宿主 `clientWidth/Height` 写 `viewBox="0 0 W H"`，圆角读宿主 `border-radius`；`ResizeObserver` 随尺寸重建。**禁用**「拉伸 viewBox + `non-scaling-stroke`」（Chromium 下 dash 不可靠，会漏中段）。
+- **背景扫入**：`background-size: 0% → 100%`，与描边同一曲线 `var(--t-base)`，同时起同时收。
+- **零渲染门闩**：未选中态 `opacity: 0`，杜绝亚像素残线。
+- **就地切换**：选中变化只切 `is-on` 类名，**不许重建 DOM**（新节点天生带 `is-on`，过渡没有起点，动效放不出来）——守卫见 `MV.syncCards()` 与条头的 `barsig`。
 
 ### 交互与反馈
 

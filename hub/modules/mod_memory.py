@@ -12,6 +12,7 @@ import json
 import os
 import time
 
+from hub import paths
 from hub.core import fsutil, ops
 
 MODULE = "memory"
@@ -45,11 +46,11 @@ LAYOUTS = {
 
 
 def _hub_dir():
-    return os.environ.get("AGENT_HUB_DIR") or os.path.expanduser("~/.agent/hub")
+    return paths.hub_dir()
 
 
 def memstore_root():
-    """中间体内容库：~/.agent/hub/memory/store/<scope>/<tool>__<kind>.md。"""
+    """中间体内容库：<应用文件夹>/memory/store/<scope>/<tool>__<kind>.md。"""
     return os.path.join(_hub_dir(), "memory", "store")
 
 
@@ -506,6 +507,15 @@ def handle(store, method, path, query, body):
             return _r(edit_item(store, iid, body.get("content")))
         if tail == "adopt" and method == "POST":
             return _r(adopt_source(store, iid))
+        if not tail and method == "DELETE":
+            # 删除 hub 中间体条目（连同它的写回记录）；不动任何工具侧源文件
+            with store.lock:
+                store.db.execute("DELETE FROM memory_deployments WHERE item_id=?", (iid,))
+                cur = store.db.execute("DELETE FROM memory_items WHERE id=?", (iid,))
+                store.db.commit()
+            if cur.rowcount:
+                return 200, {"ok": True}
+            return 404, {"ok": False, "error": "条目不存在"}
     return 404, {"ok": False, "error": "memory: 未知路由 %s %s" % (method, path)}
 
 
@@ -518,7 +528,7 @@ def _is_own_route(path, method):
         return True
     if path.startswith("/api/memory/item/"):
         rest = path[len("/api/memory/item/"):]
-        if "/" not in rest and method in ("GET", "PUT"):
+        if "/" not in rest and method in ("GET", "PUT", "DELETE"):
             return True
         if rest.endswith("/adopt") and method == "POST":
             return True

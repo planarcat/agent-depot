@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>原型 · 连接融合 —— 目录跟随 × 条目跟随（整体）</title>
+<style>
+:root {
+  --c-ink: #171d1f; --c-ink-2: #3c4447; --c-ink-3: #5b6669; --c-ink-4: #8a9497;
+  --c-bg: #f2f4f4; --c-surface: #f9fafa; --c-surface-2: #ffffff;
+  --c-line: #d9dedf; --c-line-soft: #e6eaeb; --c-rail: #f4f3f0;
+  --c-accent: #0d6a63; --c-accent-strong: #0a544e; --c-accent-soft: #eaf2f1;
+  --c-accent-line: #bfd6d2; --c-on-accent: #ffffff;
+  --c-err: #a03d2e; --c-err-soft: #f8ece9; --c-err-line: #f0c8bf;
+  --c-ok: #1a7f4b; --c-warn: #8a6d1f; --c-warn-soft: #f6f1e2;
+  --c-t-claude: #d97757; --c-t-codex: #171d1f; --c-t-opencode: #7c5cff;
+  --c-t-p4: #4a7d8c; --c-t-p5: #9a6b3f; --c-t-p7: #a35d7a;
+  --fs-xs: 10px; --fs-s: 11px; --fs-md: 12px; --fs-body: 13px; --fs-m: 14px;
+  --fs-l: 16px; --fs-xl: 20px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px;
+  --tcard: 136px;
+  --r-xs: 6px; --r-s: 4px; --r-m: 8px; --r-l: 12px;
+  --t-quick: 150ms cubic-bezier(.2,.6,.3,1); --t-base: 250ms cubic-bezier(.2,.6,.3,1);
+  --sh-hover: 0 4px 12px rgba(23,29,31,.08), 0 1px 2px rgba(23,29,31,.04);
+  --sh-active: 0 0 0 1.5px var(--c-accent);
+  --sh-float: 0 12px 32px rgba(23,29,31,.14), 0 2px 6px rgba(23,29,31,.06);
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--c-bg); color: var(--c-ink); font-family: var(--font-sans);
+  font-size: var(--fs-body); padding: var(--sp-4); }
+.tool-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block;
+  vertical-align: -1px; }
+.dot--claude { background: var(--c-t-claude); } .dot--codex { background: var(--c-t-codex); }
+.dot--opencode { background: var(--c-t-opencode); } .dot--p4 { background: var(--c-t-p4); }
+.dot--p5 { background: var(--c-t-p5); } .dot--p6 { background: var(--c-t-p6); }
+.dot--p7 { background: var(--c-t-p7); }
+
+/* ==== 页面框架（对齐真实 Skills 页） ==== */
+.topbar { display: flex; align-items: center; gap: var(--sp-4); background: var(--c-surface-2);
+  border: 1px solid var(--c-line); border-radius: var(--r-l); padding: var(--sp-2) var(--sp-4); }
+.topbar b { font-size: var(--fs-l); }
+.topbar nav { display: flex; gap: var(--sp-3); font-size: var(--fs-body); color: var(--c-ink-3); }
+.topbar nav .on { color: var(--c-accent); font-weight: 600; }
+.topbar .engine { margin-left: auto; font-size: var(--fs-s); color: var(--c-ok); }
+.stage { margin-top: var(--sp-4); display: flex; gap: var(--sp-3); align-items: stretch; }
+.srcgroup { background: var(--c-surface); border: 1px solid var(--c-line);
+  border-radius: var(--r-m); padding: var(--sp-3); width: 168px; flex: none;
+  display: flex; flex-direction: column; }
+.srcgroup .nm { font-weight: 600; }
+.srcgroup .meta { font-family: var(--font-mono); font-size: var(--fs-s); color: var(--c-ink-4);
+  margin: var(--sp-1) 0; }
+.srcgroup .d { font-size: var(--fs-s); color: var(--c-ink-4); line-height: 1.5; }
+.srcgroup .acts { margin-top: auto; padding-top: var(--sp-2); display: flex;
+  flex-direction: column; gap: var(--sp-1); }
+.btn { border: 1px solid var(--c-line); background: var(--c-surface-2); color: var(--c-ink);
+  border-radius: var(--r-xs); font-size: var(--fs-s); font-family: var(--font-sans);
+  padding: 4px 10px; cursor: pointer; text-align: center; width: 100%;
+  transition: background var(--t-quick); }
+.btn:hover { background: var(--c-surface); }
+.btn.primary { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+.btn.primary:hover { background: var(--c-accent-strong); }
+.btn.primary:disabled { opacity: .45; cursor: default; }
+.btn.sm { padding: 3px 9px; width: auto; }
+.btn.danger { color: var(--c-err); border-color: var(--c-err-line); background: var(--c-err-soft); }
+.grid3 { display: flex; gap: var(--sp-3); overflow: hidden; }
+.tcard { width: var(--tcard); border: 1px solid var(--c-line); border-radius: var(--r-m);
+  background: var(--c-surface-2); position: relative; cursor: pointer; padding: var(--sp-2);
+  transition: transform var(--t-quick), box-shadow var(--t-quick); flex: none; }
+.tcard:hover { transform: translateY(-2px); box-shadow: var(--sh-hover); }
+.tcard.is-on { box-shadow: var(--sh-active); }
+.cnt { display: inline-flex; min-width: 28px; height: 28px; border-radius: var(--r-xs);
+  border: 1px solid var(--c-line); background: var(--c-surface);
+  align-items: center; justify-content: center; font-family: var(--font-mono);
+  font-size: var(--fs-md); font-weight: 600; color: var(--c-accent); }
+.chip { width: 44px; height: 44px; border-radius: var(--r-m); margin: var(--sp-2) auto 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: var(--fs-m); font-weight: 600; background: #3c4447; }
+.chip.ve { background: var(--c-t-claude); }
+.tnm { font-size: var(--fs-body); font-weight: 600; text-align: center; margin-top: var(--sp-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tcard__tag { position: absolute; left: var(--sp-2); bottom: var(--sp-1);
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: var(--fs-s); font-weight: 600; color: var(--c-accent); }
+.tcard__tag .tool-dot { width: 7px; height: 7px; }
+.tcard__tag .plus { color: var(--c-ink-4); font-weight: 400; }
+.tcard--repo .cnt { color: var(--c-ink-2); }
+
+.stats { display: flex; gap: var(--sp-4); margin-top: var(--sp-3); font-size: var(--fs-body); }
+.stats b { font-size: var(--fs-l); margin-right: 4px; }
+.stats .muted { color: var(--c-ink-3); }
+
+/* ==== 条目列表 ==== */
+.body { display: flex; gap: var(--sp-3); margin-top: var(--sp-4); align-items: flex-start; }
+.list { flex: 1; min-width: 0; }
+.search { border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-surface-2);
+  padding: var(--sp-2) var(--sp-3); color: var(--c-ink-4); margin-bottom: var(--sp-3); }
+.item { border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-surface-2);
+  padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-2); display: flex; gap: var(--sp-2); }
+.item .chk { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--c-line);
+  flex: none; margin-top: 2px; cursor: pointer; display: flex; align-items: center;
+  justify-content: center; color: transparent; font-size: var(--fs-xs); }
+.item.sel .chk { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+.item .chip2 { flex: none; width: 30px; height: 30px; border-radius: var(--r-xs); background: #3c4447;
+  color: #fff; font-size: var(--fs-s); font-weight: 600; display: flex; align-items: center;
+  justify-content: center; margin-top: 2px; }
+.item .mid { flex: 1; min-width: 0; }
+.item .ttl { font-size: var(--fs-m); font-weight: 600; }
+.item .sb { color: var(--c-ink-3); font-size: var(--fs-body); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.item .expanded { border: 1px solid var(--c-line-soft); border-radius: var(--r-m);
+  background: var(--c-surface); font-family: var(--font-mono); font-size: var(--fs-s);
+  color: var(--c-ink-2); padding: var(--sp-3); margin-top: var(--sp-2); white-space: pre-wrap; }
+/* 新增：条目行跟随点 */
+.follows { display: flex; align-items: center; gap: var(--sp-1); margin-top: var(--sp-1);
+  flex-wrap: wrap; }
+.follows .lbl { font-size: var(--fs-xs); color: var(--c-ink-4); }
+.fdot { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--c-line);
+  border-radius: 999px; padding: 1px 7px 1px 5px; font-size: var(--fs-xs); color: var(--c-ink-2);
+  background: var(--c-surface); cursor: pointer; position: relative;
+  animation: pin 260ms cubic-bezier(.34,1.56,.64,1); }
+@keyframes pin { from { opacity: 0; transform: scale(.8); } }
+.fdot:hover { border-color: var(--c-err-line); color: var(--c-err); }
+.fdot:hover::after { content: " 移除跟随"; }
+.fdot .via { color: var(--c-ink-4); font-size: 9px; }
+.fadd { display: inline-flex; align-items: center; border: 1.5px dashed var(--c-accent-line);
+  border-radius: 999px; padding: 1px 8px 1px 7px; font-size: var(--fs-xs); color: var(--c-accent);
+  background: transparent; cursor: pointer; font-family: var(--font-sans); }
+.fadd:hover { background: var(--c-accent-soft); }
+
+/* ==== 右侧：跟随与安装管理器 ==== */
+.panel { width: 300px; flex: none; border: 1px solid var(--c-line); border-radius: var(--r-l);
+  background: var(--c-surface-2); padding: var(--sp-3); position: sticky; top: var(--sp-2); }
+.panel h3 { font-size: var(--fs-m); margin-bottom: var(--sp-2); }
+.psub { font-size: var(--fs-s); color: var(--c-ink-3); background: var(--c-rail);
+  border-radius: var(--r-xs); padding: var(--sp-1) var(--sp-2); margin-bottom: var(--sp-2); }
+.frow { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) 0;
+  border-bottom: 1px solid var(--c-line-soft); }
+.frow:last-of-type { border-bottom: 0; }
+.frow .tool-dot { width: 9px; height: 9px; }
+.frow .nm { flex: 1; font-size: var(--fs-body); }
+.frow .via { font-size: var(--fs-xs); color: var(--c-ink-4); }
+.frow .st-follow { font-size: var(--fs-xs); color: var(--c-accent); font-weight: 600; }
+.frow .x { color: var(--c-ink-4); cursor: pointer; font-size: var(--fs-s); }
+.frow .x:hover { color: var(--c-err); }
+.frow.disabled { opacity: .75; }
+.psec { font-size: var(--fs-s); font-weight: 600; color: var(--c-ink-3); margin: var(--sp-3) 0 var(--sp-1); }
+.addgrid { display: flex; flex-direction: column; gap: var(--sp-1); }
+.addrow { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--c-line); border-radius: var(--r-xs); background: var(--c-surface);
+  cursor: pointer; font-size: var(--fs-body); transition: background var(--t-quick); }
+.addrow:hover { background: var(--c-accent-soft); }
+.addrow .chk { width: 14px; height: 14px; border-radius: 4px; border: 2px solid var(--c-line); }
+.addrow.is-on .chk { background: var(--c-accent); border-color: var(--c-accent); }
+.addrow.is-on .nm2 { color: var(--c-accent); font-weight: 600; }
+.addrow .p { margin-left: auto; font-size: var(--fs-xs); color: var(--c-ink-4); font-family: var(--font-mono); }
+.pfoot { display: flex; gap: var(--sp-2); margin-top: var(--sp-3); }
+.pfoot .btn { width: auto; flex: 1; }
+.btn.ghost { background: transparent; }
+.leg { margin-top: var(--sp-3); font-size: var(--fs-xs); color: var(--c-ink-4); line-height: 1.7; }
+
+/* ==== 融合规则注解条 ==== */
+.rules { margin-top: var(--sp-4); border: 1px solid var(--c-accent-line); border-radius: var(--r-l);
+  background: var(--c-accent-soft); padding: var(--sp-3) var(--sp-4);
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--sp-3); }
+.rules b { font-size: var(--fs-s); color: var(--c-accent-strong); display: block; margin-bottom: 2px; }
+.rules span { font-size: var(--fs-s); color: var(--c-ink-2); line-height: 1.55; }
+
+/* ==== 浮层（单条跟随） ==== */
+.fpop { position: fixed; z-index: 80; background: var(--c-surface-2); border: 1px solid var(--c-line);
+  border-radius: var(--r-m); box-shadow: var(--sh-float); padding: var(--sp-2); width: 250px;
+  display: none; transform-origin: top left; }
+.fpop.is-in { display: block; animation: pop 150ms cubic-bezier(.2,.6,.3,1); }
+@keyframes pop { from { opacity: 0; transform: scale(.96) translateY(-4px); } }
+.fpop .hd { font-size: var(--fs-s); color: var(--c-ink-3); padding: 2px var(--sp-2) var(--sp-1); }
+.fpop .trow { display: flex; align-items: center; gap: var(--sp-2); padding: 4px var(--sp-2);
+  border-radius: var(--r-xs); cursor: pointer; font-size: var(--fs-body); }
+.fpop .trow:hover { background: var(--c-accent-soft); }
+.fpop .trow .p { margin-left: auto; font-size: 10px; color: var(--c-ink-4); font-family: var(--font-mono); }
+.fpop .once { border-top: 1px solid var(--c-line-soft); margin-top: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2); font-size: var(--fs-s); color: var(--c-ink-3); cursor: pointer; }
+.fpop .once:hover { color: var(--c-accent); }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <b>Agent Depot</b>
+  <nav><span>会话</span><span>记忆</span><span class="on">Skills</span><span>MCP</span><span>台账</span><span>统计</span><span>设置</span></nav>
+  <span class="engine">引擎 casr · 已连接</span>
+</div>
+
+<div class="stage">
+  <!-- 本地目录组 -->
+  <div class="srcgroup">
+    <div class="nm">本地</div>
+    <div class="meta">3 源 · 52 条</div>
+    <div class="d">默认目录 + 已链接目录；目录内条目变化实时同步</div>
+    <div class="acts"><button class="btn" onclick="openManage()">目录管理</button><button class="btn">新建</button><button class="btn">导入</button></div>
+  </div>
+  <div class="grid3" id="dircards"></div>
+  <!-- 远仓组 -->
+  <div class="srcgroup">
+    <div class="nm">远程仓库</div>
+    <div class="meta">1 源 · 9 条</div>
+    <div class="d">Git 仓库拉取，只读跟随上游</div>
+    <div class="acts"><button class="btn">添加仓库</button><button class="btn">全部拉取</button></div>
+  </div>
+  <div class="grid3">
+    <div class="tcard tcard--repo"><span class="cnt">9</span><div class="chip ve">VE</div><div class="tnm">Vercel Skills</div>
+      <span class="tcard__tag"><span class="tool-dot dot--p6"></span></span></div>
+  </div>
+  <!-- 工具组 -->
+  <div class="srcgroup">
+    <div class="nm">工具</div>
+    <div class="meta">10 源 · 576 条</div>
+    <div class="d">从已安装工具的目录提取</div>
+    <div class="acts"><button class="btn">重新扫描</button></div>
+  </div>
+  <div class="grid3" id="toolcards"></div>
+</div>
+
+<div class="stats">
+  <span><b>61</b>条目 · 全部来源</span><span class="muted"><b>52</b>本地</span>
+  <span><b>10</b>远程拉取</span><span><b>88</b>已部署到工具</span><span class="muted"><b>394</b>待更新 / 待安装</span>
+</div>
+
+<div class="body">
+  <div class="list">
+    <div class="search">搜索条目…</div>
+    <div id="items"></div>
+    <div class="stats" style="justify-content:flex-end;color:var(--c-ink-3);font-size:var(--fs-s)">
+      已选 <b id="seln" style="font-size:var(--fs-body)">2</b> · 显示 5 条 · 共 25 条
+    </div>
+  </div>
+
+  <!-- 跟随与安装管理器（重构后的右侧面板） -->
+  <div class="panel">
+    <h3>跟随与安装</h3>
+    <div class="psub">已选 <b id="p-seln">2</b> 条 · 跟随 = 持续自动同步；仅复制 = 一次性快照</div>
+    <div class="psec">这些条目正在跟随</div>
+    <div id="p-follows"></div>
+    <div class="psec">添加跟随</div>
+    <div class="addgrid" id="p-add"></div>
+    <div class="pfoot">
+      <button class="btn primary" id="p-follow-btn">跟随 2 条 → 0 个工具</button>
+      <button class="btn ghost" id="p-once" title="一次性复制，不建立持续跟随">仅复制一次</button>
+    </div>
+    <div class="leg">
+      ● 实心色点 = 持续跟随（目录连接或单条跟随）· 移除跟随不影响已同步文件<br>
+      目录绑定（整源跟随）在 <b>目录管理</b> 中管理
+    </div>
+  </div>
+</div>
+
+<!-- 融合规则 -->
+<div class="rules">
+  <div><b>① 关系只有一层：「跟随」</b><span>整源跟随（目录⇄工具，现有绑定）与单条跟随（条目⇄工具，新增）共用同一份关系与状态表达；目录卡 →色点、条目行跟随点、工具卡接收数是同一份数据的三个视图。</span></div>
+  <div><b>② 跟随优先，快照次之</b><span>同一 源×目标 上若已存在整源跟随，逐条安装自动收纳为跟随（面板显示「已跟随」且不可重复操作）；「仅复制一次」保留给不想持久跟随的场景。</span></div>
+  <div><b>③ 升级路径</b><span>手动安装过的条目可在面板中一键「转为跟随」——把一次性快照升级为持续关系，无需重装。</span></div>
+  <div><b>④ 来源可追溯</b><span>条目行的跟随点悬停显示来源：「经目录 agent-skills」或「单条跟随」——整源跟随带来的点不可单条移除（由目录连接统一管理），避免误操作。</span></div>
+</div>
+
+<!-- 单条跟随浮层 -->
+<div class="fpop" id="fpop">
+  <div class="hd">跟随到…</div>
+  <div id="fpop-list"></div>
+  <div class="once" id="fpop-once">仅复制一次（不跟随）</div>
+</div>
+
+<script>
+/* ==== 数据 ==== */
+const TOOLS = [
+  { id: 'pi', name: 'Pi-Agent', dot: 'dot--p6', path: '~/.pi/agent/skills' },
+  { id: 'claude', name: 'Claude Code', dot: 'dot--claude', path: '~/.claude/skills' },
+  { id: 'codex', name: 'Codex CLI', dot: 'dot--codex', path: '~/.agents/skills 共享' },
+  { id: 'workbuddy', name: 'WorkBuddy', dot: 'dot--p4', path: '~/.workbuddy/skills' },
+  { id: 'zcode', name: 'ZCode', dot: 'dot--p5', path: '~/.zcode/skills' },
+];
+const T = id => TOOLS.find(t => t.id === id) || { id, name: id, dot: '' };
+const DIRS = [
+  { id: 'default', name: '默认目录', n: 16, binds: [] },
+  { id: 'dir-b', name: 'agent-skills', n: 17, binds: ['pi'] },
+  { id: 'dir-c', name: 'lingchuang-skills', n: 11, binds: ['pi'] },
+];
+const ITEMS = [
+  { id: 'i1', dir: 'dir-b', name: 'agent-html-skills', desc: '单文件 HTML 产物工具集（19 个子技能收编自 f-labs-io/agent-html-skills, MIT）…' },
+  { id: 'i2', dir: 'dir-b', name: 'api-snapshot', desc: '接口调用快照留存。测试、验证、排查、需求查证时…' },
+  { id: 'i3', dir: 'dir-b', name: 'capturing-takeaways', desc: '把当前对话里值得长期记住的结论沉淀进知识库…', body: '---\nname: capturing-takeaways\ndescription: "把当前对话里值得长期记住的结论沉淀进知识库…"\nversion: 0.2.0\n\n# Capturing Takeaways\n\n对话结束即遗忘是模型物理；这个 skill 把「值得记住的结论」在遗忘前捞出来。' },
+  { id: 'i4', dir: 'dir-b', name: 'change-advice', desc: '当用户说「告诉我怎么改」…给出修改方案、改动点和风险分析，只分析不直接改代码。' },
+  { id: 'i5', dir: 'default', name: 'scratch-note', desc: '默认目录里的临时条目（无目录绑定）…' },
+];
+/* 跟随关系：via 'dir:<id>' = 整源跟随带入；'manual' = 单条跟随 */
+let FOLLOWS = [
+  { item: 'i1', tool: 'pi', via: 'dir:dir-b' },
+  { item: 'i2', tool: 'pi', via: 'dir:dir-b' },
+  { item: 'i3', tool: 'pi', via: 'dir:dir-b' },
+  { item: 'i4', tool: 'pi', via: 'dir:dir-b' },
+  { item: 'i1', tool: 'claude', via: 'manual' },   // 演示：单条手动跟随
+];
+const SEL = new Set(['i3']);
+const dirOf = it => ITEMS.find(x => x.id === it).dir;
+const dirBind = (dir, tool) => DIRS.find(d => d.id === dir && (d.binds || []).includes(tool));
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ==== 工具卡 ==== */
+(function () {
+  const host = document.getElementById('toolcards');
+  host.innerHTML = TOOLS.slice(0, 2).map(t => {
+    const n = FOLLOWS.filter(f => f.tool === t.id).length;
+    const srcs = [...new Set(FOLLOWS.filter(f => f.tool === t.id)
+      .map(f => f.via.startsWith('dir:') ? DIRS.find(d => d.id === f.via.slice(4)).name : '单条'))];
+    return `<div class="tcard"><span class="cnt">${73 + n}</span>
+      <div class="chip ${t.id === 'pi' ? '' : 've'}" style="${t.id === 'pi' ? 'background:var(--c-t-p6)' : ''}">${t.name.slice(0, 2).toUpperCase()}</div>
+      <div class="tnm">${t.name}</div>
+      <span class="tcard__tag" title="接收来源：${esc(srcs.join(' · '))}"><span class="arr" style="color:var(--c-ink-3);font-weight:400">⇐</span><span class="plus" style="font-size:var(--fs-s)">${esc(srcs.join('·'))}</span></span>
+    </div>`;
+  }).join('');
+})();
+
+/* ==== 目录卡 ==== */
+(function () {
+  const host = document.getElementById('dircards');
+  host.innerHTML = DIRS.map(d => {
+    const dots = (d.binds || []).map(id => `<span class="tool-dot ${TOOLS.find(t => t.id === id).dot}"></span>`).join('');
+    return `<div class="tcard ${d.id === 'dir-b' ? 'is-on' : ''}" onclick="openManage('${d.id}')">
+      <span class="cnt">${d.n}</span>
+      <div class="chip">${d.id === 'default' ? '默认' : d.name === 'agent-skills' ? 'AG' : 'LI'}</div>
+      <div class="tnm">${d.name}</div>
+      ${(d.binds || []).length ? `<span class="tcard__tag"><span class="arr">→</span>${dots}<span class="plus">+${d.binds.length}</span></span>` : ''}
+    </div>`;
+  }).join('');
+})();
+
+/* ==== 条目列表 ==== */
+function renderItems() {
+  const host = document.getElementById('items');
+  host.innerHTML = ITEMS.map(it => {
+    const fs = FOLLOWS.filter(f => f.item === it.id);
+    const sel = SEL.has(it.id);
+    const fol = fs.map(f => {
+      const viaDir = f.via.startsWith('dir:');
+      const dname = viaDir ? DIRS.find(d => d.id === f.via.slice(4)).name : '';
+      return `<span class="fdot" data-u="${it.id}|${f.tool}|${f.via}" title="${viaDir ? '经目录 ' + dname + ' 整源跟随' : '单条跟随'}（悬停可移除${viaDir ? '：整源跟随请在目录管理中调整' : ''}）">
+        <span class="tool-dot ${T(f.tool).dot}"></span>${T(f.tool).name}${viaDir ? '<span class="via">经目录</span>' : ''}</span>`;
+    }).join('');
+    const add = `<button class="fadd" data-a="${it.id}">＋ 跟随</button>`;
+    const body = it.id === 'i3' && sel ? `<div class="expanded">${esc(it.body)}</div>` : '';
+    return `<div class="item ${sel ? 'sel' : ''}">
+      <span class="chk" data-chk="${it.id}">${sel ? '✓' : ''}</span>
+      <span class="chip2">${it.dir === 'dir-b' ? 'AG' : 'DF'}</span>
+      <div class="mid">
+        <div class="ttl">${it.name}</div>
+        <div class="sb">${it.dir === 'dir-b' ? 'agent-skills' : '默认目录'} · ${esc(it.desc)}</div>
+        <div class="follows"><span class="lbl">跟随</span>${fol}${add}</div>
+        ${body}
+      </div>
+      ${it.id === 'i3' && sel ? '<span style="flex:none;display:flex;gap:var(--sp-1)"><button class="btn sm">编辑</button><button class="btn sm">复制</button><button class="btn sm danger">删除</button></span>' : ''}
+    </div>`;
+  }).join('');
+  host.querySelectorAll('[data-chk]').forEach(c => c.onclick = () => {
+    const id = c.dataset.chk;
+    SEL.has(id) ? SEL.delete(id) : SEL.add(id);
+    document.getElementById('seln').textContent = SEL.size;
+    document.getElementById('p-seln').textContent = SEL.size;
+    renderItems(); renderPanel();
+  });
+  host.querySelectorAll('[data-a]').forEach(b => b.onclick = (e) => {
+    e.stopPropagation(); openFPop(b, b.dataset.a);
+  });
+  host.querySelectorAll('[data-u]').forEach(x => x.onclick = (e) => {
+    e.stopPropagation();
+    const [item, tool, via] = x.dataset.u.split('|');
+    if (via.startsWith('dir:')) { toast('整源跟随请在「目录管理」中调整'); return; }
+    FOLLOWS = FOLLOWS.filter(f => !(f.item === item && f.tool === tool));
+    toast(`已移除 ${ITEMS.find(i => i.id === item).name} ⇄ ${tool} 的单条跟随`);
+    renderItems(); renderPanel();
+  });
+}
+
+/* ==== 右侧跟随管理器 ==== */
+function unionTools() {
+  return [...new Set(SEL.size ? FOLLOWS.filter(f => SEL.has(f.item)).map(f => f.tool) : [])];
+}
+function renderPanel() {
+  const folHost = document.getElementById('p-follows');
+  const addHost = document.getElementById('p-add');
+  const btn = document.getElementById('p-follow-btn');
+  const selItems = [...SEL];
+  const ut = unionTools();
+  if (!selItems.length) {
+    folHost.innerHTML = '<div class="psub">勾选条目后，这里管理它们的跟随关系</div>';
+    addHost.innerHTML = '<div class="note" style="color:var(--c-ink-4);font-size:var(--fs-s)">未勾选条目</div>';
+    btn.disabled = true; btn.textContent = '跟随 0 条 → 0 个工具';
+    return;
+  }
+  folHost.innerHTML = ut.map(tid => {
+    const viaDir = selItems.every(it => dirBind(dirOf(it), tid));
+    const cnt = FOLLOWS.filter(f => f.tool === tid && SEL.has(f.item)).length;
+    return `<div class="frow ${viaDir ? 'disabled' : ''}">
+      <span class="tool-dot ${T(tid).dot}"></span><span class="nm">${T(tid).name}</span>
+      <span class="via">${selItems.every(it => dirOf(it) === dirOf(selItems[0])) ? '整源 · ' : ''}全部条目 · ${cnt}</span>
+      <span class="st-follow">● 跟随中</span>
+      ${viaDir ? '' : `<span class="x" data-uf="${tid}">✕</span>`}</div>`;
+  }).join('') || '<div class="psub">尚无跟随 · 从下方添加</div>';
+  const followed = new Set(ut);
+  addHost.innerHTML = TOOLS.filter(t => !followed.has(t.id)).map(t =>
+    `<div class="addrow" data-t="${t.id}"><span class="chk"></span><span class="nm2">${t.name}</span><span class="p">${t.path}</span></div>`).join('')
+    || '<div class="note" style="color:var(--c-ink-4);font-size:var(--fs-s)">全部工具已在跟随中</div>';
+  let picks = [];
+  addHost.querySelectorAll('.addrow').forEach(r => r.onclick = () => { r.classList.toggle('is-on');
+    picks = [...addHost.querySelectorAll('.addrow.is-on')].map(x => x.dataset.t);
+    btn.textContent = `跟随 ${selItems.length} 条 → ${picks.length} 个工具`; });
+  btn.textContent = `跟随 ${selItems.length} 条 → 0 个工具`;
+  btn.disabled = false;
+  btn.dataset.picks = '';
+  addHost.querySelectorAll('.addrow').forEach(r => {
+    const _orig = r.onclick;
+    r.addEventListener('click', () => {
+      picks = [...addHost.querySelectorAll('.addrow.is-on')].map(x => x.dataset.t);
+      btn.textContent = `跟随 ${selItems.length} 条 → ${picks.length} 个工具`;
+    });
+  });
+  btn.onclick = () => {
+    const picks = [...addHost.querySelectorAll('.addrow.is-on')].map(x => x.dataset.t);
+    if (!picks.length) { toast('先勾选要跟随的工具'); return; }
+    picks.forEach(tid => selItems.forEach(it => {
+      if (!FOLLOWS.find(f => f.item === it && f.tool === tid))
+        FOLLOWS.push({ item: it, tool: tid, via: 'manual' });
+    }));
+    toast(`已跟随：${selItems.length} 条 → ${picks.length} 个工具（持续自动同步）`);
+    renderItems(); renderPanel();
+  };
+  folHost.querySelectorAll('[data-uf]').forEach(x => x.onclick = (e) => {
+    e.stopPropagation();
+    const tid = x.dataset.uf;
+    FOLLOWS = FOLLOWS.filter(f => !(f.tool === tid && SEL.has(f.item)));
+    toast(`已移除对这些条目的跟随（${T(tid).name}）`);
+    renderPanel(); renderItems();
+  });
+}
+
+/* ==== 单条跟随浮层 ==== */
+let fpItem = null;
+function openFPop(anchor, itemId) {
+  fpItem = itemId;
+  const pop = document.getElementById('fpop');
+  const followed = new Set(FOLLOWS.filter(f => f.item === itemId).map(f => f.tool));
+  document.getElementById('fpop-list').innerHTML = TOOLS.map(t => {
+    const f = FOLLOWS.find(x => x.item === itemId && x.tool === t.id);
+    const viaDir = f && f.via.startsWith('dir:');
+    return `<div class="trow" data-t="${t.id}" style="${f ? 'opacity:.55' : ''}">
+      <span class="tool-dot ${t.dot}"></span>${t.name}
+      ${f ? `<span class="st-follow" style="font-size:var(--fs-xs)">● ${viaDir ? '经目录' : '单条'}</span>` : `<span class="p">${t.path}</span>`}</div>`;
+  }).join('');
+  const r = anchor.getBoundingClientRect();
+  pop.classList.add('is-in');
+  pop.style.left = Math.min(r.left, innerWidth - 270) + 'px';
+  pop.style.top = Math.min(r.bottom + 6, innerHeight - 220) + 'px';
+  pop.querySelectorAll('.trow').forEach(row => row.onclick = () => {
+    const tid = row.dataset.t;
+    const f = FOLLOWS.find(x => x.item === fpItem && x.tool === tid);
+    if (f && f.via.startsWith('dir:')) { toast('整源跟随：请在目录管理中调整'); return; }
+    if (f) { FOLLOWS = FOLLOWS.filter(x => x !== f); toast('已移除单条跟随'); }
+    else { FOLLOWS.push({ item: fpItem, tool: tid, via: 'manual' });
+      toast(`已跟随 ${ITEMS.find(i => i.id === fpItem).name} → ${T(tid).name}（持续自动同步）`); }
+    renderItems(); renderPanel(); hideFPop();
+  });
+  document.getElementById('fpop-once').onclick = () => {
+    hideFPop(); toast('已复制一次（未建立持续跟随）');
+  };
+}
+function hideFPop() { document.getElementById('fpop').classList.remove('is-in'); }
+document.addEventListener('click', e => { if (!e.target.closest('.fpop') && !e.target.closest('.fadd')) hideFPop(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideFPop(); });
+
+/* ==== 目录管理（整源跟随入口，沿用现有） ==== */
+function openManage(dirId) {
+  const d = DIRS.find(x => x.id === dirId);
+  toast(`目录管理 · ${d.name}：整源跟随绑定（Pi-Agent）在此管理 —— 原型略`);
+}
+function toast(m) { const t = document.createElement('div');
+  t.style.cssText = 'position:fixed;right:24px;bottom:24px;z-index:99;background:var(--c-surface-2);border-radius:var(--r-m);box-shadow:var(--sh-float);padding:8px 12px;font-size:var(--fs-body)';
+  t.textContent = m; document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2600); }
+
+/* ==== init ==== */
+renderItems(); renderPanel();
+</script>
+</body>
+</html>
