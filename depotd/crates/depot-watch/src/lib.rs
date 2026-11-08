@@ -15,7 +15,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use notify::RecursiveMode;
-use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
+use notify_debouncer_full::{
+    DebounceEventResult, Debouncer, NoCache, new_debouncer_opt,
+};
 use tokio::sync::broadcast;
 
 const IGNORE_DIRS: [&str; 7] = [".git", "node_modules", "__pycache__", ".venv", "dist", "build", ".cache"];
@@ -74,7 +76,9 @@ pub struct Watcher {
     resyncs: AtomicU64,
     failed_watches: AtomicU64,
     backend: &'static str,
-    debouncer: Mutex<Option<Debouncer<notify::RecommendedWatcher, RecommendedCache>>>,
+    debouncer: Mutex<Option<Debouncer<notify::RecommendedWatcher, NoCache>>>,
+    /// 已注册过 watch 的路径（增量注册：避免每次 set_roots 全量重建）
+    watched: Mutex<std::collections::HashSet<PathBuf>>,
 }
 
 impl Watcher {
@@ -93,6 +97,7 @@ impl Watcher {
             failed_watches: AtomicU64::new(0),
             backend: "notify",
             debouncer: Mutex::new(None),
+            watched: Mutex::new(Default::default()),
         })
     }
 
@@ -124,12 +129,24 @@ impl Watcher {
             inner.roots = roots;
             inner.manifest.clear();
         }
-        self.restart_debouncer();
+        self.ensure_debouncer();
         self.resyncs.fetch_add(1, Ordering::Relaxed);
         self.manifest_snapshot(); // 建基线（不触发广播）
     }
 
-    fn restart_debouncer(self: &Arc<Self>) {
+    /// 确保 debouncer 存在且覆盖全部 roots。
+    ///
+    /// 两个关键设计（2026-11-08 内存事故修复）：
+    /// 1. **NoCache 替代 FileIdMap**：默认的 RecommendedCache 会在 watch() 时
+    ///    walkdir 递归遍历整棵被监控树并给每个文件缓存 file-id——真实机器上
+    ///    ~/.claude/projects 等根有海量文件，内存无界增长（用户观测到 30G）、
+    ///    启动阶段卡死数分钟（端口都无法绑定）。NoCache 零缓存；代价是
+    ///    rename 事件会拆成 create+remove 两条——本实现的消费端只做
+    ///    「路径→scope」映射，两种形态效果相同，无行为差异。
+    /// 2. **debouncer 只创建一次，watch 增量注册**：旧实现每次 set_roots
+    ///    全量重建 debouncer + 重新 watch 所有根（roots 集合在 /api/tools、
+    ///    /api/local-dirs 写操作后刷新）→ 每次都全树重走。现在只 watch 新增路径。
+    fn ensure_debouncer(self: &Arc<Self>) {
         let paths: Vec<PathBuf> = {
             let inner = self.inner.lock().unwrap();
             let mut seen = Vec::new();
@@ -140,38 +157,56 @@ impl Watcher {
             }
             seen
         };
-        let me = Arc::clone(self);
-        let failed_counter = Arc::clone(&me);
         let mut guard = self.debouncer.lock().unwrap();
-        match new_debouncer(DEBOUNCE, None, move |events| me.on_events(events)) {
-            Ok(mut d) => {
-                let mut failed = 0usize;
-                for p in &paths {
-                    let mode = if p.is_dir() {
-                        RecursiveMode::Recursive
-                    } else {
-                        // 文件根：监控父目录（非递归）
-                        match p.parent() {
-                            Some(parent) => {
-                                if d.watch(parent, RecursiveMode::NonRecursive).is_err() {
-                                    failed += 1;
-                                }
-                                continue;
-                            }
-                            None => continue,
-                        }
-                    };
-                    if d.watch(p, mode).is_err() {
-                        failed += 1; // watch 描述符耗尽等：该根从此无事件
-                    }
+        if guard.is_none() {
+            let me = Arc::clone(self);
+            match new_debouncer_opt(
+                DEBOUNCE,
+                None,
+                move |events| me.on_events(events),
+                NoCache,
+                notify::Config::default(),
+            ) {
+                Ok(d) => *guard = Some(d),
+                Err(e) => {
+                    tracing::warn!("notify 初始化失败，退化为 manifest 轮询: {e}");
+                    return;
                 }
-                if failed > 0 {
-                    tracing::error!("watcher 注册失败 {} 个根（将仅靠 manifest 兜底轮询）", failed);
-                    failed_counter.failed_watches.store(failed as u64, Ordering::Relaxed);
-                }
-                *guard = Some(d);
             }
-            Err(e) => tracing::warn!("notify 初始化失败，退化为 manifest 轮询: {e}"),
+        }
+        let d = guard.as_mut().unwrap();
+        let mut watched = self.watched.lock().unwrap();
+        let mut failed = 0usize;
+        for p in &paths {
+            if watched.contains(p) {
+                continue; // 已注册：增量跳过
+            }
+            let mode = if p.is_dir() {
+                RecursiveMode::Recursive
+            } else {
+                // 文件根：监控父目录（非递归）
+                match p.parent() {
+                    Some(parent) => {
+                        if d.watch(parent, RecursiveMode::NonRecursive).is_err() {
+                            failed += 1;
+                            continue;
+                        }
+                        watched.insert(p.clone());
+                        continue;
+                    }
+                    None => continue,
+                }
+            };
+            if d.watch(p, mode).is_err() {
+                failed += 1; // watch 描述符耗尽等：该根从此无事件
+            } else {
+                watched.insert(p.clone());
+            }
+        }
+        if failed > 0 {
+            tracing::error!("watcher 注册失败 {} 个根（将仅靠 manifest 兜底轮询）", failed);
+            self.failed_watches
+                .fetch_add(failed as u64, Ordering::Relaxed);
         }
     }
 
