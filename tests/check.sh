@@ -6,6 +6,12 @@
 # 变异门禁不在这里（数分钟）—— 改测试 / 改被盯模块时手动跑 python3 scripts/mutate.py。
 # pre-push 钩子自动跑本脚本：不绿推不出去。
 set -uo pipefail
+
+# 防钩子环境泄漏（2026-11-08 事故根因）：git push 调用钩子时会注入
+# GIT_DIR / GIT_WORK_TREE 等变量，check.sh 的测试子进程（夹具仓 git init/commit）
+# 继承后会把夹具提交写进真实仓库、覆盖 refs/heads/main。这里一律清洗。
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR \
+      GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
 cd "$(dirname "$0")/.."
 FAIL=0
 

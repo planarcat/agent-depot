@@ -14,6 +14,10 @@
 - **推送口径（用户 2026-11-08 拍板）**：远程 `origin` 就是主分支仓——main 完工直接
   `git -C WorkTrees/main push origin main`（pre-push 门禁会跑 check.sh），
   **不走 PR/MR**（本仓为个人仓，覆盖工作区「主分支禁直推」默认）。
+- **⚠️ 钩子环境泄漏教训**：`git push` 会给钩子注入 GIT_DIR/GIT_WORK_TREE，
+  check.sh 的测试子进程继承后，夹具 git 操作会写进真实仓库（曾把 fixture 提交
+  推上远程覆盖 main）。check.sh 顶部已统一 unset 这些变量——**不要移除**；
+  新增任何跑 git 的测试一律显式 `-C <夹具目录>`。
 - 日常门禁（在对应 worktree 内跑）：`bash scripts/soak_check.sh`（内存/事件门禁）、
   `bash scripts/run_spec_rust.sh`（spec 78 行为闸门）。
 
