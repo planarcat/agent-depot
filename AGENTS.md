@@ -11,6 +11,9 @@
   `git worktree add WorkTrees/<分支名> -b <分支名> main`
   完工合回 main：`git -C WorkTrees/main merge --no-ff <分支名>`，然后 `git worktree remove WorkTrees/<分支名>`。
 - git hooks 走 main worktree 的**绝对路径**（`core.hooksPath` 已指向 `WorkTrees/main/scripts/hooks`）。
+- **推送口径（用户 2026-11-08 拍板）**：远程 `origin` 就是主分支仓——main 完工直接
+  `git -C WorkTrees/main push origin main`（pre-push 门禁会跑 check.sh），
+  **不走 PR/MR**（本仓为个人仓，覆盖工作区「主分支禁直推」默认）。
 - 日常门禁（在对应 worktree 内跑）：`bash scripts/soak_check.sh`（内存/事件门禁）、
   `bash scripts/run_spec_rust.sh`（spec 78 行为闸门）。
 
