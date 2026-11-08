@@ -385,3 +385,63 @@ impl Watcher {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 回归钉（2026-11-08 FileIdMap 内存事故）：set_roots 必须不做全树遍历。
+    /// 造一棵 1 万文件树，注册须在 1s 内完成——FileIdMap 回归时 walkdir+stat
+    /// 1 万文件（暖缓存也要秒级）+ 缓存分配会让此测试显著变慢并红。
+    #[test]
+    fn set_roots_does_not_walk_watched_tree() {
+        let w = Watcher::new();
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("big-tree");
+        std::fs::create_dir_all(&root).unwrap();
+        for i in 0..10_000u32 {
+            std::fs::write(root.join(format!("f{i:05}.txt")), "x").unwrap();
+        }
+        let mut mapping = HashMap::new();
+        mapping.insert("test:big".to_string(), vec![root.clone()]);
+        let start = std::time::Instant::now();
+        w.set_roots(&mapping);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "set_roots 耗时 {elapsed:?}——疑似回归到全树遍历缓存（FileIdMap）"
+        );
+        // 状态自洽：已注册、无失败
+        assert!(w.status()["failed_watches"].as_u64() == Some(0));
+        assert!(w.rev() >= 0);
+    }
+
+    /// 文件根（非目录）挂父目录非递归：不 panic、注册成功。
+    #[test]
+    fn file_root_watches_parent() {
+        let w = Watcher::new();
+        let base = tempfile::tempdir().unwrap();
+        let f = base.path().join("db.sqlite");
+        std::fs::write(&f, "x").unwrap();
+        let mut mapping = HashMap::new();
+        mapping.insert("tool:x".to_string(), vec![f.clone()]);
+        w.set_roots(&mapping);
+        assert!(w.scope_of(&f).as_deref() == Some("tool:x"));
+    }
+
+    /// 事件→scope 最长前缀匹配。
+    #[test]
+    fn scope_longest_prefix() {
+        let w = Watcher::new();
+        let base = tempfile::tempdir().unwrap();
+        let a = base.path().join("a");
+        let ab = a.join("sub");
+        std::fs::create_dir_all(&ab).unwrap();
+        let mut mapping = HashMap::new();
+        mapping.insert("tool:a".to_string(), vec![a.clone()]);
+        mapping.insert("tool:ab".to_string(), vec![ab.clone()]);
+        w.set_roots(&mapping);
+        assert_eq!(w.scope_of(&ab.join("x.txt")).as_deref(), Some("tool:ab"));
+        assert_eq!(w.scope_of(&a.join("y.txt")).as_deref(), Some("tool:a"));
+    }
+}

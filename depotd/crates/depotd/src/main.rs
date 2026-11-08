@@ -40,11 +40,58 @@ enum Cmd {
     Serve,
 }
 
+/// 自观测健康状态：看门狗每 30s 采样一次，/api/healthz 直接读。
+pub struct HealthState {
+    pub started: std::time::Instant,
+    pub rss_kb: std::sync::atomic::AtomicU64,
+    /// 看门狗判定：RSS 超过 ERROR 阈值后置位（由看门狗清除不自动恢复——留痕）
+    pub degraded: std::sync::atomic::AtomicBool,
+}
+
 pub struct AppState {
     pub store: depot_core::Store,
     pub build: &'static str,
     pub watcher: Arc<Watcher>,
     pub web_dir: Option<String>,
+    pub health: HealthState,
+}
+
+/// RSS 采样（KB）：ps 单次调用，轻量。
+fn sample_rss_kb(pid: u32) -> Option<u64> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    std::str::from_utf8(&out.stdout)
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+}
+
+/// 看门狗：每 30s 采样 RSS；>512MB WARN，>2GB ERROR 并置 degraded（/api/healthz 暴露）。
+const RSS_WARN_KB: u64 = 512 * 1024;
+const RSS_ERROR_KB: u64 = 2 * 1024 * 1024;
+
+fn start_watchdog(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
+    let pid = std::process::id();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            if let Some(kb) = sample_rss_kb(pid) {
+                state.health.rss_kb.store(kb, std::sync::atomic::Ordering::Relaxed);
+                if kb > RSS_ERROR_KB {
+                    state.health.degraded.store(true, std::sync::atomic::Ordering::Relaxed);
+                    tracing::error!("看门狗：RSS={}MB 超过 {}MB 阈值（degraded 置位）——疑似内存泄漏，请采集 sample/heap",
+                        kb / 1024, RSS_ERROR_KB / 1024);
+                } else if kb > RSS_WARN_KB {
+                    tracing::warn!("看门狗：RSS={}MB 超过 {}MB（观察）", kb / 1024, RSS_WARN_KB / 1024);
+                }
+            }
+        }
+    })
 }
 
 #[tokio::main]
@@ -96,7 +143,13 @@ async fn main() -> anyhow::Result<()> {
                 build: env!("CARGO_PKG_VERSION"),
                 watcher,
                 web_dir,
+                health: HealthState {
+                    started: std::time::Instant::now(),
+                    rss_kb: std::sync::atomic::AtomicU64::new(0),
+                    degraded: std::sync::atomic::AtomicBool::new(false),
+                },
             });
+            start_watchdog(state.clone());
             let app = routes::router(state.clone());
             let addr = SocketAddr::from(([127, 0, 0, 1], cli.port));
             println!("depotd {} · http://{addr}", env!("CARGO_PKG_VERSION"));

@@ -28,6 +28,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     });
 
     let api = Router::new()
+        .route("/api/healthz", get_h(api_healthz))
         .route("/api/state", get_h(api_state))
         .route("/api/events", get_h(api_events))
         .route("/api/watch", get_h(api_watch))
@@ -389,6 +390,28 @@ fn default_schedule() -> Value {
         "codex": {"enabled": false, "interval_min": 30},
         "opencode": {"enabled": false, "interval_min": 30}
     })
+}
+
+/// 轻量健康探针（自观测）：进程指标 + 事件水位，供监控采集与 soak 门禁使用。
+async fn api_healthz(State(state): State<Arc<AppState>>) -> Response {
+    let rss_kb = state.health.rss_kb.load(std::sync::atomic::Ordering::Relaxed);
+    let degraded = state.health.degraded.load(std::sync::atomic::Ordering::Relaxed)
+        || state.watcher.status()["degraded"].as_bool().unwrap_or(false);
+    let fds = std::fs::read_dir("/dev/fd")
+        .map(|rd| rd.count())
+        .unwrap_or(0);
+    jraw(200, json!({
+        "ok": !degraded,
+        "degraded": degraded,
+        "uptime_s": state.health.started.elapsed().as_secs(),
+        "rss_kb": rss_kb,
+        "fds": fds,
+        "rev": state.watcher.rev(),
+        "events": state.watcher.status()["events"],
+        "watched": state.watcher.status()["watched"],
+        "failed_watches": state.watcher.status()["failed_watches"],
+        "subs": state.watcher.subscriber_count(),
+    }))
 }
 
 async fn api_state(State(state): State<Arc<AppState>>) -> Response {
