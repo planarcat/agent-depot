@@ -1,7 +1,18 @@
 # AGENTS.md · Agent Depot
 
 本地优先的 AI Agent 资产枢纽：多工具会话采集 / 浏览 / 迁移，外加记忆、Skills 分发、MCP 写入、台账。  
-技术面：Python 标准库后端（`server.py` + `hub/`），零框架前端（`web/`，原生 JS + CSS 变量）。
+技术面：Rust 后端（`depotd/`，axum + rusqlite，2026-11 起为运行主体）+ Python legacy（`server.py` + `hub/`，冻结只修 P0），零框架前端（`web/`，原生 JS + CSS 变量）。
+
+## 仓库布局：WorkTrees 工作流（2026-11-08）
+
+- 仓库根 `agent-depot/` 是 **bare 容器**（只有 `.git` / `WorkTrees/` / `reports/`（日报）规则锚点文件），**禁止在仓库根直接改代码**——那里没有工作树。
+- **main 分支常驻检出在 `WorkTrees/main`**：代码 / 测试 / 构建全在这里，depotd 也从这里起。
+- 新开发内容一律从 main 拉分支新建 worktree：
+  `git worktree add WorkTrees/<分支名> -b <分支名> main`
+  完工合回 main：`git -C WorkTrees/main merge --no-ff <分支名>`，然后 `git worktree remove WorkTrees/<分支名>`。
+- git hooks 走 main worktree 的**绝对路径**（`core.hooksPath` 已指向 `WorkTrees/main/scripts/hooks`）。
+- 日常门禁（在对应 worktree 内跑）：`bash scripts/soak_check.sh`（内存/事件门禁）、
+  `bash scripts/run_spec_rust.sh`（spec 78 行为闸门）。
 
 ## 改 `web/` 之前的硬规则
 
