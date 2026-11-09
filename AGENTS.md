@@ -5,7 +5,7 @@
 
 ## 仓库布局：WorkTrees 工作流（2026-11-08）
 
-- 仓库根 `agent-depot/` 是 **bare 容器**（只有 `.git` / `WorkTrees/` / `reports/`（日报）规则锚点文件），**禁止在仓库根直接改代码**——那里没有工作树。
+- **仓库本体（`.git`）在 `WorkTrees/main`**（2026-11-09 起）；外层 `agent-depot/` 是**普通文件夹**（无 `.git`，只有 `WorkTrees/` / `reports/`（日报）/ AGENTS.md+CLAUDE.md 锚点），**禁止在外层改代码**。
 - **main 分支常驻检出在 `WorkTrees/main`**：代码 / 测试 / 构建全在这里，depotd 也从这里起。
 - 新开发内容一律从 main 拉分支新建 worktree：
   `git worktree add WorkTrees/<分支名> -b <分支名> main`
