@@ -11,9 +11,9 @@
   `git worktree add WorkTrees/<分支名> -b <分支名> main`
   完工合回 main：`git -C WorkTrees/main merge --no-ff <分支名>`，然后 `git worktree remove WorkTrees/<分支名>`。
 - git hooks 走 main worktree 的**绝对路径**（`core.hooksPath` 已指向 `WorkTrees/main/scripts/hooks`）。
-- **推送口径（用户 2026-11-08 拍板）**：远程 `origin` 就是主分支仓——main 完工直接
-  `git -C WorkTrees/main push origin main`（pre-push 门禁会跑 check.sh），
-  **不走 PR/MR**（本仓为个人仓，覆盖工作区「主分支禁直推」默认）。
+- **推送口径（用户 2026-11-09 拍板，覆盖 11-08 的「直接 push」）**：**禁直接 push main**。
+  完工流程 = 分支 worktree 开发 → `push origin <分支>` → 开 PR（`gh pr create`）→
+  **用户审核合并**。Agent 不得自行 merge main；仅用户明确说「推 main / 合并」才可操作。
 - **⚠️ 钩子环境泄漏教训**：`git push` 会给钩子注入 GIT_DIR/GIT_WORK_TREE，
   check.sh 的测试子进程继承后，夹具 git 操作会写进真实仓库（曾把 fixture 提交
   推上远程覆盖 main）。check.sh 顶部已统一 unset 这些变量——**不要移除**；
