@@ -1,8 +1,10 @@
 # Agent Depot
 
+本地优先的 AI Agent 资产枢纽：多工具会话采集、浏览与迁移，外加记忆、Skills 分发、MCP 写入与台账。
+
 > v0.5.0 起更名：**Agent Depot**（原 Agent Session Hub）—— 已不止是会话记录工具。
 
-本地优先的 AI Agent 资产枢纽：**会话 · 记忆 · Skills · MCP · 台账** 五个一级模块一站管理。统一采集 Claude Code / Codex / OpenCode 等工具的会话（浏览、增量、定时刷新、跨工具迁移、lineage 勾连）到 `~/.agent/hub/`；Skills 与 MCP 支持从远程 Git 源拉取、版本管理与分发到各工具与项目仓库。
+统一采集 Claude Code / Codex / OpenCode 等工具的会话（浏览、增量、定时刷新、跨工具迁移、lineage 勾连）到 `~/.agent/hub/`；Skills 与 MCP 支持从远程 Git 源拉取、版本管理与分发到各工具与项目仓库。
 
 **零第三方依赖**：Python 3.9+ 标准库运行。迁移引擎调用 [casr](https://github.com/Dicklesworthstone/cross_agent_session_resumer)（未安装时优雅降级为只读浏览）。
 
