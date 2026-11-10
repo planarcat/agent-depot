@@ -66,6 +66,14 @@
     return new Set((b && b.excluded) || []);
   }
 
+  /* 绑定同步模式（暂存优先）：'copy' 直接复制 | 'link' 软链接（缺省 copy） */
+  function laneMode(dirId, toolId, ch) {
+    const st = S.stage.get(laneKey(dirId, toolId, ch));
+    if (st && st.mode) return st.mode;
+    const b = baseBind(dirId, toolId, ch);
+    return (b && b.mode) || 'copy';
+  }
+
   function setStage(dirId, toolId, ch, patch) {
     const key = laneKey(dirId, toolId, ch);
     const cur = S.stage.get(key) || {
@@ -567,7 +575,19 @@
       /* 成对编辑：目录 × 工具（连接/断开走画布连线与线上按钮，面板只做信息与条目跟随） */
       const ps = pairStat(d);
       ttl = `${d.name} → ${t ? t.name : S.selTool}`;
-      stat = `${ps.pill}<span class="txt">${ps.txt}</span>`;
+      const modeRows = ['skills', 'mcp'].filter(ch => S.types[ch] && targetOf(S.selTool, ch)
+        && (laneOn(d.id, S.selTool, ch) || S.stage.get(laneKey(d.id, S.selTool, ch)))).map(ch => {
+        const cur = laneMode(d.id, S.selTool, ch);
+        const st = S.stage.get(laneKey(d.id, S.selTool, ch));
+        const pending = st && st.mode && st.mode !== ((baseBind(d.id, S.selTool, ch) || {}).mode || 'copy');
+        return `<div class="cv-mrow"><span class="cv-mlab">${CH[ch]}</span>
+          <span class="cv-mode" data-dir="${d.id}" data-tool="${S.selTool}" data-ch="${ch}">
+            <button data-mode="copy" class="${cur === 'copy' ? 'sel' : ''}" title="把目录条目实体复制进工具目录">复制</button>
+            <button data-mode="link" class="${cur === 'link' ? 'sel' : ''}" title="在工具目录放指向本地库的软链接，内容自动跟随">链接</button>
+          </span>${pending ? '<span class="cv-pill part">待确认</span>' : ''}</div>`;
+      }).join('');
+      stat = `${ps.pill}<span class="txt">${ps.txt}</span>` +
+        (modeRows ? `<div class="cv-modes">${modeRows}</div>` : '');
       list = chipFlow();
     } else if (d) {
       const nTools = S.tools.filter(tt => aggState(d.id, tt.id)).length;
@@ -601,6 +621,17 @@
 
     const x = document.getElementById('cv-panel-x');
     if (x) x.onclick = () => { S.selDir = null; S.selTool = null; S.selRepo = null; renderAll(); };
+    p.querySelectorAll('.cv-mode button').forEach(b => {
+      b.onclick = () => {
+        const box = b.closest('.cv-mode');
+        const dirId = +box.dataset.dir, toolId = box.dataset.tool, ch = box.dataset.ch;
+        const mode = b.dataset.mode;
+        if (laneMode(dirId, toolId, ch) === mode) return;
+        /* 保留暂停态：kind 取当前生效态，切模式不顺便恢复自动同步 */
+        setStage(dirId, toolId, ch, { kind: lanePaused(dirId, toolId, ch) ? 'paused' : 'on', mode });
+        renderAll();
+      };
+    });
     p.querySelectorAll('.cv-brow[data-go]').forEach(r => {
       r.onclick = () => { S.selDir = +r.dataset.go; loadItems().then(renderAll).catch(() => renderAll()); renderAll(); };
     });
@@ -892,7 +923,8 @@
         if (op.kind === 'on' || op.kind === 'paused') {
           /* 链接/恢复：无绑定先建；再按口径设置自动同步开关 */
           if (!bind && tgt) {
-            const r = await post('/api/skills/dir-bindings', { dir_id: +dirId, target_ids: [tgt.id] });
+            const r = await post('/api/skills/dir-bindings',
+              { dir_id: +dirId, target_ids: [tgt.id], mode: op.mode || 'copy' });
             if (!r.data || !r.data.ok) failed += 1;
             bind = baseBind(dirId, toolId, ch);
           }
@@ -903,6 +935,15 @@
             body: JSON.stringify({ enabled: op.kind !== 'paused' }),
           });
           if (!r2.data || !r2.data.ok) failed += 1;
+          /* 暂存的同步模式（复制⇄链接）：与现值不同即 PATCH，后端切换并重同步 */
+          if (op.mode && bind.mode !== op.mode) {
+            const r3 = await api(`/api/skills/dir-bindings/${bind.id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ mode: op.mode }),
+            });
+            if (!r3.data || !r3.data.ok) failed += 1;
+          }
         } else if (op.kind === 'clean' && bind) {
           const r = await api(`/api/skills/dir-bindings/${bind.id}?clean=1`, { method: 'DELETE' });
           if (!r.data || !r.data.ok) failed += 1;
