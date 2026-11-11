@@ -1789,7 +1789,18 @@ fn agg_object(v: &Value) -> serde_json::Map<String, Value> {
 }
 
 /// 全部目录：扫描（拾取外部变化）→ 绑定跟随。
+/// 全部目录：扫描（拾取外部变化）→ 绑定跟随。
+///
+/// 性能（2026-11-11 CPU 事故）：Python 版靠 _MANIFEST 增量缓存使「读取即同步」
+/// 廉价；Rust 初版每次全量 walk+tree_hash（39 条 × 全目标）→ 打开画布页面即
+/// 持续高 CPU。现在：目录签名（仅 mtime/size 元数据，不读文件内容）未变 →
+/// 跳过该目录的扫描与绑定同步——「文件变了必扫」语义保留，未变时近零成本。
+/// 签名缓存为进程内状态，重启后首查仍做一次全量。
 pub fn sync_all_bindings(conn: &Connection, hub: &Path) -> Vec<Value> {
+    static SIG_CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<i64, u64>>> =
+        std::sync::OnceLock::new();
+    let sig_cache = SIG_CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+
     let mut summary = Vec::new();
     let dirs: Vec<(i64, String)> = {
         match conn.prepare("SELECT id, path FROM local_dirs ORDER BY id") {
@@ -1804,12 +1815,53 @@ pub fn sync_all_bindings(conn: &Connection, hub: &Path) -> Vec<Value> {
         if !p.is_dir() {
             continue; // 目录消失/无权限：不影响其余目录
         }
+        let sig = dir_signature(&p);
+        let unchanged = sig_cache.lock().unwrap().get(&did) == Some(&sig);
+        if unchanged {
+            continue; // 签名未变：跳过全量扫描与绑定同步
+        }
+        sig_cache.lock().unwrap().insert(did, sig);
         let _ = crate::scan_sync(conn, hub, did, &dir_name(conn, did), &p);
         for r in sync_dir_bindings(conn, hub, did, false) {
             summary.push(r);
         }
     }
     summary
+}
+
+/// 目录廉价签名：仅汇总 (文件名, mtime, size) 元数据（不读文件内容），
+/// 与全量 walk+sha256 相比成本可忽略。FNV-1a 64 位足够区分「变没变」。
+fn dir_signature(root: &Path) -> u64 {
+    fn fnv(state: &mut u64, bytes: &[u8]) {
+        for &b in bytes {
+            *state ^= b as u64;
+            *state = state.wrapping_mul(0x100000001b3);
+        }
+    }
+    let mut state: u64 = 0xcbf29ce484222325;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let mut entries: Vec<_> = rd.filter_map(|e| e.ok()).collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let name = e.file_name();
+            fnv(&mut state, name.to_string_lossy().as_bytes());
+            if let Ok(md) = e.metadata() {
+                fnv(&mut state, &md.len().to_le_bytes());
+                if let Ok(m) = md.modified() {
+                    if let Ok(d) = m.duration_since(std::time::UNIX_EPOCH) {
+                        fnv(&mut state, &d.as_nanos().to_le_bytes()[..8]);
+                    }
+                }
+                if md.is_dir() {
+                    fnv(&mut state, b"/");
+                    stack.push(e.path());
+                }
+            }
+        }
+    }
+    state
 }
 
 fn dir_name(conn: &Connection, did: i64) -> String {
