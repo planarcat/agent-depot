@@ -7,7 +7,7 @@ use std::time::Duration;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::Manager;
 
-const DEFAULT_REPO: &str = "/Users/planarcat/Documents/Projects/@planarcat/agent-depot";
+const DEFAULT_REPO: &str = "/Users/planarcat/Documents/Projects/@planarcat/agent-depot/WorkTrees/main";
 const CONSOLE_URL: &str = "http://127.0.0.1:8317";
 const PORT: u16 = 8317;
 

@@ -1,29 +1,19 @@
 #!/bin/bash
-# Agent Depot launcher
-#   ./run.sh          start in background (pid file + log)
-#   ./run.sh --fg     run in foreground (Ctrl-C to stop)
-#   ./run.sh --open   start (if needed) and open browser window
+# Agent Depot 服务启动（Rust depotd · dev 库）
+# 桌面壳 ensure_service 兜底调用：确保 8317 有 depotd 在跑（幂等）。
+# 前台/交互管理请用根目录 dev 指令：dev main / dev stop / dev status
 set -euo pipefail
 cd "$(dirname "$0")"
-# 开发启动器默认使用开发版应用目录 ~/.agent-depot-dev（正式版默认 ~/.agent-depot）
-export AGENT_DEPOT_ENV="${AGENT_DEPOT_ENV:-dev}"
 PORT="${HUB_PORT:-8317}"
-PID_FILE=".hub.pid"
-LOG_FILE=".hub.log"
+BIN="./depotd/target/debug/depotd"
 
-started() { [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; }
+curl -s -o /dev/null -m 1 "http://127.0.0.1:$PORT/api/healthz" && exit 0
 
-start() {
-  if started; then echo "already running (pid $(cat "$PID_FILE"))"; return 0; fi
-  nohup python3 server.py >"$LOG_FILE" 2>&1 &
-  echo $! >"$PID_FILE"
-  sleep 1
-  if started; then echo "started: pid $(cat "$PID_FILE") · log .hub.log · http://127.0.0.1:$PORT"
-  else echo "failed to start; see .hub.log"; tail -5 "$LOG_FILE"; exit 1; fi
-}
-
-case "${1:-}" in
-  --fg)   exec python3 server.py ;;
-  --open) start; open "http://127.0.0.1:$PORT" ;;
-  *)      start ;;
-esac
+[ -x "$BIN" ] || (cd depotd && cargo build --workspace)
+DEPOT_ENV=dev nohup "$BIN" --port "$PORT" serve > .depot.log 2>&1 &
+for _ in $(seq 1 50); do
+  curl -s -o /dev/null -m 1 "http://127.0.0.1:$PORT/api/healthz" && exit 0
+  sleep 0.2
+done
+echo "depotd 启动失败，看 .depot.log" >&2
+exit 1

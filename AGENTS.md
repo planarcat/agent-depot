@@ -1,7 +1,7 @@
 # AGENTS.md · Agent Depot
 
 本地优先的 AI Agent 资产枢纽：多工具会话采集 / 浏览 / 迁移，外加记忆、Skills 分发、MCP 写入、台账。  
-技术面：Rust 后端（`depotd/`，axum + rusqlite，2026-11 起为运行主体）+ Python legacy（`server.py` + `hub/`，冻结只修 P0），零框架前端（`web/`，原生 JS + CSS 变量）。
+技术面：Rust 后端（`depotd/`，axum + rusqlite）。Python 后端已于 2026-11-11 移除；`tests/spec/*.py` 保留——它们是黑盒行为真源（经 HUB_BASE 打任意引擎），不是后端代码。
 
 ## 仓库布局：WorkTrees 工作流（2026-11-08）
 
@@ -34,9 +34,9 @@
 
 ## 质量卡口（改任何源码之前先读）
 
-- `bash tests/check.sh` = 本仓 check 全链路（快线 ≈1min：钉桩 → lint 基线 → API → 模块 + 门禁自测），**pre-push 自动跑，不绿推不出去**。
+- `bash tests/check.sh` = 本仓 check 全链路（spec 守卫 → web lint → cargo 单测 → 行为真源 spec 78 条打 depotd），**pre-push 自动跑，不绿推不出去**。
 - `bash tests/run_all.sh` = check 全链路 + E2E 三步（真 Chrome），**交活前完整验收**。
-- `python3 scripts/mutate.py` = 变异门禁（数分钟，**不挂 pre-push**），改测试或改被盯模块时手动跑。
+- 变异门禁已随 Python 栈移除（Rust 侧暂无对应物）；行为回归以 `bash scripts/run_spec_rust.sh` 为准。
 
 所有卡口都是惰性调用：机器上没铺体系就直接放行；检查不许挂进 `run.sh` 与 dev 启动链路。
 
