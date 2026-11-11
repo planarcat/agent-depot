@@ -59,6 +59,27 @@ fn main() {
             // 注意 set_menu 会整体替换默认菜单——必须补回「编辑」子菜单（Predefined
             // 带系统标准快捷键），否则 ⌘C/⌘V/⌘X/⌘A/⌘Z 全部失效（macOS 上这些热键
             // 由应用菜单驱动 WKWebView 的 responder chain，缺菜单即无粘贴/全选）。
+            // 应用子菜单：set_menu 整体替换默认菜单后，⌘Q（退出）随之消失
+            // （2026-11-11 用户实测无法 Cmd+Q）——必须显式补回 Quit 项。
+            let app_menu = Submenu::with_items(
+                app,
+                "Agent Depot",
+                true,
+                &[
+                    &PredefinedMenuItem::about(app, None, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::hide(app, None)?,
+                    &PredefinedMenuItem::hide_others(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::quit(app, None)?,
+                ],
+            )?;
+            let file_menu = Submenu::with_items(
+                app,
+                "文件",
+                true,
+                &[&PredefinedMenuItem::close_window(app, None)?],
+            )?;
             let edit_menu = Submenu::with_items(
                 app,
                 "编辑",
@@ -75,7 +96,7 @@ fn main() {
             )?;
             let reload = MenuItem::with_id(app, "reload", "重新加载", true, Some("CmdOrCtrl+R"))?;
             let view_menu = Submenu::with_items(app, "视图", true, &[&reload])?;
-            app.set_menu(Menu::with_items(app, &[&edit_menu, &view_menu])?)?;
+            app.set_menu(Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &view_menu])?)?;
 
             let handle = app.handle().clone();
             app.on_menu_event(move |_window, event| {
