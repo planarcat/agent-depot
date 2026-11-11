@@ -2515,7 +2515,10 @@ fn skills_route(
         let Ok(bid) = bid.parse::<i64>() else { return jerr(400, "非法绑定 id") };
         return match (tail, method.clone()) {
             ("", Method::PATCH) => {
-                if data.get("excluded").is_some() {
+                if data.get("mode").is_some() {
+                    wrap_res(ex::set_binding_mode(c, hub, bid,
+                        data.get("mode").and_then(|m| m.as_str()).unwrap_or("copy")))
+                } else if data.get("excluded").is_some() {
                     wrap_res(ex::set_binding_excluded(c, hub, bid, data.get("excluded").unwrap_or(&Value::Null)))
                 } else if data.get("channels").is_some() {
                     wrap_res(ex::set_binding_channels(c, hub, bid, data.get("channels").unwrap_or(&Value::Null)))

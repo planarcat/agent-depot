@@ -1631,6 +1631,35 @@ pub fn target_visible(conn: &Connection, tool_id: Option<&str>, path_key: &str) 
     t.get(path_key).and_then(|p| p.as_str()).map(|p| !p.is_empty()).unwrap_or(false)
 }
 
+/// 设置/切换绑定同步模式：copy（直接复制）| link（软链接）。
+/// 切换后立即重同步：目标端表示随之切换（旧副本备份进 .hub-backup、
+/// 软链接替换为实体副本或反之），契约与 distribute 的模式互斥语义一致。
+pub fn set_binding_mode(conn: &Connection, hub: &Path, binding_id: i64, mode: &str) -> Result<Value> {
+    let mode_n = if mode.eq_ignore_ascii_case("link") { "link" } else { "copy" };
+    let mut b = match binding_row(conn, binding_id) {
+        Some(b) => b,
+        None => return ok_err("绑定不存在"),
+    };
+    if b["mode"].as_str() == Some(mode_n) {
+        return Ok(json!({"ok": true, "mode": mode_n,
+            "sync": json!({"skipped": 1, "reason": "已是该模式"})}));
+    }
+    conn.execute(
+        "UPDATE dir_bindings SET mode=?1 WHERE id=?2",
+        rusqlite::params![mode_n, binding_id],
+    )
+    .map_err(CoreError::from)?;
+    b["mode"] = json!(mode_n);
+    let agg = sync_binding_full(conn, hub, &b, false);
+    let _ = events::append(conn, &Event { module: MODULE,
+        actor: "local", kind: "binding:mode", subject: None, outcome: "ok",
+        error_code: None, extra: json!({"binding": binding_id, "mode": mode_n}),
+        item_version: None, source_id: None,
+        item_kind: None, item_name: None, target_id: None,
+    });
+    Ok(json!({"ok": true, "mode": mode_n, "sync": agg}))
+}
+
 pub fn set_binding_enabled(conn: &Connection, binding_id: i64, enabled: bool) -> Result<Value> {
     let ok: bool = conn
         .query_row("SELECT 1 FROM dir_bindings WHERE id=?1", [binding_id], |_| Ok(true))

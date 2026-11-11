@@ -1740,3 +1740,13 @@ button.msg__att:hover { border-color: var(--c-accent); background: var(--c-accen
 .cv-repo-row__meta { font-size: var(--fs-s); color: var(--c-ink-4); }
 .hub-field { display: flex; flex-direction: column; gap: var(--sp-1); margin-bottom: var(--sp-3);
   font-size: var(--fs-s); color: var(--c-ink-3); }   /* 添加仓库弹窗表单行 */
+
+/* 连接画布 · 同步方式（复制/链接）分段选择 */
+.cv-modes { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.cv-mrow { display: flex; align-items: center; gap: 8px; }
+.cv-mlab { font-size: var(--fs-xs); font-weight: 600; color: var(--c-ink); min-width: 42px; }
+.cv-mode { display: inline-flex; gap: 4px; }
+.cv-mode button { padding: 2px 12px; border-radius: 999px; border: 1px solid var(--c-line);
+  background: var(--c-bg); color: var(--c-ink); font-size: var(--fs-xs); cursor: pointer; }
+.cv-mode button.sel { background: var(--c-accent-soft); color: var(--c-accent);
+  border-color: var(--c-accent); font-weight: 600; }
