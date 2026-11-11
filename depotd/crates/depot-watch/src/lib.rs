@@ -110,7 +110,12 @@ impl Watcher {
                     continue;
                 }
                 roots.push((p.clone(), scope.clone()));
-                // 不存在的路径：挂最近已存在祖先（创建后事件落在祖先上）
+                // 仅不存在的路径挂最近已存在祖先（创建后事件落在祖先上）。
+                // 已存在的路径绝不挂祖先：否则父目录被本 scope 认领，
+                // 兄弟/父子 scope 的最长前缀匹配会被随机顺序污染（2026-11-11 测试暴露）。
+                if p.exists() {
+                    continue;
+                }
                 let mut anc = p.parent().map(|p| p.to_path_buf());
                 while let Some(a) = anc {
                     if a == *p {

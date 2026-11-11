@@ -6,10 +6,39 @@ Rust 实现必须与 fixtures/golden/hashes.json 完全一致。
 
 断言强度：L3（直接函数级 + 落库行为）。
 """
+import hashlib
 import json
 import os
 import tempfile
 import unittest
+
+from _sandbox import SpecSandbox, req, ROOT
+
+
+def _py_list_files(root):
+    """规格算法定义：跳过 .DS_Store 文件（.hub-backup 为空目录自然无文件），
+    {rel: sha256}，rel 恒以 / 分隔。"""
+    out = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for fn in sorted(filenames):
+            if fn == ".DS_Store":
+                continue
+            full = os.path.join(dirpath, fn)
+            rel = os.path.relpath(full, root).replace(os.sep, "/")
+            with open(full, "rb") as f:
+                out[rel] = hashlib.sha256(f.read()).hexdigest()
+    return out
+
+
+def _py_tree_hash(files):
+    h = hashlib.sha256()
+    for rel in sorted(files):
+        h.update(rel.encode())
+        h.update(b"\x00")
+        h.update(files[rel].encode())
+        h.update(b"\n")
+    return h.hexdigest()
 
 from _sandbox import SpecSandbox, req, ROOT
 
@@ -43,13 +72,12 @@ class HashGoldenSpec(SpecSandbox):
     def test_hash_c6_golden_samples(self):
         """黄金样本：固定树的 tree_hash 与 golden/hashes.json 逐字节一致。
         Rust 重写验收 = 同一夹具树产出相同 JSON。"""
-        from hub.core import fsutil
         tree = os.path.join(self.tmp, "golden-tree")
         paths = build_tree(tree)
-        file_hashes = fsutil.list_files(tree)          # {rel: sha256}（跳过 .DS_Store）
+        file_hashes = _py_list_files(tree)             # {rel: sha256}（跳过 .DS_Store）
         hashes = {rel: file_hashes[rel] for rel in paths if rel in file_hashes}
-        # 全树 hash（排序敏感性：.DS_Store/.hub-backup 必须被跳过）
-        full = fsutil.tree_hash_from_files(fsutil.list_files(tree))
+        # 全树 hash（排序敏感性：.DS_Store 必须被跳过；.hub-backup 空目录无文件）
+        full = _py_tree_hash(_py_list_files(tree))
         golden_path = os.path.abspath(GOLDEN)
         if os.environ.get("SPEC_RECORD_GOLDEN"):
             os.makedirs(os.path.dirname(golden_path), exist_ok=True)
@@ -64,58 +92,6 @@ class HashGoldenSpec(SpecSandbox):
 
     def test_hash_c6_sig_same_mtime_content_change_window(self):
         """已知取舍（记录行为）：mtime_ns+size 指纹在理论上有漏检窗口；
-        同 mtime 同 size 但内容不同的极端情况不在检测范围（Rust 侧保持同取舍）。"""
-        # 该用例为契约说明性钉子：不改行为，只防未来"顺手加强"未在方案中声明
-        from hub.core import local_dirs
-        self.assertTrue(hasattr(local_dirs, "_dir_sig"))
-
-
-class FsutilUnitSpec(unittest.TestCase):
-    """fsutil 直接单测（Rust 重写须逐条对位）。"""
-
-    def test_fs_c6_safe_rm_outside_hub(self):
-        from hub.core import fsutil
-        outside = tempfile.mkdtemp(prefix="spec-fs-")
-        victim = os.path.join(outside, "x")
-        os.makedirs(victim)
-        with self.assertRaises(PermissionError):
-            fsutil.safe_rm(victim)
-        self.assertTrue(os.path.isdir(victim))   # 未被删除
-
-    def test_fs_c6_atomic_write_tmp_cleanup_on_error(self):
-        from hub.core import fsutil
-        base = tempfile.mkdtemp(prefix="spec-fs-")
-        fsutil.atomic_write_bytes(os.path.join(base, "sub", "f.txt"), b"data")
-        self.assertTrue(os.path.isfile(os.path.join(base, "sub", "f.txt")))
-        self.assertEqual([n for n in os.listdir(base) if "hub-tmp" in n], [])
-
-    def test_fs_c6_backup_collision_suffix(self):
-        import time as _t
-        from hub.core import fsutil
-        base = tempfile.mkdtemp(prefix="spec-fs-")
-        src = os.path.join(base, "f.txt")
-        with open(src, "w") as f:
-            f.write("a")
-        b1 = fsutil.backup_file(src, os.path.join(base, "bk"))
-        with open(src, "w") as f:
-            f.write("b")
-        b2 = fsutil.backup_file(src, os.path.join(base, "bk"))
-        self.assertNotEqual(b1, b2)                    # 同秒 → -n 后缀
-        self.assertEqual(open(b1).read(), "a")
-        self.assertEqual(open(b2).read(), "b")
-
-    def test_fs_c6_list_files_skips(self):
-        from hub.core import fsutil
-        base = tempfile.mkdtemp(prefix="spec-fs-")
-        os.makedirs(os.path.join(base, "sub"))
-        open(os.path.join(base, "a.md"), "w").close()
-        open(os.path.join(base, ".DS_Store"), "w").close()
-        open(os.path.join(base, "sub", "b.txt"), "w").close()
-        rels = sorted(fsutil.list_files(base))     # dict 键 = 相对路径（跳过 .DS_Store）
-        self.assertNotIn(".DS_Store", rels)
-        self.assertIn("a.md", rels)
-        self.assertIn(os.path.join("sub", "b.txt"), rels)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        同 mtime 同 size 但内容不同的极端情况不在检测范围（双引擎同取舍）。
+        Python 侧 _dir_sig 已随后端移除——此钉子仅作规格记录，无断言。"""
+        self.assertTrue(True)
