@@ -4,7 +4,7 @@ use std::fs;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -18,10 +18,19 @@ const PORT: u16 = 8317;
 const TRAY_ID: &str = "agent-depot-tray";
 const AUTOSTART_LABEL: &str = "local.planarcat.agent-depot";
 
-/// 构建身份：debug 构建或 `AGENT_DEPOT_PROFILE=dev` 编出的包 = 开发版。
+/// 构建身份：debug 构建、或 bundle id 以 `.dev` 结尾（make-app-dev.sh）= 开发版。
 /// dev 与 release 的设置文件、开机启动项、默认值、服务库全部隔离。
+/// 运行时以 bundle id 为准，避免「同一个 target 目录先后构建 release/dev」时
+/// 编译期环境变量未触发重编导致两版写同一份设置。
+static DEV_BUILD: OnceLock<bool> = OnceLock::new();
+
+fn init_profile(app: &tauri::AppHandle) {
+    let dev = app.config().identifier.ends_with(".dev") || cfg!(debug_assertions);
+    let _ = DEV_BUILD.set(dev);
+}
+
 fn is_dev_build() -> bool {
-    cfg!(debug_assertions) || option_env!("AGENT_DEPOT_PROFILE") == Some("dev")
+    *DEV_BUILD.get().unwrap_or(&cfg!(debug_assertions))
 }
 
 fn profile() -> &'static str {
@@ -442,6 +451,7 @@ fn main() {
             }
         })
         .setup(move |app| {
+            init_profile(app.handle());
             let settings = load_settings(app.handle());
             app.manage(DesktopState {
                 settings: Mutex::new(settings.clone()),

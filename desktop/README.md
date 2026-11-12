@@ -44,8 +44,8 @@
 | 本地偏好（localStorage） | 正式版 WebView 存储 | 独立 bundle → 独立存储 |
 | 服务数据 | `~/.agent-depot`（`AGENT_DEPOT_PROFILE=release`） | `~/.agent-depot-dev`（`AGENT_DEPOT_PROFILE=dev`） |
 
-- 开发版构建带 `AGENT_DEPOT_PROFILE=dev`（release profile 编译但代码走 dev 分支）；
-  纯 `cargo run` / debug 二进制也按开发版处理（`cfg!(debug_assertions)`）。
+- 开发版由**独立 bundle id** 识别（`…agent-depot.dev`）；纯 `cargo run` / debug 二进制按 `cfg!(debug_assertions)` 走开发版。
+  服务数据目录由 `AGENT_DEPOT_PROFILE`（dev/release）选择，由桌面壳按自身 profile 传给 `run.sh`。
 - `./dev <分支>` 启动 dev 库并优先打开 `AgentDepot-Dev.app`；`./dev <分支> --prod` 打开正式版。
 - 两版共用 8317 端口：同一时刻只建议运行一个服务实例；切换用 `./dev` / `./dev ... --prod`。
 
