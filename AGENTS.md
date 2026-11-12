@@ -19,6 +19,17 @@
 - 日常门禁（在对应 worktree 内跑）：`bash scripts/soak_check.sh`（内存/事件门禁）、
   `bash scripts/run_spec_rust.sh`（spec 78 行为闸门）、`(cd web && bun run check:ci)`（前端全链路）。
 
+## 桌面壳（`desktop/`）硬规则
+
+- 设置页「桌面」的四个开关（开机启动 / 菜单栏挂载 / 静默启动 / Dock 图标）由 Tauri 命令
+  `desktop_get_settings` / `desktop_set_settings` 驱动，配置落在
+  `~/Library/Application Support/local.planarcat.agent-depot/desktop.json`。
+- 控制台是 remote URL（`http://127.0.0.1:8317`），IPC 放行靠
+  `desktop/src-tauri/capabilities/default.json` 的 `remote.urls`——**不要删**，删了设置页全失效。
+- 静默启动依赖菜单栏挂载（Rust 侧 `normalized()` 会兜底）；开机启动写
+  `~/Library/LaunchAgents/local.planarcat.agent-depot.plist`。
+- 改桌面壳后至少跑 `(cd desktop/src-tauri && cargo test)`；重装用 `bash scripts/make-app.sh`。
+
 ## 改 `web/` 之前的硬规则
 
 1. **视觉唯一真源是 `DESIGN.md`** —— 动手前先读。注意 **§0.1 场景基调：本项目是工具型应用**（布局变化度 3 / 动效强度 2 / 信息密度 8），**不要为每个页面追求不同的"指纹"**。

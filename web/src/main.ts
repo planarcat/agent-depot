@@ -22,6 +22,7 @@ import {
 } from "./core/dom.ts";
 import { esc, fmtBytes, fmtTime, INTERVALS, stripAttPlaceholders } from "./core/format.ts";
 import { MV } from "./core/mv.ts";
+import { getPrefs, setPrefs } from "./core/prefs.ts";
 import { installGlobalReporting, measureAsync, measureRender, reportPerf } from "./core/report.ts";
 import { state } from "./core/state.ts";
 import {
@@ -186,7 +187,7 @@ interface LiveBefore {
 
 /** 会话页局部 UI 状态：core/state 的类型口径与旧实现不一致，这里按原语义承接。 */
 let sessDetail: string | null = null;
-let sessLayout: "detail" | "compact" = "detail";
+let sessLayout: "detail" | "compact" = getPrefs().sessLayout;
 const detailCache: Record<string, DetailEntry | null> = {};
 
 /* ---------- state ---------- */
@@ -403,6 +404,7 @@ function renderSessBar(): void {
   if (back) {
     back.onclick = () => {
       sessLayout = "detail";
+      setPrefs({ sessLayout });
       state._sessAnim = true;
       renderAll();
     };
@@ -440,6 +442,7 @@ function applySessLayout(animate: boolean): void {
   } else {
     MV.hdrToggle(hdr, "sess", () => {
       sessLayout = "compact";
+      setPrefs({ sessLayout });
       state._sessAnim = true;
       renderAll();
     });
@@ -518,8 +521,7 @@ function syncFilterSegActive(): void {
 /* ---------- rows ---------- */
 
 // 会话可见域 = 启用工具的会话（口径 B）；筛选 / 搜索都在这个域内做
-/** 会话列表分批：首屏 100 行，触底再追加（655 行场景首屏 DOM 降一个数量级）。 */
-const ROW_CHUNK = 100;
+/** 会话列表分批：首屏按偏好（默认 100 行），触底再追加。 */
 let rowObserver: IntersectionObserver | null = null;
 
 function scopedSessions(): SessionRow[] {
@@ -654,7 +656,8 @@ function renderRowsInner(): void {
   }
   const showTool = !state._toolFocus;
   const openIdx = list.findIndex((s) => sessDetail === s.sid);
-  const initial = Math.min(list.length, Math.max(ROW_CHUNK, openIdx + 1));
+  const chunk = getPrefs().rowChunk;
+  const initial = Math.min(list.length, Math.max(chunk, openIdx + 1));
   const rowHtml = (s: SessionRow): string => {
     const open = sessDetail === s.sid;
     const anim = open && state._animateOpen === s.sid; // 本次新展开：先渲染收起态，下一帧再展开
@@ -700,7 +703,7 @@ function renderRowsInner(): void {
     rowObserver = new IntersectionObserver(
       (entries) => {
         if (!entries.some((e) => e.isIntersecting)) return;
-        const next = list.slice(shown, shown + ROW_CHUNK);
+        const next = list.slice(shown, shown + chunk);
         shown += next.length;
         sentinel.insertAdjacentHTML("beforebegin", next.map(rowHtml).join(""));
         for (const row of qsa<HTMLElement>('[data-testid="row"]', box)) bindSessionRow(row);
@@ -1821,10 +1824,10 @@ function startFallbackPolling(reason: string): void {
       .catch(() => {
         /* 后台刷新失败静默：下一轮事件/轮询会再试 */
       });
-    LIVE.pollTimer = window.setTimeout(tick, hidden ? 60_000 : 3000);
+    LIVE.pollTimer = window.setTimeout(tick, hidden ? 60_000 : getPrefs().pollIntervalSec * 1000);
   };
   LIVE.mode = "poll:" + reason;
-  LIVE.pollTimer = window.setTimeout(tick, 3000);
+  LIVE.pollTimer = window.setTimeout(tick, getPrefs().pollIntervalSec * 1000);
   markLive(LIVE.mode);
 }
 
@@ -2060,6 +2063,20 @@ async function switchView(id: string): Promise<void> {
   next.classList.add("is-active");
   syncNavIndicator(id);
 }
+
+// 设置页改「会话默认布局」→ 当前会话页即时应用
+window.addEventListener("depot:prefs-changed", () => {
+  const next = getPrefs().sessLayout;
+  if (next !== sessLayout) {
+    sessLayout = next;
+    if (activeViewId() === "sessions") renderAll();
+  }
+});
+
+// 菜单栏「打开设置…」→ web 侧切到设置页（桌面壳 eval 触发）
+window.addEventListener("depot:open-settings", () => {
+  void switchView("settings");
+});
 
 /* ====================================================================
    「笔记 · 本地」子视图（legacy）：与四个模块同一套条目/列表观感。
@@ -2333,6 +2350,12 @@ document.addEventListener("DOMContentLoaded", () => {
       markLive("sse");
       MOUNTED.add("sessions"); // 首屏已渲染过
       syncNavIndicator("sessions");
+      // 默认启动视图（模块被停用时保持会话页）
+      const start = getPrefs().defaultView;
+      if (start !== "sessions") {
+        const btn = qs<HTMLElement>(`.mod-nav button[data-view="${start}"]`);
+        if (btn && btn.style.display !== "none" && !btn.hidden) void switchView(start);
+      }
     })
     .catch((e: unknown) => renderLoadError(e instanceof Error ? e.message : String(e)));
   startLiveUpdates(); // 即时刷新（SSE）；断开时自动退回轮询

@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   aggState,
-  type LaneVisual,
   baseBind,
-  CHANNEL_LABEL,
   type CanvasState,
+  CHANNEL_LABEL,
   channelState,
   createCanvasState,
   itemOn,
+  type LaneVisual,
   laneExcluded,
   laneKey,
   laneMode,
@@ -255,10 +255,7 @@ describe("aggState 聚合优先级", () => {
     ["双 full", [bind({ channels: ["skills", "mcp"] })], "skills", "full"],
     [
       "full + part",
-      [
-        bind({ channels: ["skills"] }),
-        bind({ id: 2, channels: ["mcp"], excluded: ["a"] }),
-      ],
+      [bind({ channels: ["skills"] }), bind({ id: 2, channels: ["mcp"], excluded: ["a"] })],
       "skills",
       "full",
     ],

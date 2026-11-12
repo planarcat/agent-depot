@@ -99,6 +99,9 @@
   <div class="setwin">
     <aside class="setwin__nav">
       <h2 class="setwin__brand">设置</h2>
+      <button class="setwin__item" data-pane="general" data-testid="settings-nav-general">
+        <span class="setwin__label">通用</span>
+        <span class="setwin__desc">列表刷新节奏与本地偏好</span></button>
       <button class="setwin__item is-on" data-pane="modules" data-testid="settings-nav-modules">
         <span class="setwin__label">模块</span>
         <span class="setwin__desc">启用或停用顶部导航模块</span></button>
@@ -108,6 +111,9 @@
       <button class="setwin__item" data-pane="remotes" data-testid="settings-nav-remotes">
         <span class="setwin__label">远程仓库</span>
         <span class="setwin__desc">仓库地址与所属模块</span></button>
+      <button class="setwin__item" data-pane="desktop" data-testid="settings-nav-desktop">
+        <span class="setwin__label">桌面</span>
+        <span class="setwin__desc">菜单栏、开机启动与 Dock 图标</span></button>
       <button class="setwin__item" data-pane="env" data-testid="settings-nav-env">
         <span class="setwin__label">关于</span>
         <span class="setwin__desc">版本与存储位置</span></button>
@@ -122,9 +128,11 @@
         <button class="setwin__x" hidden data-testid="settings-close" id="settings-close" title="关闭" aria-label="关闭设置">✕</button>
       </header>
       <div class="setwin__body" data-testid="settings-body">
+        <div class="setpane" data-pane="general" id="settings-general" data-testid="settings-general"></div>
         <div class="setpane is-on" data-pane="modules" id="settings-modules" data-testid="settings-modules"></div>
         <div class="setpane" data-pane="tools" id="settings-tools" data-testid="settings-tools"></div>
         <div class="setpane" data-pane="remotes" id="settings-remotes" data-testid="settings-remotes"></div>
+        <div class="setpane" data-pane="desktop" id="settings-desktop" data-testid="settings-desktop"></div>
         <div class="setpane" data-pane="env" id="settings-env" data-testid="settings-env"></div>
       </div>
     </section>

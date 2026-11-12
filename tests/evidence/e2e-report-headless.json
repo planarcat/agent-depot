@@ -3,15 +3,15 @@
   "smoke": false,
   "base": "http://127.0.0.1:8317",
   "chrome": "Chrome/157.0.8103.39",
-  "startedAt": "2026-11-12T02:35:03.934Z",
+  "startedAt": "2026-11-12T03:42:17.097Z",
   "passed": 19,
   "failed": 0,
   "results": [
     {
       "name": "live-sse-refresh",
       "ok": true,
-      "ms": 993,
-      "detail": "SSE notify · 磁盘 60→61 · 自身写入 61→62"
+      "ms": 809,
+      "detail": "SSE notify · 磁盘 17→18 · 自身写入 18→19"
     },
     {
       "name": "page-load",
@@ -22,19 +22,19 @@
     {
       "name": "screenshot-desktop",
       "ok": true,
-      "ms": 49,
+      "ms": 53,
       "detail": "desktop-main.png"
     },
     {
       "name": "filter-codex",
       "ok": true,
-      "ms": 512,
+      "ms": 513,
       "detail": "agents 0 行 · 恢复全部 100 行"
     },
     {
       "name": "selection",
       "ok": true,
-      "ms": 17,
+      "ms": 9,
       "detail": "选中 2 → 取消 1 → 清空 → 0"
     },
     {
@@ -46,19 +46,19 @@
     {
       "name": "refresh-one",
       "ok": true,
-      "ms": 159,
+      "ms": 160,
       "detail": "进入 agents → 侧栏刷新成功 toast"
     },
     {
       "name": "schedule-flow",
       "ok": true,
-      "ms": 458,
+      "ms": 342,
       "detail": "autoclaw: 启用→持久化→还原 均通过 · 入口按用户要求隐藏"
     },
     {
       "name": "memory-flow",
       "ok": true,
-      "ms": 680,
+      "ms": 676,
       "detail": "记忆 7 → 增 → 详情内删 → 7"
     },
     {
@@ -70,49 +70,49 @@
     {
       "name": "duplicate-migration-guard",
       "ok": true,
-      "ms": 1271,
+      "ms": 1280,
       "detail": "重复迁移被拦截，无新会话产生（计数 0,4,4,1,146,373,34,0,93,9）"
     },
     {
       "name": "content-search-flow",
       "ok": true,
-      "ms": 853,
+      "ms": 796,
       "detail": "25 条消息命中 → 点击打开对应会话（中栏详情）"
     },
     {
       "name": "preview-actions",
       "ok": true,
-      "ms": 5771,
+      "ms": 620,
       "detail": "收藏 ☆ 收藏 → ★ 已收藏 → 还原"
     },
     {
       "name": "connect-canvas",
       "ok": true,
-      "ms": 317,
+      "ms": 170,
       "detail": "目录 2 · 通道 2 · 工具 10 · 连线 6"
     },
     {
       "name": "module-nav-views",
       "ok": true,
-      "ms": 8520,
-      "detail": "五视图切换 OK · skills 20 / mcp 3 / ops 663648 条"
+      "ms": 1789,
+      "detail": "五视图切换 OK · skills 20 / mcp 3 / ops 663724 条"
     },
     {
       "name": "skills-overview-render",
       "ok": true,
-      "ms": 938,
+      "ms": 622,
       "detail": "概览 19 统计卡 · 0 工具行 · 详情开关 OK · 无异常"
     },
     {
       "name": "skills-pull-and-wizard",
       "ok": true,
-      "ms": 1514,
+      "ms": 1379,
       "detail": "UI 拉取 OK · 多选批量面 OK · 右栏内联按钮「一键更新（35）」 · 新建对话框开关 OK（无分发向导弹窗）"
     },
     {
       "name": "screenshot-mobile",
       "ok": true,
-      "ms": 583,
+      "ms": 573,
       "detail": "390px 视口无横向溢出（scrollWidth=390）"
     },
     {
@@ -125,12 +125,12 @@
   "consoleErrors": [],
   "navEvents": [
     {
-      "t": 1794450881197,
+      "t": 1794454927278,
       "loading": true,
       "scenario": ""
     },
     {
-      "t": 1794450881288,
+      "t": 1794454927294,
       "url": "http://127.0.0.1:8317/",
       "scenario": "live-sse-refresh"
     }
@@ -140,19 +140,15 @@
     "inflightAtEnd": [
       {
         "url": "http://127.0.0.1:8317/api/events",
-        "t": 1794450881517
-      },
-      {
-        "url": "http://127.0.0.1:8317/api/skills/item/branch-merge-status",
-        "t": 1794450902735
+        "t": 1794454927389
       },
       {
         "url": "http://127.0.0.1:8317/api/skills/sources/8/pull",
-        "t": 1794450902739
+        "t": 1794454935916
       },
       {
         "url": "http://127.0.0.1:8317/api/frontend-errors",
-        "t": 1794450903737
+        "t": 1794454936111
       }
     ]
   }

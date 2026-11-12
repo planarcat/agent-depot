@@ -1753,3 +1753,7 @@ button.msg__att:hover { border-color: var(--c-accent); background: var(--c-accen
 
 /* 键盘可达：统一 focus-visible 焦点环（鼠标点击不出现，键盘 Tab 必现） */
 :focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
+
+/* 依赖未满足/不可用的开关 */
+.set-toggle:disabled { opacity: .38; cursor: not-allowed; }
+.set-toggle:disabled .set-toggle__knob { box-shadow: none; }

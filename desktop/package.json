@@ -1,7 +1,7 @@
 {
   "name": "agent-depot-desktop",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Agent Depot desktop shell (Tauri; native window for the local console at http://127.0.0.1:8317)",
   "scripts": {
     "tauri": "tauri",

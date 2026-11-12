@@ -3,6 +3,8 @@
  * 上报自身绝不允许再抛错（fail-safe）；失败静默丢弃（不重试风暴）。
  */
 
+import { getPrefs } from "./prefs.ts";
+
 export type ReportKind = "error" | "perf";
 
 export interface ReportEntry {
@@ -30,6 +32,7 @@ function truncate(text: string, max = 200): string {
 }
 
 function enqueue(kind: ReportKind, message: string, detail?: Record<string, unknown>): void {
+  if (!getPrefs().reportFrontendErrors) return;
   if (queue.length >= MAX_QUEUE) queue.shift();
   const entry: ReportEntry = { kind, message: truncate(message), ts: nowIso() };
   if (detail) entry.detail = detail;

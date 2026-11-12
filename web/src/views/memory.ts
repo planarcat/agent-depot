@@ -9,6 +9,7 @@ import { copyText, qs, qsa } from "../core/dom.ts";
 import { esc, fmtTime } from "../core/format.ts";
 import type { PickerOptions } from "../core/mv.ts";
 import { MV } from "../core/mv.ts";
+import { getPrefs } from "../core/prefs.ts";
 import { allTools, toolColorCls } from "../core/tools.ts";
 import type { MemoryItem, MemoryOverview, MemoryTool } from "../core/types/api.ts";
 import { HubUI } from "../hub-ui.ts";
@@ -179,7 +180,12 @@ async function render(root: HTMLElement | null): Promise<void> {
 
 async function refresh(root: HTMLElement): Promise<void> {
   await loadOverview(false);
-  if (!M.firstScanDone && M.tools.length > 0 && M.tools.every((t) => !t.scanned)) {
+  if (
+    getPrefs().autoScanMemory &&
+    !M.firstScanDone &&
+    M.tools.length > 0 &&
+    M.tools.every((t) => !t.scanned)
+  ) {
     M.firstScanDone = true;
     root.innerHTML = '<div class="hub-empty">首次进入，正在自动扫描各工具记忆…</div>';
     await scanAll(null, root);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { setTools } from "../src/core/tools.ts";
 import { state } from "../src/core/state.ts";
+import { setTools } from "../src/core/tools.ts";
 import type { MigrationRow, ToolPublic } from "../src/core/types/api.ts";
 import { MemoryView } from "../src/views/memory.ts";
 import { OpsView } from "../src/views/ops.ts";
@@ -148,7 +148,11 @@ describe("OpsView", () => {
 
   test("渲染行 / 统计 / 详情", async () => {
     route({
-      "/api/ops": json({ ok: true, total: 2, items: [row(1, "ok", "sync"), row(2, "failed", "push")] }),
+      "/api/ops": json({
+        ok: true,
+        total: 2,
+        items: [row(1, "ok", "sync"), row(2, "failed", "push")],
+      }),
     });
     const root = host();
     await OpsView.render(root);

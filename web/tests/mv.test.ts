@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
-  accBody,
   type AccOptions,
+  accBody,
   bindGroups,
   card,
   chip,
@@ -18,10 +18,10 @@ import {
   shell,
   short,
   side,
-  syncCards,
   swap,
-  targetPicker,
+  syncCards,
   type TopOptions,
+  targetPicker,
   top,
 } from "../src/core/mv.ts";
 import { state } from "../src/core/state.ts";
@@ -153,7 +153,10 @@ describe("card / top", () => {
     const html = top({
       ...opts,
       bulk: "<button>批量</button>",
-      stats: [{ n: 3, label: "条目" }, { n: 1, label: "冲突", tone: "warn" }],
+      stats: [
+        { n: 3, label: "条目" },
+        { n: 1, label: "冲突", tone: "warn" },
+      ],
       hint: "提示",
       sources: [
         { id: "a", name: "A", count: 1 },
@@ -178,7 +181,7 @@ describe("card / top", () => {
     });
     expect(html).toContain('data-g="local"');
     expect(html).not.toContain('data-g="remote"');
-    expect(html).toContain("data-gact=\"local:新建\"");
+    expect(html).toContain('data-gact="local:新建"');
     expect(html).toContain("1 源 · 0 条");
   });
 
@@ -258,7 +261,13 @@ describe("targetPicker", () => {
   ];
 
   test("html：已选中态 / aria / 自定义文本", () => {
-    const p = targetPicker({ prefix: "sk", items, chosen: ["a"], selLine: "已选 1", goText: "应用" });
+    const p = targetPicker({
+      prefix: "sk",
+      items,
+      chosen: ["a"],
+      selLine: "已选 1",
+      goText: "应用",
+    });
     expect(p.html).toContain('data-testid="sk-picker-sel"');
     expect(p.html).toContain('data-testid="sk-picker-targets"');
     expect(p.html).toContain('aria-pressed="true"');
@@ -385,7 +394,7 @@ describe("side / chipBar", () => {
     expect(html).toContain('id="sk-back"');
     expect(html).toContain("is-on");
     expect(html).toContain(">3<");
-    expect(html).toContain("sside__n\"></span>");
+    expect(html).toContain('sside__n"></span>');
   });
 
   test("side：分组过滤空组", () => {
@@ -444,7 +453,7 @@ describe("item / accBody", () => {
     expect(html).toContain("元信息");
     expect(html).toContain("pill--accent");
     expect(html).toContain("has-chip");
-    expect(html).toContain("data-x=\"1\"");
+    expect(html).toContain('data-x="1"');
   });
 
   test("item：选中/展开态；展开时 meta 隐藏、body 渲染", () => {
@@ -506,7 +515,12 @@ describe("ledger / recentLedger", () => {
       { id: 1, ts: "2026-11-11T08:00:00Z", action: "skills.sync", detail: '{"item_name":"a"}' },
       { id: 2, ts: "2026-11-11T09:00:00Z", action: "skills.push", detail: '{"sid":"s"}' },
       { id: 3, ts: "2026-11-11T10:00:00Z", action: "mcp.sync", detail: '{"tools":["x","y"]}' },
-      { id: 4, ts: "2026-11-11T11:00:00Z", action: "skills.fail", detail: "fail conflict happened" },
+      {
+        id: 4,
+        ts: "2026-11-11T11:00:00Z",
+        action: "skills.fail",
+        detail: "fail conflict happened",
+      },
     ];
     state.ledger = rows;
     const out = recentLedger(["skills"], 5);
