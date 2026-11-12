@@ -178,24 +178,6 @@
   </div>
 </div>
 
-<script>
-// ⌘R / F5 刷新兜底（Tauri 壳已由原生菜单接管；此段保证浏览器直开时行为一致）
-window.addEventListener('keydown', function (e) {
-  if ((e.metaKey || e.ctrlKey) && (e.key === 'r' || e.key === 'R')) {
-    e.preventDefault(); window.location.reload();
-  } else if (e.key === 'F5') {
-    e.preventDefault(); window.location.reload();
-  }
-});
-</script>
-<script src="/assets/hub-ui.js"></script>
-<script src="/assets/app.js"></script>
-<script src="/assets/views/connect.js"></script>
-<script src="/assets/views/skills.js"></script>
-<script src="/assets/views/mcp.js"></script>
-<script src="/assets/views/memory.js"></script>
-<script src="/assets/views/ops.js"></script>
-<script src="/assets/views/settings.js"></script>
-<script src="/assets/views/stats.js"></script>
+<script type="module" src="/assets/main.js"></script>
 </body>
 </html>

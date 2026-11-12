@@ -9,6 +9,9 @@ FAIL=0
 python3 scripts/check_spec_guards.py || FAIL=1
 python3 scripts/lint_baseline.py || FAIL=1
 
+# 前端：biome + tsc + bun build + 体积预算 + core 覆盖率门禁
+(cd web && bun run check:ci) || FAIL=1
+
 (cd depotd && cargo test --workspace --quiet) || FAIL=1
 
 [ -x depotd/target/debug/depotd ] || (cd depotd && cargo build --workspace)

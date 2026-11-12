@@ -1,0 +1,54 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.7/schema.json",
+  "files": { "includes": ["src/**/*.ts", "tests/**/*.ts"] },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "a11y": "error",
+      "correctness": "error",
+      "suspicious": {
+        "noEqualsToNull": "off",
+        "noConfusingVoidType": "off"
+      },
+      "security": {
+        "noSecrets": "off"
+      },
+      "complexity": {
+        "useLiteralKeys": "off",
+        "noVoid": "off",
+        "noExcessiveCognitiveComplexity": "off",
+        "noImplicitCoercions": "off",
+        "noForEach": "off",
+        "noExcessiveLinesPerFunction": "off",
+        "useMaxParams": "off",
+        "useOptionalChain": "off"
+      },
+      "style": {
+        "useBlockStatements": "off",
+        "noTernary": "off",
+        "noNestedTernary": "off",
+        "useNamingConvention": "off",
+        "noMagicNumbers": "off",
+        "useTemplate": "off",
+        "useExplicitLengthCheck": "off",
+        "useDestructuring": "off",
+        "useGlobalThis": "off",
+        "useExportsLast": "off",
+        "noExcessiveLinesPerFile": "off",
+        "useDomQuerySelector": "off",
+        "noContinue": "off",
+        "useSingleVarDeclarator": "off",
+        "useConsistentMethodSignatures": "off",
+        "useNamedCaptureGroup": "off"
+      }
+    }
+  },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } }
+}

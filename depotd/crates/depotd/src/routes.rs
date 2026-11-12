@@ -48,6 +48,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/refresh", post_h(api_refresh))
         .route("/api/migrate", post_h(api_migrate))
         .route("/api/star", post_h(api_star))
+        .route("/api/frontend-errors", post_h(api_frontend_errors))
         .route("/api/sync/preview", get_h(api_sync_preview))
         .route("/api/lineage", get_h(api_lineage))
         .route("/api/ops", get_h(api_ops))
@@ -79,6 +80,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/memory/item/{iid}/adopt", post_h(api_memory_adopt))
         .with_state(state.clone());
 
+    let sec = axum::middleware::from_fn(security_headers);
+
     Router::new()
         .route("/", get_h(index_handler))
         .route("/index.html", get_h(index_handler))
@@ -87,6 +90,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .fallback(api_fallback)
         .merge(api)
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
+        .layer(sec)
+        .layer(tower_http::compression::CompressionLayer::new())
         .layer(tower_http::catch_panic::CatchPanicLayer::new())
         .with_state(state)
 }
@@ -213,38 +218,92 @@ fn after_write(state: &AppState, scope: &str, refresh_roots: bool) {
     state.watcher.bump(scope, false);
 }
 
-async fn index_handler(State(state): State<Arc<AppState>>) -> Response {
-    let path = state
+/// web 根：--web-dir 覆盖 > ./web（开发/生产同源）
+fn web_root(state: &AppState) -> PathBuf {
+    state
         .web_dir
         .as_ref()
-        .map(|d| PathBuf::from(d).join("index.html"))
-        .unwrap_or_else(|| PathBuf::from("web/index.html"));
-    match std::fs::read_to_string(&path) {
-        Ok(html) => Html(html).into_response(),
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("web"))
+}
+
+/// 构建产物目录（存在 index.html + manifest.json 才视为就绪）。
+fn dist_dir(state: &AppState) -> Option<PathBuf> {
+    let d = web_root(state).join("dist");
+    (d.join("index.html").is_file() && d.join("manifest.json").is_file()).then_some(d)
+}
+
+async fn index_handler(State(state): State<Arc<AppState>>) -> Response {
+    // 只服务构建产物：源码目录不再可直接运行（TS 需 bun build）
+    let Some(dist) = dist_dir(&state) else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Html(
+                "<meta charset=\"utf-8\"><h1>前端尚未构建</h1>\
+                 <p>在 <code>web/</code> 下执行 <code>bun install &amp;&amp; bun run build</code> 后刷新。</p>",
+            ),
+        )
+            .into_response();
+    };
+    match std::fs::read_to_string(dist.join("index.html")) {
+        Ok(html) => ([(header::CACHE_CONTROL, "no-store")], Html(html)).into_response(),
         Err(_) => jerr(404, "index.html 不存在"),
     }
 }
 
-fn serve_subtree(base: &str, rel: &str) -> Response {
+fn serve_subtree(state: &AppState, rel: &str) -> Response {
     if rel.is_empty() || rel.contains("..") || rel.starts_with('/') {
         return jerr(403, "forbidden");
     }
-    let full = Path::new(base).join(rel);
-    match std::fs::read(&full) {
-        Ok(data) => {
-            let ct = mime_of(rel);
-            ([(header::CONTENT_TYPE, ct)], data).into_response()
-        }
-        Err(_) => jerr(404, "not found"),
+    let root = web_root(state);
+    // dist 优先（哈希产物），源码目录兜底（开发态）
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(dist) = dist_dir(state) {
+        candidates.push(dist.join(rel));
     }
+    candidates.push(root.join(rel));
+    for full in candidates {
+        if let Ok(data) = std::fs::read(&full) {
+            let ct = mime_of(rel);
+            // 哈希文件名 → 长缓存 immutable；其余 no-cache（index/源码兜底）
+            let hashed = rel
+                .rsplit('/')
+                .next()
+                .map(|f| f.contains('-') && f.rsplit_once('.').map(|(stem, _)| {
+                    stem.rsplit('-').next().map(|h| h.len() == 8 && h.chars().all(|c| c.is_ascii_alphanumeric())).unwrap_or(false)
+                }).unwrap_or(false))
+                .unwrap_or(false);
+            let cache = if hashed {
+                "public, max-age=31536000, immutable"
+            } else {
+                "no-cache"
+            };
+            return (
+                [
+                    (header::CONTENT_TYPE, ct.to_string()),
+                    (header::CACHE_CONTROL, cache.to_string()),
+                ],
+                data,
+            )
+                .into_response();
+        }
+    }
+    jerr(404, "not found")
 }
 
-async fn assets_handler(AxPath(path): AxPath<String>) -> Response {
-    serve_subtree("web", &path)
+async fn assets_handler(State(state): State<Arc<AppState>>, AxPath(path): AxPath<String>) -> Response {
+    serve_subtree(&state, &path)
 }
 
 async fn tests_handler(AxPath(path): AxPath<String>) -> Response {
-    serve_subtree("tests", &path)
+    // e2e 夹具静态目录：仍从仓库 tests/ 直读（不走 web 产物）
+    if path.is_empty() || path.contains("..") || path.starts_with('/') {
+        return jerr(403, "forbidden");
+    }
+    match std::fs::read(Path::new("tests").join(&path)) {
+        Ok(data) => ([(header::CONTENT_TYPE, mime_of(&path))], data).into_response(),
+        Err(_) => jerr(404, "not found"),
+    }
 }
 
 fn mime_of(path: &str) -> &'static str {
@@ -814,6 +873,83 @@ async fn api_stats(State(state): State<Arc<AppState>>) -> Response {
         "totals": {"sessions": sessions, "messages": messages, "starred": starred,
                    "migrations": mig},
         "by_tool": by_tool, "by_day": by_day, "by_project": by_project}}))
+}
+
+/// 前端错误/慢渲染上报：批量入 event_log（module=frontend），Ops 页可直接检索。
+/// 约束：单批 ≤50 条、message ≤200 字符、detail ≤2000 字符；限流 30 批/分钟（防故障风暴打爆台账）。
+async fn api_frontend_errors(State(state): State<Arc<AppState>>, bytes: Bytes) -> Response {
+    fn allow_batch() -> bool {
+        use std::sync::{Mutex, OnceLock};
+        use std::time::Instant;
+        static RL: OnceLock<Mutex<(Instant, u32)>> = OnceLock::new();
+        let m = RL.get_or_init(|| Mutex::new((Instant::now(), 0)));
+        let mut g = m.lock().unwrap();
+        if g.0.elapsed().as_secs() >= 60 {
+            *g = (Instant::now(), 0);
+        }
+        if g.1 >= 30 {
+            return false;
+        }
+        g.1 += 1;
+        true
+    }
+    if !allow_batch() {
+        return jraw(429, json!({"ok": false, "error": "rate limited"}));
+    }
+    let data = body_json(&bytes);
+    let Some(entries) = data.get("entries").and_then(|v| v.as_array()) else {
+        return jerr(400, "entries required");
+    };
+    let c = wc(&state);
+    let mut stored = 0u32;
+    for e in entries.iter().take(50) {
+        let raw = e.get("message").and_then(|v| v.as_str()).unwrap_or("").trim();
+        if raw.is_empty() {
+            continue;
+        }
+        let msg: String = raw.chars().take(200).collect();
+        let kind = match e.get("kind").and_then(|v| v.as_str()) {
+            Some("perf") => "perf",
+            _ => "error",
+        };
+        let detail = e.get("detail").cloned().unwrap_or(Value::Null);
+        let detail = {
+            let text = detail.to_string();
+            if text.chars().count() <= 2000 {
+                detail
+            } else {
+                Value::Null
+            }
+        };
+        let extra = json!({
+            "kind": kind,
+            "message": msg,
+            "detail": detail,
+            "client_ts": e.get("ts").and_then(|v| v.as_str()).unwrap_or(""),
+        });
+        let ev = depot_core::events::Event {
+            module: "frontend",
+            actor: "web",
+            kind,
+            subject: None,
+            outcome: if kind == "perf" { "ok" } else { "failed" },
+            error_code: Some(if kind == "perf" { "PERF" } else { "JS_ERROR" }),
+            extra,
+            item_kind: Some("frontend"),
+            item_name: Some(msg.as_str()),
+            item_version: None,
+            source_id: None,
+            target_id: None,
+        };
+        if depot_core::events::append(&c, &ev).is_ok() {
+            stored += 1;
+        }
+    }
+    drop(c);
+    if stored > 0 {
+        after_write(&state, "hub", false);
+    }
+    jraw(200, json!({"ok": true, "stored": stored}))
 }
 
 async fn api_star(State(state): State<Arc<AppState>>, bytes: Bytes) -> Response {
@@ -2884,4 +3020,32 @@ fn memory_route(
 
 fn unknown(module: &str, method: &str, path: &str) -> Response {
     jraw(404, json!({"ok": false, "error": format!("{module}: 未知路由 {method} {path}")}))
+}
+
+/// 安全响应头（对位浏览器端加固）：
+/// - CSP：默认只允许同源脚本/样式/连接；style-src 允许 inline（现有大量内联 style 属性，Phase 8 收紧）
+/// - nosniff / Referrer-Policy / frame 禁嵌
+async fn security_headers(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let mut res = next.run(req).await;
+    let h = res.headers_mut();
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        axum::http::HeaderValue::from_static(
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+             img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; \
+             base-uri 'self'; frame-ancestors 'none'",
+        ),
+    );
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        axum::http::HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        header::REFERRER_POLICY,
+        axum::http::HeaderValue::from_static("no-referrer"),
+    );
+    res
 }

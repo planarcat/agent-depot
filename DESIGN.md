@@ -293,6 +293,7 @@ python3 tests/lint_styles.py   # 游离色值/字号检查（CI 化）
 | 首屏空白、列表空无提示 | `.hub-empty` 给一句话 + 下一步动作 | §5 |
 | 页面里手写 `<button>` 自带背景/边框/圆角 | 复用 `.hub-btn(--primary/--danger/--ghost/is-loading)` | §6 |
 | 错误提示只写「操作失败」 | 说明原因 + 人话建议 | §5 |
+| 键盘不可达：自定义可点击 `div` / 卡片无 `tabindex` 或无焦点样式 | 可点元素优先用 `<button>`；必须用容器时加 `tabindex="0"` + Enter/Space 处理；`:focus-visible` 统一焦点环（`app.css` 全局）；浮层 Esc 可关 | §5 · 2026-11-12 |
 
 ### 结构口径（非视觉，但同样会被评审打回）
 
