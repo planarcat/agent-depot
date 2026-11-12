@@ -1,15 +1,174 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::fs;
 use std::net::TcpStream;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::Manager;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, State};
 
 const DEFAULT_REPO: &str = "/Users/planarcat/Documents/Projects/@planarcat/agent-depot/WorkTrees/main";
 const CONSOLE_URL: &str = "http://127.0.0.1:8317";
 const PORT: u16 = 8317;
+const TRAY_ID: &str = "agent-depot-tray";
+const AUTOSTART_LABEL: &str = "local.planarcat.agent-depot";
+
+/* ==================== 桌面设置（持久化到 App Config） ==================== */
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct DesktopSettings {
+    /// 登录时自动启动（写入 ~/Library/LaunchAgents 的 LaunchAgent）
+    launch_at_login: bool,
+    /// 菜单栏挂载（托盘图标 + 关窗隐藏）
+    menu_bar: bool,
+    /// 静默启动：启动后只挂菜单栏，不弹窗口（依赖菜单栏挂载）
+    silent_start: bool,
+    /// 是否在 Dock 显示图标
+    show_dock_icon: bool,
+}
+
+impl Default for DesktopSettings {
+    fn default() -> Self {
+        Self {
+            launch_at_login: false,
+            menu_bar: true,
+            silent_start: false,
+            show_dock_icon: true,
+        }
+    }
+}
+
+impl DesktopSettings {
+    /// 静默启动必须有菜单栏入口，否则用户无法再打开窗口。
+    fn normalized(mut self) -> Self {
+        if !self.menu_bar {
+            self.silent_start = false;
+        }
+        self
+    }
+}
+
+struct DesktopState {
+    settings: Mutex<DesktopSettings>,
+}
+
+fn settings_path(app: &tauri::AppHandle) -> PathBuf {
+    app.path()
+        .app_config_dir()
+        .map(|d| d.join("desktop.json"))
+        .unwrap_or_else(|_| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default()
+                .join(".agent-depot-desktop.json")
+        })
+}
+
+fn read_settings_file(path: &Path) -> DesktopSettings {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<DesktopSettings>(&s).ok())
+        .unwrap_or_default()
+        .normalized()
+}
+
+fn write_settings_file(path: &Path, settings: &DesktopSettings) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("创建配置目录失败：{e}"))?;
+    }
+    let body = serde_json::to_string_pretty(settings).map_err(|e| format!("序列化设置失败：{e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, body).map_err(|e| format!("写入设置失败：{e}"))?;
+    fs::rename(&tmp, path).map_err(|e| format!("保存设置失败：{e}"))?;
+    Ok(())
+}
+
+fn load_settings(app: &tauri::AppHandle) -> DesktopSettings {
+    read_settings_file(&settings_path(app))
+}
+
+fn save_settings(app: &tauri::AppHandle, settings: &DesktopSettings) -> Result<(), String> {
+    write_settings_file(&settings_path(app), settings)
+}
+
+/* ==================== 开机启动（macOS LaunchAgent） ==================== */
+
+#[cfg(target_os = "macos")]
+fn autostart_path() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|home| {
+        PathBuf::from(home)
+            .join("Library/LaunchAgents")
+            .join(format!("{AUTOSTART_LABEL}.plist"))
+    })
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+#[cfg(target_os = "macos")]
+fn autostart_plist(exe: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{AUTOSTART_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{}</string>
+    <string>--silent</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><false/>
+</dict>
+</plist>
+"#,
+        xml_escape(exe)
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn sync_autostart(enabled: bool) {
+    let Some(path) = autostart_path() else { return };
+    if enabled {
+        let Ok(exe) = std::env::current_exe() else { return };
+        let plist = autostart_plist(&exe.to_string_lossy());
+        if let Some(dir) = path.parent() {
+            let _ = fs::create_dir_all(dir);
+        }
+        if fs::write(&path, plist).is_ok() {
+            // 立即注册（失败通常表示已加载，下次登录仍会生效）
+            let _ = Command::new("launchctl")
+                .arg("load")
+                .arg("-w")
+                .arg(&path)
+                .output();
+        }
+    } else if path.exists() {
+        let _ = Command::new("launchctl")
+            .arg("unload")
+            .arg("-w")
+            .arg(&path)
+            .output();
+        let _ = fs::remove_file(&path);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn sync_autostart(_enabled: bool) {}
+
+/* ==================== 窗口 / 菜单栏 ==================== */
 
 fn repo_dir() -> String {
     std::env::var("AGENT_DEPOT_REPO").unwrap_or_else(|_| DEFAULT_REPO.to_string())
@@ -38,10 +197,146 @@ fn ensure_service() -> bool {
     service_up()
 }
 
+fn show_main(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn apply_dock_icon(app: &tauri::AppHandle, visible: bool) {
+    if let Err(e) = app.set_dock_visibility(visible) {
+        eprintln!("[desktop] set_dock_visibility({visible}): {e}");
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_dock_icon(_app: &tauri::AppHandle, _visible: bool) {}
+
+fn ensure_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    if app.tray_by_id(TRAY_ID).is_some() {
+        return Ok(());
+    }
+    let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "打开设置…", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 Agent Depot", true, None::<&str>)?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &show,
+            &settings,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
+    )?;
+
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
+        .tooltip("Agent Depot")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => show_main(app),
+            "settings" => {
+                show_main(app);
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.eval("window.dispatchEvent(new CustomEvent('depot:open-settings'))");
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone()).icon_as_template(true);
+    }
+    builder.build(app)?;
+    Ok(())
+}
+
+fn set_tray(app: &tauri::AppHandle, enabled: bool) {
+    if enabled {
+        if let Err(e) = ensure_tray(app) {
+            eprintln!("[desktop] tray setup failed: {e}");
+        }
+    } else {
+        let _ = app.remove_tray_by_id(TRAY_ID);
+    }
+}
+
+/* ==================== IPC 命令（web 设置页调用） ==================== */
+
+#[tauri::command]
+fn desktop_get_settings(state: State<'_, DesktopState>) -> DesktopSettings {
+    state
+        .settings
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn desktop_set_settings(
+    app: tauri::AppHandle,
+    state: State<'_, DesktopState>,
+    settings: DesktopSettings,
+) -> Result<DesktopSettings, String> {
+    let next = settings.normalized();
+    save_settings(&app, &next)?;
+    apply_dock_icon(&app, next.show_dock_icon);
+    set_tray(&app, next.menu_bar);
+    sync_autostart(next.launch_at_login);
+    if let Ok(mut guard) = state.settings.lock() {
+        *guard = next.clone();
+    }
+    Ok(next)
+}
+
+/* ==================== 入口 ==================== */
+
 fn main() {
     let up = ensure_service();
-    tauri::Builder::default()
+    let cli_silent = std::env::args().any(|a| a == "--silent");
+
+    let app = tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            desktop_get_settings,
+            desktop_set_settings
+        ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() != "main" {
+                    return;
+                }
+                let menu_bar = window
+                    .app_handle()
+                    .try_state::<DesktopState>()
+                    .map(|s| s.settings.lock().map(|g| g.menu_bar).unwrap_or(false))
+                    .unwrap_or(false);
+                if menu_bar {
+                    // 菜单栏常驻：关窗 = 隐藏，托盘可再打开
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(move |app| {
+            let settings = load_settings(app.handle());
+            app.manage(DesktopState {
+                settings: Mutex::new(settings.clone()),
+            });
+
+            let silent = (cli_silent || settings.silent_start) && settings.menu_bar;
             let url = if up {
                 tauri::WebviewUrl::External(CONSOLE_URL.parse().expect("valid console url"))
             } else {
@@ -51,9 +346,15 @@ fn main() {
                 .title("Agent Depot")
                 .inner_size(1480.0, 960.0)
                 .min_inner_size(960.0, 640.0)
+                // 静默启动：窗口先建好但不显示，托盘/菜单可随时唤起
+                .visible(!silent)
                 // Tauri 2 内建：macOS 注入 ⌘+ / ⌘- / ⌘0 缩放 polyfill（WKWebView 无原生热键）
                 .zoom_hotkeys_enabled(true)
                 .build()?;
+
+            apply_dock_icon(app.handle(), settings.show_dock_icon);
+            set_tray(app.handle(), settings.menu_bar);
+            sync_autostart(settings.launch_at_login);
 
             // 应用菜单：Tauri 2 macOS 默认菜单不含 Reload（v1 才有），⌘R 因此无效。
             // 注意 set_menu 会整体替换默认菜单——必须补回「编辑」子菜单（Predefined
@@ -96,7 +397,10 @@ fn main() {
             )?;
             let reload = MenuItem::with_id(app, "reload", "重新加载", true, Some("CmdOrCtrl+R"))?;
             let view_menu = Submenu::with_items(app, "视图", true, &[&reload])?;
-            app.set_menu(Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &view_menu])?)?;
+            app.set_menu(Menu::with_items(
+                app,
+                &[&app_menu, &file_menu, &edit_menu, &view_menu],
+            )?)?;
 
             let handle = app.handle().clone();
             app.on_menu_event(move |_window, event| {
@@ -109,6 +413,98 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        // 点 Dock 图标（窗口被隐藏时）→ 重新显示主窗口
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen {
+            has_visible_windows,
+            ..
+        } = event
+        {
+            if !has_visible_windows {
+                show_main(app_handle);
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "agent-depot-desktop-test-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn silent_start_requires_menu_bar() {
+        let s = DesktopSettings {
+            menu_bar: false,
+            silent_start: true,
+            ..Default::default()
+        }
+        .normalized();
+        assert!(!s.silent_start);
+        let ok = DesktopSettings {
+            menu_bar: true,
+            silent_start: true,
+            ..Default::default()
+        }
+        .normalized();
+        assert!(ok.silent_start);
+    }
+
+    #[test]
+    fn settings_roundtrip() {
+        let dir = temp_dir("roundtrip");
+        let path = dir.join("desktop.json");
+        let s = DesktopSettings {
+            launch_at_login: true,
+            menu_bar: false,
+            silent_start: true, // 会被归一化为 false
+            show_dock_icon: false,
+        };
+        write_settings_file(&path, &s).unwrap();
+        let back = read_settings_file(&path);
+        assert!(back.launch_at_login);
+        assert!(!back.menu_bar);
+        assert!(!back.silent_start);
+        assert!(!back.show_dock_icon);
+        assert!(!path.with_extension("json.tmp").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bad_json_falls_back_to_default() {
+        let dir = temp_dir("badjson");
+        let path = dir.join("desktop.json");
+        fs::write(&path, "{not json").unwrap();
+        let back = read_settings_file(&path);
+        assert!(back.menu_bar);
+        assert!(back.show_dock_icon);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn xml_escape_covers_specials() {
+        assert_eq!(xml_escape("a&b<c>d\"e'f"), "a&amp;b&lt;c&gt;d&quot;e&apos;f");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn plist_contains_silent_flag_and_label() {
+        let plist = autostart_plist("/Applications/Agent Depot.app/Contents/MacOS/agent");
+        assert!(plist.contains("<string>local.planarcat.agent-depot</string>"));
+        assert!(plist.contains("<string>--silent</string>"));
+        assert!(plist.contains("RunAtLoad"));
+    }
 }

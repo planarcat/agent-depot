@@ -1,0 +1,43 @@
+/**
+ * 桌面壳（Tauri）桥：设置页与菜单栏/开机启动等原生能力交互。
+ * 浏览器打开时这些能力不可用（invoke 不存在），调用方需先 desktopAvailable()。
+ */
+
+export interface DesktopSettings {
+  /** 登录时自动启动（macOS LaunchAgent） */
+  launch_at_login: boolean;
+  /** 菜单栏挂载（托盘图标 + 关窗隐藏） */
+  menu_bar: boolean;
+  /** 静默启动：不弹窗口，只挂菜单栏（依赖 menu_bar） */
+  silent_start: boolean;
+  /** 是否在 Dock 显示图标 */
+  show_dock_icon: boolean;
+}
+
+type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+
+function invokeFn(): Invoke | null {
+  const w = window as unknown as {
+    __TAURI__?: { core?: { invoke?: Invoke } };
+  };
+  return w.__TAURI__?.core?.invoke ?? null;
+}
+
+/** 当前是否运行在桌面客户端内。 */
+export function desktopAvailable(): boolean {
+  return invokeFn() !== null;
+}
+
+/** 读取桌面设置；非桌面环境返回 null。 */
+export async function getDesktopSettings(): Promise<DesktopSettings | null> {
+  const invoke = invokeFn();
+  if (!invoke) return null;
+  return invoke<DesktopSettings>("desktop_get_settings");
+}
+
+/** 保存并立即应用桌面设置（返回后端归一化后的值）。 */
+export async function setDesktopSettings(settings: DesktopSettings): Promise<DesktopSettings> {
+  const invoke = invokeFn();
+  if (!invoke) throw new Error("当前不在桌面客户端内");
+  return invoke<DesktopSettings>("desktop_set_settings", { settings });
+}

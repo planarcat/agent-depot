@@ -22,6 +22,7 @@ import {
 } from "./core/dom.ts";
 import { esc, fmtBytes, fmtTime, INTERVALS, stripAttPlaceholders } from "./core/format.ts";
 import { MV } from "./core/mv.ts";
+import { getPrefs } from "./core/prefs.ts";
 import { installGlobalReporting, measureAsync, measureRender, reportPerf } from "./core/report.ts";
 import { state } from "./core/state.ts";
 import {
@@ -518,8 +519,7 @@ function syncFilterSegActive(): void {
 /* ---------- rows ---------- */
 
 // 会话可见域 = 启用工具的会话（口径 B）；筛选 / 搜索都在这个域内做
-/** 会话列表分批：首屏 100 行，触底再追加（655 行场景首屏 DOM 降一个数量级）。 */
-const ROW_CHUNK = 100;
+/** 会话列表分批：首屏按偏好（默认 100 行），触底再追加。 */
 let rowObserver: IntersectionObserver | null = null;
 
 function scopedSessions(): SessionRow[] {
@@ -654,7 +654,8 @@ function renderRowsInner(): void {
   }
   const showTool = !state._toolFocus;
   const openIdx = list.findIndex((s) => sessDetail === s.sid);
-  const initial = Math.min(list.length, Math.max(ROW_CHUNK, openIdx + 1));
+  const chunk = getPrefs().rowChunk;
+  const initial = Math.min(list.length, Math.max(chunk, openIdx + 1));
   const rowHtml = (s: SessionRow): string => {
     const open = sessDetail === s.sid;
     const anim = open && state._animateOpen === s.sid; // 本次新展开：先渲染收起态，下一帧再展开
@@ -700,7 +701,7 @@ function renderRowsInner(): void {
     rowObserver = new IntersectionObserver(
       (entries) => {
         if (!entries.some((e) => e.isIntersecting)) return;
-        const next = list.slice(shown, shown + ROW_CHUNK);
+        const next = list.slice(shown, shown + chunk);
         shown += next.length;
         sentinel.insertAdjacentHTML("beforebegin", next.map(rowHtml).join(""));
         for (const row of qsa<HTMLElement>('[data-testid="row"]', box)) bindSessionRow(row);
@@ -1821,10 +1822,10 @@ function startFallbackPolling(reason: string): void {
       .catch(() => {
         /* 后台刷新失败静默：下一轮事件/轮询会再试 */
       });
-    LIVE.pollTimer = window.setTimeout(tick, hidden ? 60_000 : 3000);
+    LIVE.pollTimer = window.setTimeout(tick, hidden ? 60_000 : getPrefs().pollIntervalSec * 1000);
   };
   LIVE.mode = "poll:" + reason;
-  LIVE.pollTimer = window.setTimeout(tick, 3000);
+  LIVE.pollTimer = window.setTimeout(tick, getPrefs().pollIntervalSec * 1000);
   markLive(LIVE.mode);
 }
 
@@ -2060,6 +2061,11 @@ async function switchView(id: string): Promise<void> {
   next.classList.add("is-active");
   syncNavIndicator(id);
 }
+
+// 菜单栏「打开设置…」→ web 侧切到设置页（桌面壳 eval 触发）
+window.addEventListener("depot:open-settings", () => {
+  void switchView("settings");
+});
 
 /* ====================================================================
    「笔记 · 本地」子视图（legacy）：与四个模块同一套条目/列表观感。

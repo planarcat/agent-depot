@@ -8,6 +8,25 @@
 - 关窗 ≠ 停服务；停服务用仓库根 `./stop.sh`（与薄壳时代语义一致）
 - 本机实测：tauri 2.11.6 · Rust 1.98.1 · 不再依赖浏览器窗口
 
+## 菜单栏 / 启动设置（v0.6.0）
+
+设置入口：主窗口「设置 → 桌面」。改动即时生效并写入
+`~/Library/Application Support/local.planarcat.agent-depot/desktop.json`。
+
+| 设置 | 行为 |
+|---|---|
+| 开机启动 | 写入 `~/Library/LaunchAgents/local.planarcat.agent-depot.plist`（`RunAtLoad` + `--silent`），关闭即卸载删除 |
+| 菜单栏挂载 | 菜单栏常驻图标；**关窗 = 隐藏**，点图标/菜单「显示主窗口」再打开；默认开启 |
+| 静默启动 | 启动后只挂菜单栏、不显示窗口（依赖菜单栏挂载；关掉菜单栏会自动关掉静默启动）；下次启动生效 |
+| 显示 Dock 图标 | 关闭后调用 `set_dock_visibility(false)`，只在菜单栏出现（仍可从菜单栏打开窗口） |
+
+菜单栏菜单：显示主窗口 / 打开设置… / 退出 Agent Depot。左键点图标 = 显示主窗口，右键 = 菜单。
+手动指定静默启动：`open -a AgentDepot --args --silent`（自动启动的 LaunchAgent 已带该参数）。
+
+> IPC 说明：控制台页面从 `http://127.0.0.1:8317` 加载，属于 remote URL；
+> `src-tauri/capabilities/default.json` 通过 `remote.urls` 放行该来源调用应用命令。
+> 新增 Tauri 命令时不需要额外权限声明，但**不要移除这条 capability**，否则设置页所有开关都会失效。
+
 ## 构建 / 重装
 
 ```bash
@@ -36,7 +55,10 @@ PATH="$HOME/.cargo/bin:$PATH" ./node_modules/.bin/tauri build
 | 窗口标题 / 尺寸 | `src-tauri/src/main.rs`：`.title()` / `.inner_size()` |
 | 应用图标 | 替换 `assets/icon-source.png`（1024×1024；可用 `assets/gen_icon.py` 重新生成），然后 `./node_modules/.bin/tauri icon assets/icon-source.png` |
 | 端口 | `src-tauri/src/main.rs` 的 `PORT`（与 `run.sh` 的 `HUB_PORT` 保持一致） |
-| 版本号 | `package.json` · `src-tauri/Cargo.toml` · `src-tauri/tauri.conf.json` 三处同步 |
+| 菜单栏菜单项 / 托盘事件 | `src-tauri/src/main.rs`：`ensure_tray()` |
+| 桌面设置默认值 / 持久化 | `src-tauri/src/main.rs`：`DesktopSettings` / `settings_path()` |
+| 设置页 UI | `web/src/views/settings.ts`（通用 / 桌面两个 pane） |
+| 版本号 | `desktop/package.json` · `src-tauri/Cargo.toml` · `src-tauri/tauri.conf.json` 三处同步 |
 | 提示页文案 | `ui/index.html` |
 
 ## 国内网络（构建镜像）

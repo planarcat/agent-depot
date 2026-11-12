@@ -4,8 +4,8 @@
   "type": "module",
   "scripts": {
     "check": "bun run lint && bun run typecheck && bun test && bun run budget",
-    "lint": "biome check src",
-    "lint:fix": "biome check --write src",
+    "lint": "biome check src tests",
+    "lint:fix": "biome check --write src tests",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "bun test",
     "test:cov": "bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage && bun ../scripts/coverage-gate.ts",

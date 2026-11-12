@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { ApiError, api, live, post, request, send, setSlowRequestReporter } from "../src/core/api.ts";
+import {
+  ApiError,
+  api,
+  live,
+  post,
+  request,
+  send,
+  setSlowRequestReporter,
+} from "../src/core/api.ts";
 import { arr, num, obj, str, unknownValue } from "../src/core/validate.ts";
 
 const realFetch = globalThis.fetch;
@@ -75,7 +83,9 @@ describe("request · shape 错误", () => {
 
   test("形状不符 → kind=shape，带 ShapeError 文案", async () => {
     mockFetch(() => json({ ok: true, n: "not-a-number" }));
-    const err = (await api("/api/x", { validate: obj({ n: num }) }).catch((e: unknown) => e)) as ApiError;
+    const err = (await api("/api/x", { validate: obj({ n: num }) }).catch(
+      (e: unknown) => e,
+    )) as ApiError;
     expect(err.kind).toBe("shape");
     expect(err.message).toContain("响应形状不符");
     expect(err.cause).toBeDefined();
@@ -86,7 +96,9 @@ describe("request · shape 错误", () => {
     const boom = (): never => {
       throw new TypeError("boom");
     };
-    const err = (await api("/api/x", { validate: boom as never }).catch((e: unknown) => e)) as ApiError;
+    const err = (await api("/api/x", { validate: boom as never }).catch(
+      (e: unknown) => e,
+    )) as ApiError;
     expect(err.kind).toBe("shape");
     expect(err.message).toContain("响应形状不符");
   });
@@ -126,7 +138,9 @@ describe("request · 网络与超时", () => {
 
   test("silent：shape 错误仍抛出（数据不可信不能静默）", async () => {
     mockFetch(() => new Response("nope", { status: 200 }));
-    const err = (await api("/api/background", { silent: true }).catch((e: unknown) => e)) as ApiError;
+    const err = (await api("/api/background", { silent: true }).catch(
+      (e: unknown) => e,
+    )) as ApiError;
     expect(err).toBeInstanceOf(ApiError);
     expect(err.kind).toBe("shape");
   });
@@ -191,9 +205,8 @@ describe("便捷封装", () => {
     live.lastWrite = 0;
     await post("/api/x", { a: 1 });
     expect(calls[0]?.init?.method).toBe("POST");
-    expect((calls[0]?.init?.headers as Record<string, string>)["Content-Type"]).toBe(
-      "application/json",
-    );
+    const headers = calls[0]?.init?.headers as Record<string, string> | undefined;
+    expect(headers?.["Content-Type"]).toBe("application/json");
     expect(calls[0]?.init?.body).toBe('{"a":1}');
     expect(live.lastWrite).toBeGreaterThan(0);
   });
@@ -230,7 +243,14 @@ describe("ApiError 结构", () => {
 
   test("显式 code / cause 保留", () => {
     const cause = new Error("root");
-    const e = new ApiError({ kind: "shape", message: "m", status: 1, path: "/p", code: "E1", cause });
+    const e = new ApiError({
+      kind: "shape",
+      message: "m",
+      status: 1,
+      path: "/p",
+      code: "E1",
+      cause,
+    });
     expect(e.code).toBe("E1");
     expect(e.cause).toBe(cause);
   });

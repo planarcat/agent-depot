@@ -61,6 +61,15 @@ tests/                单元与 happy-dom 组件测试（setup 由 bunfig.toml p
 7. SSE 断线由 `scheduleSseReconnect` 指数退避（1s→30s，±20% 抖动），不要改回 EventSource 原生重连。
 8. 不引入运行时依赖；工具链依赖只进 `devDependencies`。
 
+## 设置页（v0.6.0）
+
+- **通用**（`core/prefs.ts`，localStorage `agent-depot.prefs.v1`）：会话列表每批行数、SSE 断线轮询间隔、
+  首次进入记忆页自动扫描、前端错误上报开关；「恢复默认」清空本地偏好。
+- **桌面**（`core/desktop.ts`，仅 Tauri 壳内可用）：开机启动、菜单栏挂载、静默启动、Dock 图标。
+  通过 `window.__TAURI__.core.invoke` 调 `desktop_get_settings` / `desktop_set_settings`，持久化在
+  桌面壳的 `desktop.json`；浏览器打开时显示「桌面客户端专属设置」占位。
+- 新增偏好：加字段到 `Prefs` + `DEFAULT_PREFS` + `sanitize`，UI 在 `settings.ts` 的 `renderGeneral()`。
+
 ## 可观测
 
 - 未捕获异常 / unhandledrejection / 慢请求（>2s）/ 慢渲染（>阈值）批量 POST `/api/frontend-errors`。

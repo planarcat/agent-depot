@@ -1,10 +1,17 @@
-/* 设置中心 v2：左锚点导航（模块 / 工具 / 远程仓库 / 关于）+ 右内容面板。
+/* 设置中心 v3：左锚点导航（通用 / 模块 / 工具 / 远程仓库 / 桌面 / 关于）+ 右内容面板。
    修改即时生效；工具增删改在行内 accordion 完成。 */
 
 import { appActions } from "../core/actions.ts";
 import { api, post, send } from "../core/api.ts";
+import {
+  type DesktopSettings,
+  desktopAvailable,
+  getDesktopSettings,
+  setDesktopSettings,
+} from "../core/desktop.ts";
 import { applyModuleVisibility, byId, qs, qsa } from "../core/dom.ts";
 import { esc } from "../core/format.ts";
+import { getPrefs, resetPrefs, setPrefs } from "../core/prefs.ts";
 import { state } from "../core/state.ts";
 import { allTools, toolColorCls, toolShort } from "../core/tools.ts";
 import type {
@@ -36,15 +43,19 @@ const MODULE_DESC: Record<string, string> = {
   mcp: "MCP 源与手动条目 / 写入各工具配置 / 握手验证",
 };
 const PANE_TITLE: Record<string, string> = {
+  general: "通用",
   modules: "模块",
   tools: "工具",
   remotes: "远程仓库",
+  desktop: "桌面",
   env: "关于",
 };
 const PANE_SUB: Record<string, string> = {
+  general: "列表刷新节奏与本地偏好",
   modules: "启用或停用顶部导航模块",
   tools: "排序、启停与路径配置",
   remotes: "仓库地址与所属模块",
+  desktop: "菜单栏、开机启动与 Dock 图标",
   env: "版本与存储位置",
 };
 
@@ -76,9 +87,11 @@ function switchPane(name: string): void {
 async function render(): Promise<void> {
   const ver = byId<HTMLElement>("settings-version");
   if (ver) ver.textContent = `Agent Depot ${state.version}`;
+  if (S.pane === "general") renderGeneral();
   if (S.pane === "modules") await renderModules();
   if (S.pane === "tools") await renderTools();
   if (S.pane === "remotes") await renderRemotes();
+  if (S.pane === "desktop") await renderDesktop();
   if (S.pane === "env") renderEnv();
 }
 
@@ -95,6 +108,123 @@ async function openSettings(): Promise<void> {
 
 async function closeSettings(): Promise<void> {
   await appActions().switchView("sessions");
+}
+
+/* ==================== 通用（本地偏好） ==================== */
+
+function prefToggle(
+  label: string,
+  desc: string,
+  key: "autoScanMemory" | "reportFrontendErrors",
+  on: boolean,
+  testid: string,
+): string {
+  return `
+      <div class="setrow" data-testid="${testid}">
+        <div class="setrow__txt">
+          <div class="setrow__name">${esc(label)}</div>
+          <div class="setrow__desc">${esc(desc)}</div>
+        </div>
+        <button class="set-toggle ${on ? "is-on" : ""}" data-pref="${key}"
+                data-testid="${testid}-toggle" role="switch" aria-checked="${on ? "true" : "false"}"
+                aria-label="${esc(label)} ${on ? "已开启" : "已关闭"}">
+          <span class="set-toggle__knob"></span>
+        </button>
+      </div>`;
+}
+
+function renderGeneral(): void {
+  const box = pane("general");
+  if (!box) return;
+  const p = getPrefs();
+  box.innerHTML = `
+      <p class="setpane__hint">只保存在本机（浏览器 / 桌面客户端），不影响服务端数据。</p>
+      <div class="setcard--list">
+        <div class="setrow" data-testid="settings-general-row-chunk">
+          <div class="setrow__txt">
+            <div class="setrow__name">会话列表每批行数</div>
+            <div class="setrow__desc">首屏渲染行数，触底自动追加；会话多时调小首屏更快</div>
+          </div>
+          <div class="setrow__chips">${HubUI.select({
+            testid: "settings-general-chunk",
+            value: p.rowChunk,
+            options: [
+              { value: 50, label: "50 行" },
+              { value: 100, label: "100 行" },
+              { value: 200, label: "200 行" },
+            ],
+          })}</div>
+        </div>
+        <div class="setrow" data-testid="settings-general-row-poll">
+          <div class="setrow__txt">
+            <div class="setrow__name">实时连接断开时的刷新间隔</div>
+            <div class="setrow__desc">SSE 不可用时退回轮询；间隔越短越实时，后台标签页固定降到 60s</div>
+          </div>
+          <div class="setrow__chips">${HubUI.select({
+            testid: "settings-general-poll",
+            value: p.pollIntervalSec,
+            options: [
+              { value: 5, label: "5 秒" },
+              { value: 10, label: "10 秒" },
+              { value: 30, label: "30 秒" },
+            ],
+          })}</div>
+        </div>
+        ${prefToggle(
+          "首次进入记忆页自动扫描",
+          "打开记忆页时自动扫描各工具的记忆文件；关闭后需手动点「全部扫描」",
+          "autoScanMemory",
+          p.autoScanMemory,
+          "settings-general-autoscan",
+        )}
+        ${prefToggle(
+          "发送前端错误到台账",
+          "未捕获异常 / 慢请求 / 慢渲染写入「台账 → frontend」，便于排障",
+          "reportFrontendErrors",
+          p.reportFrontendErrors,
+          "settings-general-report",
+        )}
+      </div>
+      <div class="setrow__acts" style="margin-top:var(--sp-3)">
+        <button class="hub-btn btn-sm" id="prefs-reset" data-testid="settings-general-reset">恢复默认</button>
+      </div>`;
+  HubUI.hydrateSelects(box);
+
+  const chunkSel = qs<HTMLElement>('[data-testid="settings-general-chunk"]', box);
+  if (chunkSel) {
+    chunkSel.addEventListener("change", () => {
+      const v = Number((chunkSel as HTMLElement & { value: string }).value);
+      setPrefs({ rowChunk: v });
+      toastOnce("settings-prefs", "已保存：每批 " + v + " 行", "success");
+    });
+  }
+  const pollSel = qs<HTMLElement>('[data-testid="settings-general-poll"]', box);
+  if (pollSel) {
+    pollSel.addEventListener("change", () => {
+      const v = Number((pollSel as HTMLElement & { value: string }).value);
+      setPrefs({ pollIntervalSec: v });
+      toastOnce("settings-prefs", "已保存：刷新间隔 " + v + " 秒", "success");
+    });
+  }
+  for (const btn of qsa<HTMLButtonElement>(".set-toggle[data-pref]", box)) {
+    btn.onclick = () => {
+      const key = btn.dataset["pref"] as "autoScanMemory" | "reportFrontendErrors";
+      const next = !btn.classList.contains("is-on");
+      flipToggle(btn, next);
+      setPrefs({ [key]: next });
+      toastOnce("settings-prefs", "已保存", "success");
+    };
+  }
+  const reset = qs<HTMLButtonElement>("#prefs-reset", box);
+  if (reset) {
+    reset.onclick = () => {
+      void HubUI.confirm("恢复默认设置", "列表行数、刷新间隔与本地开关都会回到默认值。", () => {
+        resetPrefs();
+        renderGeneral();
+        toastOnce("settings-prefs", "已恢复默认", "success");
+      });
+    };
+  }
 }
 
 /* ==================== 模块 ==================== */
@@ -800,6 +930,108 @@ function repoDialog(repo: RemoteRepo | null): void {
 }
 
 /* ==================== 关于 ==================== */
+
+/* ==================== 桌面（Tauri 壳） ==================== */
+
+const DESKTOP_ROWS: Array<{
+  key: keyof DesktopSettings;
+  name: string;
+  desc: string;
+}> = [
+  {
+    key: "launch_at_login",
+    name: "开机启动",
+    desc: "登录 macOS 后自动启动 Agent Depot（静默启动开启时只挂菜单栏）",
+  },
+  {
+    key: "menu_bar",
+    name: "菜单栏挂载",
+    desc: "在菜单栏显示图标；关闭主窗口时隐藏而不是退出，点图标可再打开",
+  },
+  {
+    key: "silent_start",
+    name: "静默启动",
+    desc: "启动后不弹主窗口，直接挂到菜单栏（需先开启菜单栏挂载）",
+  },
+  {
+    key: "show_dock_icon",
+    name: "显示 Dock 图标",
+    desc: "关闭后只在菜单栏出现；需要时仍可从菜单栏打开主窗口",
+  },
+];
+
+let DesktopBusy = false;
+
+function desktopNote(): string {
+  return '<div class="setrow"><div class="setrow__txt"><div class="setrow__desc">这些开关只在桌面客户端（Tauri 壳）内生效；浏览器打开时不可用。</div></div></div>';
+}
+
+async function renderDesktop(): Promise<void> {
+  const box = pane("desktop");
+  if (!box) return;
+  if (!desktopAvailable()) {
+    box.innerHTML = `<p class="setpane__hint">桌面客户端专属设置</p><div class="setcard--list">${desktopNote()}</div>`;
+    return;
+  }
+  let current: DesktopSettings | null = null;
+  try {
+    current = await getDesktopSettings();
+  } catch (e) {
+    box.innerHTML = `<p class="setpane__hint">读取桌面设置失败：${esc(e instanceof Error ? e.message : String(e))}</p>`;
+    return;
+  }
+  if (!current) {
+    box.innerHTML = `<p class="setpane__hint">桌面客户端专属设置</p><div class="setcard--list">${desktopNote()}</div>`;
+    return;
+  }
+  const s = current;
+  box.innerHTML = `
+      <p class="setpane__hint">菜单栏与 Dock 行为立即生效；「静默启动」在下一次启动时生效。</p>
+      <div class="setcard--list">${DESKTOP_ROWS.map((row) => {
+        const on = s[row.key];
+        const blocked = row.key === "silent_start" && !s.menu_bar;
+        return `
+        <div class="setrow" data-testid="settings-desktop-${row.key}">
+          <div class="setrow__txt">
+            <div class="setrow__name">${esc(row.name)}</div>
+            <div class="setrow__desc">${esc(row.desc)}</div>
+          </div>
+          <button class="set-toggle ${on ? "is-on" : ""}" data-key="${row.key}"
+                  data-testid="settings-desktop-toggle-${row.key}"
+                  role="switch" aria-checked="${on ? "true" : "false"}"
+                  aria-label="${esc(row.name)} ${on ? "已开启" : "已关闭"}"
+                  ${blocked ? "disabled" : ""}>
+            <span class="set-toggle__knob"></span>
+          </button>
+        </div>`;
+      }).join("")}</div>
+      <p class="setpane__hint" style="margin-top:var(--sp-3)">开机启动会写入 <span class="mono-xs">~/Library/LaunchAgents/${AUTOSTART_LABEL}.plist</span>。</p>`;
+
+  for (const btn of qsa<HTMLButtonElement>(".set-toggle[data-key]", box)) {
+    btn.onclick = async () => {
+      if (DesktopBusy) return;
+      const key = btn.dataset["key"] as keyof DesktopSettings;
+      const next: DesktopSettings = { ...s, [key]: !s[key] };
+      if (key === "menu_bar" && !next.menu_bar) next.silent_start = false;
+      DesktopBusy = true;
+      btn.classList.add("is-loading");
+      flipToggle(btn, next[key]);
+      try {
+        await setDesktopSettings(next);
+        await renderDesktop(); // 后端可能归一化（关菜单栏会连带关静默启动）
+        toastOnce("settings-desktop", "桌面设置已保存", "success");
+      } catch (e) {
+        flipToggle(btn, s[key]);
+        HubUI.toast(`保存失败：${e instanceof Error ? e.message : String(e)}`, "error");
+      } finally {
+        DesktopBusy = false;
+        btn.classList.remove("is-loading");
+      }
+    };
+  }
+}
+
+const AUTOSTART_LABEL = "local.planarcat.agent-depot";
 
 function renderEnv(): void {
   const box = pane("env");
