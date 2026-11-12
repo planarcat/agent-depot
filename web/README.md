@@ -63,7 +63,7 @@ tests/                单元与 happy-dom 组件测试（setup 由 bunfig.toml p
 
 ## 设置页（v0.6.0）
 
-- **通用**（`core/prefs.ts`，localStorage `agent-depot.prefs.v1`）：会话列表每批行数、SSE 断线轮询间隔、
+- **通用**（`core/prefs.ts`，localStorage `agent-depot.prefs.v1`）：会话列表每批行数、SSE 断线轮询间隔、默认启动视图、会话默认布局、
   首次进入记忆页自动扫描、前端错误上报开关；「恢复默认」清空本地偏好。
 - **桌面**（`core/desktop.ts`，仅 Tauri 壳内可用）：开机启动、菜单栏挂载、静默启动、Dock 图标。
   通过 `window.__TAURI__.core.invoke` 调 `desktop_get_settings` / `desktop_set_settings`，持久化在

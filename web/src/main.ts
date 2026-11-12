@@ -22,7 +22,7 @@ import {
 } from "./core/dom.ts";
 import { esc, fmtBytes, fmtTime, INTERVALS, stripAttPlaceholders } from "./core/format.ts";
 import { MV } from "./core/mv.ts";
-import { getPrefs } from "./core/prefs.ts";
+import { getPrefs, setPrefs } from "./core/prefs.ts";
 import { installGlobalReporting, measureAsync, measureRender, reportPerf } from "./core/report.ts";
 import { state } from "./core/state.ts";
 import {
@@ -187,7 +187,7 @@ interface LiveBefore {
 
 /** 会话页局部 UI 状态：core/state 的类型口径与旧实现不一致，这里按原语义承接。 */
 let sessDetail: string | null = null;
-let sessLayout: "detail" | "compact" = "detail";
+let sessLayout: "detail" | "compact" = getPrefs().sessLayout;
 const detailCache: Record<string, DetailEntry | null> = {};
 
 /* ---------- state ---------- */
@@ -404,6 +404,7 @@ function renderSessBar(): void {
   if (back) {
     back.onclick = () => {
       sessLayout = "detail";
+      setPrefs({ sessLayout });
       state._sessAnim = true;
       renderAll();
     };
@@ -441,6 +442,7 @@ function applySessLayout(animate: boolean): void {
   } else {
     MV.hdrToggle(hdr, "sess", () => {
       sessLayout = "compact";
+      setPrefs({ sessLayout });
       state._sessAnim = true;
       renderAll();
     });
@@ -2062,6 +2064,15 @@ async function switchView(id: string): Promise<void> {
   syncNavIndicator(id);
 }
 
+// 设置页改「会话默认布局」→ 当前会话页即时应用
+window.addEventListener("depot:prefs-changed", () => {
+  const next = getPrefs().sessLayout;
+  if (next !== sessLayout) {
+    sessLayout = next;
+    if (activeViewId() === "sessions") renderAll();
+  }
+});
+
 // 菜单栏「打开设置…」→ web 侧切到设置页（桌面壳 eval 触发）
 window.addEventListener("depot:open-settings", () => {
   void switchView("settings");
@@ -2339,6 +2350,12 @@ document.addEventListener("DOMContentLoaded", () => {
       markLive("sse");
       MOUNTED.add("sessions"); // 首屏已渲染过
       syncNavIndicator("sessions");
+      // 默认启动视图（模块被停用时保持会话页）
+      const start = getPrefs().defaultView;
+      if (start !== "sessions") {
+        const btn = qs<HTMLElement>(`.mod-nav button[data-view="${start}"]`);
+        if (btn && btn.style.display !== "none" && !btn.hidden) void switchView(start);
+      }
     })
     .catch((e: unknown) => renderLoadError(e instanceof Error ? e.message : String(e)));
   startLiveUpdates(); // 即时刷新（SSE）；断开时自动退回轮询

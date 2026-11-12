@@ -21,9 +21,23 @@ describe("prefs", () => {
   });
 
   test("非法值被归一化（白名单）", () => {
-    const next = setPrefs({ rowChunk: 999, pollIntervalSec: 7 });
+    const next = setPrefs({
+      rowChunk: 999,
+      pollIntervalSec: 7,
+      defaultView: "nope" as never,
+      sessLayout: "grid" as never,
+    });
     expect(next.rowChunk).toBe(DEFAULT_PREFS.rowChunk);
     expect(next.pollIntervalSec).toBe(DEFAULT_PREFS.pollIntervalSec);
+    expect(next.defaultView).toBe(DEFAULT_PREFS.defaultView);
+    expect(next.sessLayout).toBe(DEFAULT_PREFS.sessLayout);
+  });
+
+  test("默认视图 / 会话布局可保存", () => {
+    const next = setPrefs({ defaultView: "memory", sessLayout: "compact" });
+    expect(next.defaultView).toBe("memory");
+    expect(next.sessLayout).toBe("compact");
+    expect(getPrefs().defaultView).toBe("memory");
   });
 
   test("坏 JSON 回默认值，不抛", () => {

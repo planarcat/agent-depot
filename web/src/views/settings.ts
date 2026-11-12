@@ -11,7 +11,7 @@ import {
 } from "../core/desktop.ts";
 import { applyModuleVisibility, byId, qs, qsa } from "../core/dom.ts";
 import { esc } from "../core/format.ts";
-import { getPrefs, resetPrefs, setPrefs } from "../core/prefs.ts";
+import { getPrefs, resetPrefs, type SessLayout, type StartView, setPrefs } from "../core/prefs.ts";
 import { state } from "../core/state.ts";
 import { allTools, toolColorCls, toolShort } from "../core/tools.ts";
 import type {
@@ -170,6 +170,38 @@ function renderGeneral(): void {
             ],
           })}</div>
         </div>
+        <div class="setrow" data-testid="settings-general-row-view">
+          <div class="setrow__txt">
+            <div class="setrow__name">默认启动视图</div>
+            <div class="setrow__desc">启动后进入的模块；对应模块被停用时仍回到会话页</div>
+          </div>
+          <div class="setrow__chips">${HubUI.select({
+            testid: "settings-general-view",
+            value: p.defaultView,
+            options: [
+              { value: "sessions", label: "会话" },
+              { value: "memory", label: "记忆" },
+              { value: "skills", label: "Skills" },
+              { value: "mcp", label: "MCP" },
+              { value: "ops", label: "台账" },
+              { value: "stats", label: "统计" },
+            ],
+          })}</div>
+        </div>
+        <div class="setrow" data-testid="settings-general-row-layout">
+          <div class="setrow__txt">
+            <div class="setrow__name">会话默认布局</div>
+            <div class="setrow__desc">详细 = 来源分组卡片；简略 = 顶部收起为横向来源条（立即生效）</div>
+          </div>
+          <div class="setrow__chips">${HubUI.select({
+            testid: "settings-general-layout",
+            value: p.sessLayout,
+            options: [
+              { value: "detail", label: "详细" },
+              { value: "compact", label: "简略" },
+            ],
+          })}</div>
+        </div>
         ${prefToggle(
           "首次进入记忆页自动扫描",
           "打开记忆页时自动扫描各工具的记忆文件；关闭后需手动点「全部扫描」",
@@ -204,6 +236,22 @@ function renderGeneral(): void {
       const v = Number((pollSel as HTMLElement & { value: string }).value);
       setPrefs({ pollIntervalSec: v });
       toastOnce("settings-prefs", "已保存：刷新间隔 " + v + " 秒", "success");
+    });
+  }
+  const viewSel = qs<HTMLElement>('[data-testid="settings-general-view"]', box);
+  if (viewSel) {
+    viewSel.addEventListener("change", () => {
+      const v = (viewSel as HTMLElement & { value: string }).value;
+      setPrefs({ defaultView: v as StartView });
+      toastOnce("settings-prefs", "已保存：下次启动进入该视图", "success");
+    });
+  }
+  const layoutSel = qs<HTMLElement>('[data-testid="settings-general-layout"]', box);
+  if (layoutSel) {
+    layoutSel.addEventListener("change", () => {
+      const v = (layoutSel as HTMLElement & { value: string }).value;
+      setPrefs({ sessLayout: v as SessLayout });
+      toastOnce("settings-prefs", "已保存：会话布局已切换", "success");
     });
   }
   for (const btn of qsa<HTMLButtonElement>(".set-toggle[data-pref]", box)) {
