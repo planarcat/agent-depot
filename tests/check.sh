@@ -17,7 +17,8 @@ python3 scripts/lint_baseline.py || FAIL=1
 # 桌面壳（Tauri）：设置持久化 / LaunchAgent 生成等纯逻辑单测
 (cd desktop/src-tauri && cargo test --quiet) || FAIL=1
 
-[ -x depotd/target/debug/depotd ] || (cd depotd && cargo build --workspace)
+# 每次显式重建：仅凭「二进制存在」会拿旧二进制跑 spec，源码改了也假绿（2026-11-12 实测）
+(cd depotd && cargo build --workspace --quiet) || FAIL=1
 bash scripts/run_spec_rust.sh || FAIL=1
 
 if [ "$FAIL" = "0" ]; then
