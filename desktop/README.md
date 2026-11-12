@@ -18,7 +18,7 @@
 | 开机启动 | 写入 `~/Library/LaunchAgents/local.planarcat.agent-depot.plist`（`RunAtLoad` + `--silent`），关闭即卸载删除 |
 | 菜单栏挂载 | 菜单栏常驻图标；**关窗 = 隐藏**，点图标/菜单「显示主窗口」再打开；默认开启 |
 | 静默启动 | 启动后只挂菜单栏、不显示窗口（依赖菜单栏挂载；关掉菜单栏会自动关掉静默启动）；下次启动生效 |
-| 显示 Dock 图标 | 关闭后调用 `set_dock_visibility(false)`，只在菜单栏出现（仍可从菜单栏打开窗口） |
+| 显示 Dock 图标 | 窗口打开时始终显示；关闭主窗口后（菜单栏挂载开启）调用 `set_dock_visibility(false)` 从 Dock 移除，点菜单栏图标恢复 |
 
 菜单栏菜单：显示主窗口 / 打开设置… / 退出 Agent Depot。左键点图标 = 显示主窗口，右键 = 菜单。
 手动指定静默启动：`open -a AgentDepot --args --silent`（自动启动的 LaunchAgent 已带该参数）。

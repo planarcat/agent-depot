@@ -230,6 +230,8 @@ fn ensure_service() -> bool {
 }
 
 fn show_main(app: &tauri::AppHandle) {
+    // 窗口打开时 Dock 图标始终显示（即使设置是「关窗后隐藏」）
+    set_dock_visible(app, true);
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
@@ -237,15 +239,40 @@ fn show_main(app: &tauri::AppHandle) {
     }
 }
 
+/// Dock 图标策略：
+/// - 窗口打开 → 始终显示；
+/// - 窗口关闭/隐藏 → 只有「显示 Dock 图标」开启才保留；
+/// - 菜单栏未挂载时不能隐藏 Dock，否则用户无法再打开窗口。
+fn dock_visible(window_visible: bool, show_dock_icon: bool, menu_bar: bool) -> bool {
+    window_visible || show_dock_icon || !menu_bar
+}
+
+fn is_main_visible(app: &tauri::AppHandle) -> bool {
+    app.get_webview_window("main")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
+}
+
+fn apply_dock_policy_for(app: &tauri::AppHandle, settings: &DesktopSettings, window_visible: bool) {
+    set_dock_visible(
+        app,
+        dock_visible(window_visible, settings.show_dock_icon, settings.menu_bar),
+    );
+}
+
+fn apply_dock_policy(app: &tauri::AppHandle, settings: &DesktopSettings) {
+    apply_dock_policy_for(app, settings, is_main_visible(app));
+}
+
 #[cfg(target_os = "macos")]
-fn apply_dock_icon(app: &tauri::AppHandle, visible: bool) {
+fn set_dock_visible(app: &tauri::AppHandle, visible: bool) {
     if let Err(e) = app.set_dock_visibility(visible) {
         eprintln!("[desktop] set_dock_visibility({visible}): {e}");
     }
 }
 
 #[cfg(not(target_os = "macos"))]
-fn apply_dock_icon(_app: &tauri::AppHandle, _visible: bool) {}
+fn set_dock_visible(_app: &tauri::AppHandle, _visible: bool) {}
 
 fn ensure_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     if app.tray_by_id(TRAY_ID).is_some() {
@@ -330,7 +357,7 @@ fn desktop_set_settings(
 ) -> Result<DesktopSettings, String> {
     let next = settings.normalized();
     save_settings(&app, &next)?;
-    apply_dock_icon(&app, next.show_dock_icon);
+    apply_dock_policy(&app, &next);
     set_tray(&app, next.menu_bar);
     sync_autostart(next.launch_at_login);
     if let Ok(mut guard) = state.settings.lock() {
@@ -365,6 +392,12 @@ fn main() {
                     // 菜单栏常驻：关窗 = 隐藏，托盘可再打开
                     api.prevent_close();
                     let _ = window.hide();
+                    if let Some(state) = window.app_handle().try_state::<DesktopState>() {
+                        if let Ok(s) = state.settings.lock() {
+                            // 窗口已隐藏：按「关窗后是否保留 Dock 图标」刷新
+                            apply_dock_policy_for(window.app_handle(), &s, false);
+                        }
+                    }
                 }
             }
         })
@@ -390,7 +423,7 @@ fn main() {
                 .zoom_hotkeys_enabled(true)
                 .build()?;
 
-            apply_dock_icon(app.handle(), settings.show_dock_icon);
+            apply_dock_policy_for(app.handle(), &settings, !silent);
             set_tray(app.handle(), settings.menu_bar);
             sync_autostart(settings.launch_at_login);
 
@@ -545,6 +578,19 @@ mod tests {
         assert!(plist.contains(&format!("<string>{}</string>", autostart_label())));
         assert!(plist.contains("<string>--silent</string>"));
         assert!(plist.contains("RunAtLoad"));
+    }
+
+    #[test]
+    fn dock_icon_only_hidden_when_window_closed() {
+        // 窗口打开：任何设置都显示
+        assert!(dock_visible(true, true, true));
+        assert!(dock_visible(true, false, true));
+        // 窗口关闭 + 显示 Dock 图标：保留
+        assert!(dock_visible(false, true, true));
+        // 窗口关闭 + 不显示 + 菜单栏已挂载：隐藏
+        assert!(!dock_visible(false, false, true));
+        // 窗口关闭 + 不显示 + 没有菜单栏入口：必须保留 Dock
+        assert!(dock_visible(false, false, false));
     }
 
     #[test]

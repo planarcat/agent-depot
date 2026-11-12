@@ -1006,7 +1006,7 @@ const DESKTOP_ROWS: Array<{
   {
     key: "show_dock_icon",
     name: "显示 Dock 图标",
-    desc: "关闭后只在菜单栏出现；需要时仍可从菜单栏打开主窗口",
+    desc: "窗口打开时始终显示；关闭主窗口后从 Dock 移除（需开启菜单栏挂载，点菜单栏图标恢复）",
   },
 ];
 
