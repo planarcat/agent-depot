@@ -3,6 +3,8 @@
  * 浏览器打开时这些能力不可用（invoke 不存在），调用方需先 desktopAvailable()。
  */
 
+export type DesktopProfile = "dev" | "release";
+
 export interface DesktopSettings {
   /** 登录时自动启动（macOS LaunchAgent） */
   launch_at_login: boolean;
@@ -26,6 +28,18 @@ function invokeFn(): Invoke | null {
 /** 当前是否运行在桌面客户端内。 */
 export function desktopAvailable(): boolean {
   return invokeFn() !== null;
+}
+
+/** 当前桌面壳是开发版还是正式版（设置互不共享）；非桌面环境返回 null。 */
+export async function getDesktopProfile(): Promise<DesktopProfile | null> {
+  const invoke = invokeFn();
+  if (!invoke) return null;
+  try {
+    const p = await invoke<string>("desktop_profile");
+    return p === "dev" ? "dev" : "release";
+  } catch {
+    return null; // 旧壳没有该命令：保持未知，不阻断设置页
+  }
 }
 
 /** 读取桌面设置；非桌面环境返回 null。 */

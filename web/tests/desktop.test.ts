@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   type DesktopSettings,
   desktopAvailable,
+  getDesktopProfile,
   getDesktopSettings,
   setDesktopSettings,
 } from "../src/core/desktop.ts";
@@ -24,6 +25,7 @@ describe("desktop bridge", () => {
   test("浏览器环境：不可用 / get 返回 null / set 抛错", async () => {
     expect(desktopAvailable()).toBe(false);
     expect(await getDesktopSettings()).toBeNull();
+    expect(await getDesktopProfile()).toBeNull();
     await expect(setDesktopSettings(sample)).rejects.toThrow("桌面客户端");
   });
 
@@ -40,6 +42,18 @@ describe("desktop bridge", () => {
     expect(desktopAvailable()).toBe(true);
     expect(await getDesktopSettings()).toEqual(sample);
     expect(calls).toEqual(["desktop_get_settings"]);
+  });
+
+  test("Tauri 环境：desktop_profile 返回 dev/release，异常回 null", async () => {
+    const answer = (value: string): Invoke => (() => Promise.resolve(value)) as Invoke;
+    w.__TAURI__ = { core: { invoke: answer("dev") } };
+    expect(await getDesktopProfile()).toBe("dev");
+    w.__TAURI__ = { core: { invoke: answer("weird") } };
+    expect(await getDesktopProfile()).toBe("release");
+    w.__TAURI__ = {
+      core: { invoke: (() => Promise.reject(new Error("old shell"))) as Invoke },
+    };
+    expect(await getDesktopProfile()).toBeNull();
   });
 
   test("Tauri 环境：set 透传 settings 并返回归一化结果", async () => {

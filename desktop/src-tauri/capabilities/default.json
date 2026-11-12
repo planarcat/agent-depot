@@ -15,6 +15,7 @@
   "permissions": [
     "core:default",
     "allow-desktop-get-settings",
-    "allow-desktop-set-settings"
+    "allow-desktop-set-settings",
+    "allow-desktop-profile"
   ]
 }

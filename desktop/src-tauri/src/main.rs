@@ -18,6 +18,37 @@ const PORT: u16 = 8317;
 const TRAY_ID: &str = "agent-depot-tray";
 const AUTOSTART_LABEL: &str = "local.planarcat.agent-depot";
 
+/// 构建身份：debug 构建或 `AGENT_DEPOT_PROFILE=dev` 编出的包 = 开发版。
+/// dev 与 release 的设置文件、开机启动项、默认值、服务库全部隔离。
+fn is_dev_build() -> bool {
+    cfg!(debug_assertions) || option_env!("AGENT_DEPOT_PROFILE") == Some("dev")
+}
+
+fn profile() -> &'static str {
+    if is_dev_build() {
+        "dev"
+    } else {
+        "release"
+    }
+}
+
+fn settings_file_name() -> &'static str {
+    if is_dev_build() {
+        "desktop-dev.json"
+    } else {
+        "desktop.json"
+    }
+}
+
+/// dev 用独立 LaunchAgent label，避免覆盖正式版的开机启动。
+fn autostart_label() -> String {
+    if is_dev_build() {
+        format!("{AUTOSTART_LABEL}-dev")
+    } else {
+        AUTOSTART_LABEL.to_string()
+    }
+}
+
 /* ==================== 桌面设置（持久化到 App Config） ==================== */
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,7 +68,8 @@ impl Default for DesktopSettings {
     fn default() -> Self {
         Self {
             launch_at_login: false,
-            menu_bar: true,
+            // 开发版默认不挂菜单栏，避免调试时与正式版出现两个托盘图标
+            menu_bar: !is_dev_build(),
             silent_start: false,
             show_dock_icon: true,
         }
@@ -61,7 +93,7 @@ struct DesktopState {
 fn settings_path(app: &tauri::AppHandle) -> PathBuf {
     app.path()
         .app_config_dir()
-        .map(|d| d.join("desktop.json"))
+        .map(|d| d.join(settings_file_name()))
         .unwrap_or_else(|_| {
             std::env::var_os("HOME")
                 .map(PathBuf::from)
@@ -104,7 +136,7 @@ fn autostart_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|home| {
         PathBuf::from(home)
             .join("Library/LaunchAgents")
-            .join(format!("{AUTOSTART_LABEL}.plist"))
+            .join(format!("{}.plist", autostart_label()))
     })
 }
 
@@ -123,7 +155,7 @@ fn autostart_plist(exe: &str) -> String {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>{AUTOSTART_LABEL}</string>
+  <key>Label</key><string>{}</string>
   <key>ProgramArguments</key>
   <array>
     <string>{}</string>
@@ -134,6 +166,7 @@ fn autostart_plist(exe: &str) -> String {
 </dict>
 </plist>
 "#,
+        autostart_label(),
         xml_escape(exe)
     )
 }
@@ -147,14 +180,9 @@ fn sync_autostart(enabled: bool) {
         if let Some(dir) = path.parent() {
             let _ = fs::create_dir_all(dir);
         }
-        if fs::write(&path, plist).is_ok() {
-            // 立即注册（失败通常表示已加载，下次登录仍会生效）
-            let _ = Command::new("launchctl")
-                .arg("load")
-                .arg("-w")
-                .arg(&path)
-                .output();
-        }
+        // 只写 plist，不立即 launchctl load：否则已运行的实例旁会再起一个 --silent 副本。
+        // 开机启动语义本来就是「下次登录生效」。
+        let _ = fs::write(&path, plist);
     } else if path.exists() {
         let _ = Command::new("launchctl")
             .arg("unload")
@@ -186,7 +214,11 @@ fn ensure_service() -> bool {
     if service_up() {
         return true;
     }
-    let script = format!("cd '{}' && ./run.sh", repo_dir());
+    let script = format!(
+        "cd '{}' && AGENT_DEPOT_PROFILE='{}' ./run.sh",
+        repo_dir(),
+        profile()
+    );
     let _ = Command::new("bash").arg("-c").arg(&script).status();
     for _ in 0..24 {
         if service_up() {
@@ -277,6 +309,11 @@ fn set_tray(app: &tauri::AppHandle, enabled: bool) {
 /* ==================== IPC 命令（web 设置页调用） ==================== */
 
 #[tauri::command]
+fn desktop_profile() -> &'static str {
+    profile()
+}
+
+#[tauri::command]
 fn desktop_get_settings(state: State<'_, DesktopState>) -> DesktopSettings {
     state
         .settings
@@ -310,6 +347,7 @@ fn main() {
 
     let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            desktop_profile,
             desktop_get_settings,
             desktop_set_settings
         ])
@@ -488,9 +526,10 @@ mod tests {
         let dir = temp_dir("badjson");
         let path = dir.join("desktop.json");
         fs::write(&path, "{not json").unwrap();
+        let d = DesktopSettings::default();
         let back = read_settings_file(&path);
-        assert!(back.menu_bar);
-        assert!(back.show_dock_icon);
+        assert_eq!(back.menu_bar, d.menu_bar);
+        assert_eq!(back.show_dock_icon, d.show_dock_icon);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -503,8 +542,17 @@ mod tests {
     #[test]
     fn plist_contains_silent_flag_and_label() {
         let plist = autostart_plist("/Applications/Agent Depot.app/Contents/MacOS/agent");
-        assert!(plist.contains("<string>local.planarcat.agent-depot</string>"));
+        assert!(plist.contains(&format!("<string>{}</string>", autostart_label())));
         assert!(plist.contains("<string>--silent</string>"));
         assert!(plist.contains("RunAtLoad"));
+    }
+
+    #[test]
+    fn dev_profile_isolated_names() {
+        assert_eq!(profile(), "dev");
+        assert_eq!(settings_file_name(), "desktop-dev.json");
+        assert_eq!(autostart_label(), "local.planarcat.agent-depot-dev");
+        // 开发版默认不挂菜单栏，正式版默认挂
+        assert!(!DesktopSettings::default().menu_bar);
     }
 }

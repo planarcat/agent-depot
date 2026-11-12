@@ -28,7 +28,9 @@
   `desktop/src-tauri/capabilities/default.json` 的 `remote.urls`——**不要删**，删了设置页全失效。
 - 静默启动依赖菜单栏挂载（Rust 侧 `normalized()` 会兜底）；开机启动写
   `~/Library/LaunchAgents/local.planarcat.agent-depot.plist`。
-- 改桌面壳后至少跑 `(cd desktop/src-tauri && cargo test)`；重装用 `bash scripts/make-app.sh`。
+- 改桌面壳后至少跑 `(cd desktop/src-tauri && cargo test)`；重装正式版用 `bash scripts/make-app.sh`。
+- **开发版与正式版必须隔离**：`AGENT_DEPOT_PROFILE=dev`（或 debug 构建）→ `AgentDepot-Dev.app` /
+  `desktop-dev.json` / `*-dev.plist` / dev 库；正式版走默认。新增桌面设置时禁止把两版写进同一条路径。
 
 ## 改 `web/` 之前的硬规则
 

@@ -19,6 +19,7 @@ if [ ! -d node_modules ]; then
   npm --registry=https://registry.npmmirror.com install
 fi
 export PATH="$HOME/.cargo/bin:$PATH"
+export AGENT_DEPOT_PROFILE=release
 ./node_modules/.bin/tauri build
 
 if [ ! -d "$BUNDLE" ]; then

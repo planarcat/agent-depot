@@ -1,6 +1,6 @@
 [package]
 name = "agent-depot-desktop"
-version = "0.6.0"
+version = "0.6.1"
 description = "Agent Depot desktop shell"
 edition = "2021"
 

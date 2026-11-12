@@ -4,8 +4,10 @@
 import { appActions } from "../core/actions.ts";
 import { api, post, send } from "../core/api.ts";
 import {
+  type DesktopProfile,
   type DesktopSettings,
   desktopAvailable,
+  getDesktopProfile,
   getDesktopSettings,
   setDesktopSettings,
 } from "../core/desktop.ts";
@@ -1022,8 +1024,11 @@ async function renderDesktop(): Promise<void> {
     return;
   }
   let current: DesktopSettings | null = null;
+  let prof: DesktopProfile | null = null;
   try {
-    current = await getDesktopSettings();
+    const [settings, profile] = await Promise.all([getDesktopSettings(), getDesktopProfile()]);
+    current = settings;
+    prof = profile;
   } catch (e) {
     box.innerHTML = `<p class="setpane__hint">读取桌面设置失败：${esc(e instanceof Error ? e.message : String(e))}</p>`;
     return;
@@ -1033,8 +1038,10 @@ async function renderDesktop(): Promise<void> {
     return;
   }
   const s = current;
+  const profileText = prof === "dev" ? "开发版" : prof === "release" ? "正式版" : "桌面客户端";
+  const isolated = prof ? `（与${prof === "dev" ? "正式版" : "开发版"}互不共享）` : "";
   box.innerHTML = `
-      <p class="setpane__hint">菜单栏与 Dock 行为立即生效；「静默启动」在下一次启动时生效。</p>
+      <p class="setpane__hint">当前为 <b>${profileText}</b> 设置${isolated}。菜单栏与 Dock 行为立即生效；「静默启动」在下一次启动时生效。</p>
       <div class="setcard--list">${DESKTOP_ROWS.map((row) => {
         const on = s[row.key];
         const blocked = row.key === "silent_start" && !s.menu_bar;

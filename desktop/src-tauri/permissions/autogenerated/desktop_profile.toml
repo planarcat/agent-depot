@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-profile"
+description = "Enables the desktop_profile command without any pre-configured scope."
+commands.allow = ["desktop_profile"]
+
+[[permission]]
+identifier = "deny-desktop-profile"
+description = "Denies the desktop_profile command without any pre-configured scope."
+commands.deny = ["desktop_profile"]
