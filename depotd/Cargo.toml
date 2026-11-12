@@ -19,7 +19,7 @@ license = "MIT"
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["macros"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["catch-panic", "request-id", "trace", "limit", "fs"] }
+tower-http = { version = "0.6", features = ["catch-panic", "request-id", "trace", "limit", "fs", "compression-gzip", "compression-br"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 tempfile = "3"
 serde = { version = "1", features = ["derive"] }

@@ -1,7 +1,7 @@
 # AGENTS.md · Agent Depot
 
 本地优先的 AI Agent 资产枢纽：多工具会话采集 / 浏览 / 迁移，外加记忆、Skills 分发、MCP 写入、台账。  
-技术面：Rust 后端（`depotd/`，axum + rusqlite）。Python 后端已于 2026-11-11 移除；`tests/spec/*.py` 保留——它们是黑盒行为真源（经 HUB_BASE 打任意引擎），不是后端代码。
+技术面：Rust 后端（`depotd/`，axum + rusqlite）+ TypeScript 前端（`web/`，Bun 构建/测试，零运行时依赖；`web/dist/` 由 depotd 优先服务）。Python 后端已于 2026-11-11 移除；`tests/spec/*.py` 保留——它们是黑盒行为真源（经 HUB_BASE 打任意引擎），不是后端代码。
 
 ## 仓库布局：WorkTrees 工作流（2026-11-08）
 
@@ -17,7 +17,7 @@
   推上远程覆盖 main）。check.sh 顶部已统一 unset 这些变量——**不要移除**；
   新增任何跑 git 的测试一律显式 `-C <夹具目录>`。
 - 日常门禁（在对应 worktree 内跑）：`bash scripts/soak_check.sh`（内存/事件门禁）、
-  `bash scripts/run_spec_rust.sh`（spec 78 行为闸门）。
+  `bash scripts/run_spec_rust.sh`（spec 78 行为闸门）、`(cd web && bun run check:ci)`（前端全链路）。
 
 ## 改 `web/` 之前的硬规则
 
@@ -28,13 +28,14 @@
 5. 停用工具在**所有界面隐藏**（卡片 / 侧栏 / 列表 / 迁移目标）；工具编辑只在 设置 → 工具，会话页不得出现编辑入口。
 6. **用户指令 > Figma 稿子**：与稿子冲突时以用户明确指令为准。你让删/改的元素，稿子里**往往还留着**（稿子不会同步你的指令）——那些属于**过时内容，不许按稿子加回来**。动手前先翻仓库根 `FIGMA_OVERRIDES.md`（覆盖清单，**不写进 DESIGN.md**）；你每给一次「删 / 不要 / 去掉」这类指令，**同一轮就把那一条补进该清单**（含依据与日期），别让下一轮的人以为是漏做。
 7. **交活前自评**：对照 `DESIGN.md §11` 逐条过一遍，并对**主张 / 层级 / 执行 / 具体性 / 克制 / 变化** 六项打分（1–5），任一项 <3 先改再交；再跑 `python3 scripts/lint_baseline.py` 必须 PASSED（规则本体是 `tests/lint_styles.py`）。改 `data-testid` 须同步改 `tests/e2e*.mjs`。
+8. **前端工具链是 Bun/TypeScript**：`cd web && bun install` → `bun run check:ci`（biome + 双 tsconfig + build + 体积预算 + core 覆盖率）。改 `src/` 后必须 `bun run build`（depotd 服务 `web/dist/`）；**禁止新增裸 `.js` 源文件**，新视图只在 `core/view-loader.ts` 注册动态 import。细节见 `web/README.md`。
 
 > 本文件只放硬规则与指向，**不复制 token 数值**——那份清单只在 `DESIGN.md`，避免两处打架。
 > 完整流程（方向探索 → 规范固化 → 实现 → 质检）见 `Plans/设计质感/落地方案.md`。
 
 ## 质量卡口（改任何源码之前先读）
 
-- `bash tests/check.sh` = 本仓 check 全链路（spec 守卫 → web lint → cargo 单测 → 行为真源 spec 78 条打 depotd），**pre-push 自动跑，不绿推不出去**。
+- `bash tests/check.sh` = 本仓 check 全链路（spec 守卫 → **前端 biome + tsc + bun build + 体积/覆盖率门禁** → cargo 单测 → 行为真源 spec 78 条打 depotd），**pre-push 自动跑，不绿推不出去**。
 - `bash tests/run_all.sh` = check 全链路 + E2E 三步（真 Chrome），**交活前完整验收**。
 - 变异门禁已随 Python 栈移除（Rust 侧暂无对应物）；行为回归以 `bash scripts/run_spec_rust.sh` 为准。
 
@@ -59,7 +60,7 @@
    等价变异（杀不死也不该杀）：在那一行加 `# mutate: disable <理由>`，理由必填，输出里列为留痕跳过。
 8. **改判据的提交规则**：除第 1 条三要素，commit message 还要带**变异得分改前 → 改后**（涉及被盯模块时）与**判据数变化**（check 用例数）。
    降分、判据数减少、软改松增多 = 改松，直接打回。
-9. **已知跳过项（跳过 ≠ 通过）**：前端 `web/*.js` 只有 E2E，没有单测，变异一次要跑真 Chrome 数小时 → 记跳过；
+9. **已知跳过项（跳过 ≠ 通过）**：前端**变异测试**跳过（跑真 Chrome 数小时，收益低）；但前端已有 `bun test` 单测（208 条，core 覆盖 ≥90%）+ e2e 19 条，不再属于「只有 E2E、没有单测」；
    Rust 外壳 `desktop/src-tauri` 没有 `#[test]`，变异得分没有参考意义 → 记跳过（后端转 Rust 后改用 `cargo-mutants`）。
 
 > 出处：`~/Documents/灵创引擎/Docs/AI开发质量体系-落地方指南.md`（本仓为其适配落地，逐条实测记录见 `VERIFICATION.md`）。

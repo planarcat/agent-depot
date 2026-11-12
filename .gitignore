@@ -18,3 +18,8 @@ reports/
 # 接口快照 / 视觉路径卡：可能含真实数据与内部地址，不进仓
 Docs/API快照/
 Docs/视觉路径卡/
+
+# 前端依赖 / 构建产物 / 覆盖率（源码与 bun.lock 进仓，产物不进）
+web/node_modules/
+web/dist/
+web/coverage/

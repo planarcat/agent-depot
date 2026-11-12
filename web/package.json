@@ -1,0 +1,23 @@
+{
+  "name": "agent-depot-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "bun run lint && bun run typecheck && bun test && bun run budget",
+    "lint": "biome check src",
+    "lint:fix": "biome check --write src",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "test": "bun test",
+    "test:cov": "bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage && bun ../scripts/coverage-gate.ts",
+    "budget": "bun ../scripts/frontend-budget.ts",
+    "build": "bun ../scripts/build-frontend.ts",
+    "check:ci": "bun run lint && bun run typecheck && bun run build && bun run budget && bun run test:cov"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.7",
+    "@happy-dom/global-registrator": "^21.0.4",
+    "@types/bun": "^1.4.4",
+    "happy-dom": "^21.0.4",
+    "typescript": "^7.0.2"
+  }
+}
