@@ -2,21 +2,36 @@
    修改即时生效；工具增删改在行内 accordion 完成。 */
 
 import { appActions } from "../core/actions.ts";
-import { api, post, send } from "../core/api.ts";
+import { api, live, post, send } from "../core/api.ts";
 import {
   type DesktopProfile,
+  type DesktopRuntimeInfo,
   type DesktopSettings,
   desktopAvailable,
   getDesktopProfile,
+  getDesktopRuntimeInfo,
   getDesktopSettings,
   setDesktopSettings,
 } from "../core/desktop.ts";
-import { applyModuleVisibility, byId, qs, qsa } from "../core/dom.ts";
+import { applyModuleVisibility, byId, copyText, qs, qsa } from "../core/dom.ts";
 import { esc } from "../core/format.ts";
+import {
+  diffSamples,
+  eventRateSeries,
+  formatDelta,
+  formatRss,
+  formatUptime,
+  type HealthDelta,
+  type HealthSample,
+  pushSample,
+  sampleFromHealth,
+  sparklinePoints,
+} from "../core/monitor.ts";
 import { getPrefs, resetPrefs, type SessLayout, type StartView, setPrefs } from "../core/prefs.ts";
 import { state } from "../core/state.ts";
 import { allTools, toolColorCls, toolShort } from "../core/tools.ts";
 import type {
+  HealthzResponse,
   ModuleEntry,
   ModulesResponse,
   RemoteRepo,
@@ -50,6 +65,7 @@ const PANE_TITLE: Record<string, string> = {
   tools: "工具",
   remotes: "远程仓库",
   desktop: "桌面",
+  monitor: "监控",
   env: "关于",
 };
 const PANE_SUB: Record<string, string> = {
@@ -58,6 +74,7 @@ const PANE_SUB: Record<string, string> = {
   tools: "排序、启停与路径配置",
   remotes: "仓库地址与所属模块",
   desktop: "菜单栏、开机启动与 Dock 图标",
+  monitor: "开发版实时运行指标",
   env: "版本与存储位置",
 };
 
@@ -72,6 +89,7 @@ function pane(name: string): HTMLElement | null {
 }
 
 function switchPane(name: string): void {
+  stopMonitor();
   S.pane = name;
   for (const b of qsa<HTMLElement>(".setwin__item")) {
     b.classList.toggle("is-on", b.dataset["pane"] === name);
@@ -89,11 +107,14 @@ function switchPane(name: string): void {
 async function render(): Promise<void> {
   const ver = byId<HTMLElement>("settings-version");
   if (ver) ver.textContent = `Agent Depot ${state.version}`;
+  await syncMonitorNav();
+  if (S.pane !== "monitor") stopMonitor();
   if (S.pane === "general") renderGeneral();
   if (S.pane === "modules") await renderModules();
   if (S.pane === "tools") await renderTools();
   if (S.pane === "remotes") await renderRemotes();
   if (S.pane === "desktop") await renderDesktop();
+  if (S.pane === "monitor") await renderMonitor();
   if (S.pane === "env") renderEnv();
 }
 
@@ -109,7 +130,211 @@ async function openSettings(): Promise<void> {
 }
 
 async function closeSettings(): Promise<void> {
+  stopMonitor();
   await appActions().switchView("sessions");
+}
+
+/* ==================== 监控（开发版） ==================== */
+
+let MON_TIMER: number | null = null;
+let MON_INFLIGHT = false;
+let MON_PROFILE_CACHE: DesktopProfile | null | undefined;
+let MON_RUNTIME: DesktopRuntimeInfo | null = null;
+let MON_HISTORY: HealthSample[] = [];
+let MON_PREV: HealthSample | null = null;
+let MON_ERROR = "";
+
+function stopMonitor(): void {
+  if (MON_TIMER !== null) {
+    window.clearTimeout(MON_TIMER);
+    MON_TIMER = null;
+  }
+}
+
+function settingsActive(): boolean {
+  return byId<HTMLElement>("settings-overlay")?.classList.contains("is-active") ?? false;
+}
+
+async function devProfileCached(): Promise<DesktopProfile | null> {
+  if (MON_PROFILE_CACHE !== undefined) return MON_PROFILE_CACHE;
+  MON_PROFILE_CACHE = await getDesktopProfile().catch(() => null);
+  return MON_PROFILE_CACHE;
+}
+
+async function syncMonitorNav(): Promise<void> {
+  const prof = await devProfileCached();
+  const nav = qs<HTMLElement>('.setwin__item[data-pane="monitor"]');
+  if (nav) nav.hidden = prof !== "dev";
+}
+
+function monKv(label: string, id: string, deltaId?: string): string {
+  return `<div class="mon-kv"><span>${esc(label)}</span><span><b id="${id}">—</b>${
+    deltaId ? ` <span class="mon-delta" id="${deltaId}"></span>` : ""
+  }</span></div>`;
+}
+
+function setMonText(box: HTMLElement, id: string, text: string): void {
+  const el = qs<HTMLElement>(`#${id}`, box);
+  if (el) el.textContent = text;
+}
+
+function setMonSpark(box: HTMLElement, id: string, values: number[]): void {
+  const el = qs<SVGPolylineElement>(`#${id}`, box);
+  if (el) el.setAttribute("points", sparklinePoints(values));
+}
+
+function paintMonitor(box: HTMLElement, sample: HealthSample, delta: HealthDelta | null): void {
+  setMonText(box, "mon-uptime", formatUptime(sample.uptimeS));
+  setMonText(box, "mon-rss", formatRss(sample.rssKb));
+  setMonText(box, "mon-rss-d", formatDelta(delta?.rssKb));
+  setMonText(box, "mon-fds", String(sample.fds));
+  setMonText(box, "mon-fds-d", formatDelta(delta?.fds));
+  setMonText(box, "mon-rev", String(sample.rev));
+  setMonText(box, "mon-rev-d", formatDelta(delta?.rev));
+  setMonText(box, "mon-events", String(sample.events));
+  setMonText(box, "mon-events-d", formatDelta(delta?.events));
+  setMonText(box, "mon-subs", String(sample.subs));
+  setMonText(box, "mon-subs-d", formatDelta(delta?.subs));
+
+  const watch = state.watch;
+  setMonText(box, "mon-backend", watch.backend || "—");
+  setMonText(box, "mon-watched", String(watch.watched ?? sample.watched));
+  setMonText(box, "mon-failed", String(watch.failed_watches ?? sample.failed));
+  setMonText(box, "mon-degraded", watch.degraded || sample.degraded ? "是" : "否");
+  setMonText(box, "mon-sse", document.body.dataset["live"] || "idle");
+  setMonText(box, "mon-rev-state", String(state.rev || 0));
+  setMonText(
+    box,
+    "mon-last-write",
+    live.lastWrite ? `${Math.round((Date.now() - live.lastWrite) / 1000)}s 前` : "—",
+  );
+
+  setMonSpark(
+    box,
+    "mon-spark-rss",
+    MON_HISTORY.map((x) => x.rssKb),
+  );
+  setMonSpark(box, "mon-spark-events", eventRateSeries(MON_HISTORY));
+}
+
+function paintRuntime(box: HTMLElement): void {
+  const r = MON_RUNTIME;
+  setMonText(box, "mon-profile", r?.profile === "dev" ? "开发版" : r ? "正式版" : "浏览器");
+  setMonText(box, "mon-instance", r?.instance || "—");
+  setMonText(box, "mon-version", r?.version || state.version || "—");
+  setMonText(box, "mon-pid", r ? String(r.pid) : "—");
+  setMonText(box, "mon-service", r?.service_url || location.origin);
+  setMonText(box, "mon-data-dir", r?.data_dir || "—");
+  setMonText(box, "mon-config-dir", r?.config_dir || "—");
+}
+
+async function tickMonitor(box: HTMLElement): Promise<void> {
+  if (S.pane !== "monitor" || !settingsActive()) {
+    stopMonitor();
+    return;
+  }
+  if (MON_INFLIGHT) return;
+  MON_INFLIGHT = true;
+  try {
+    const r = await api<HealthzResponse>("/api/healthz", { timeoutMs: 3000 });
+    const sample = sampleFromHealth(r.data);
+    const delta = diffSamples(MON_PREV, sample);
+    MON_PREV = sample;
+    MON_HISTORY = pushSample(MON_HISTORY, sample, 60);
+    paintMonitor(box, sample, delta);
+    MON_ERROR = "";
+  } catch (e) {
+    MON_ERROR = `采样失败：${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    MON_INFLIGHT = false;
+    const err = qs<HTMLElement>("#mon-error", box);
+    if (err) err.textContent = MON_ERROR;
+    if (S.pane === "monitor" && settingsActive()) {
+      MON_TIMER = window.setTimeout(() => void tickMonitor(box), 1000);
+    }
+  }
+}
+
+async function renderMonitor(): Promise<void> {
+  const box = pane("monitor");
+  if (!box) return;
+  stopMonitor();
+  const prof = await devProfileCached();
+  if (prof !== "dev") {
+    box.innerHTML =
+      '<p class="setpane__hint">监控页仅在开发版桌面客户端可用（正式版已隐藏入口）。</p>';
+    return;
+  }
+  MON_HISTORY = [];
+  MON_PREV = null;
+  MON_ERROR = "";
+  MON_RUNTIME = await getDesktopRuntimeInfo().catch(() => null);
+  box.innerHTML = `
+      <p class="setpane__hint">开发版实时指标：每秒采样，趋势保留最近 60 秒。</p>
+      <div class="mon-grid">
+        <div class="mcard mon-card">
+          <div class="mon-h">服务</div>
+          ${monKv("运行时长", "mon-uptime")}
+          ${monKv("内存 RSS", "mon-rss", "mon-rss-d")}
+          ${monKv("文件描述符", "mon-fds", "mon-fds-d")}
+          ${monKv("事件 rev", "mon-rev", "mon-rev-d")}
+          ${monKv("事件累计", "mon-events", "mon-events-d")}
+          ${monKv("订阅数", "mon-subs", "mon-subs-d")}
+        </div>
+        <div class="mcard mon-card">
+          <div class="mon-h">Watcher</div>
+          ${monKv("backend", "mon-backend")}
+          ${monKv("监听目录", "mon-watched")}
+          ${monKv("失败 watch", "mon-failed")}
+          ${monKv("降级", "mon-degraded")}
+          ${monKv("前端通道", "mon-sse")}
+          ${monKv("前端 rev", "mon-rev-state")}
+          ${monKv("最近写入", "mon-last-write")}
+        </div>
+        <div class="mcard mon-card">
+          <div class="mon-h">实例</div>
+          ${monKv("profile", "mon-profile")}
+          ${monKv("instance", "mon-instance")}
+          ${monKv("version", "mon-version")}
+          ${monKv("pid", "mon-pid")}
+          ${monKv("service", "mon-service")}
+          ${monKv("data dir", "mon-data-dir")}
+          ${monKv("config dir", "mon-config-dir")}
+        </div>
+        <div class="mcard mon-card mon-card--wide">
+          <div class="mon-h">趋势（最近 60s）</div>
+          <div class="mon-delta">内存 RSS</div>
+          <svg class="mon-spark" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true">
+            <polyline id="mon-spark-rss" points=""></polyline>
+          </svg>
+          <div class="mon-delta">事件 / 秒</div>
+          <svg class="mon-spark" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true">
+            <polyline id="mon-spark-events" points=""></polyline>
+          </svg>
+        </div>
+      </div>
+      <div class="mon-actions">
+        <button class="hub-btn btn-sm" id="mon-copy" data-testid="settings-monitor-copy">复制快照</button>
+        <span class="mon-delta" id="mon-error"></span>
+      </div>`;
+  paintRuntime(box);
+  const copy = qs<HTMLButtonElement>("#mon-copy", box);
+  if (copy) {
+    copy.onclick = () => {
+      const snapshot = {
+        runtime: MON_RUNTIME,
+        sample: MON_PREV,
+        history: MON_HISTORY,
+        watch: state.watch,
+        live: document.body.dataset["live"] ?? "idle",
+        captured_at: new Date().toISOString(),
+      };
+      void copyText(JSON.stringify(snapshot, null, 2)).then((ok) => {
+        HubUI.toast(ok ? "监控快照已复制" : "复制失败", ok ? "success" : "warn");
+      });
+    };
+  }
+  await tickMonitor(box);
 }
 
 /* ==================== 通用（本地偏好） ==================== */

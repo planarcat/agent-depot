@@ -16,6 +16,7 @@
     "core:default",
     "allow-desktop-get-settings",
     "allow-desktop-set-settings",
-    "allow-desktop-profile"
+    "allow-desktop-profile",
+    "allow-desktop-runtime-info"
   ]
 }

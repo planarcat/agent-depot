@@ -335,9 +335,48 @@ fn set_tray(app: &tauri::AppHandle, enabled: bool) {
 
 /* ==================== IPC 命令（web 设置页调用） ==================== */
 
+#[derive(Debug, Serialize)]
+struct RuntimeInfo {
+    profile: &'static str,
+    instance: String,
+    version: &'static str,
+    pid: u32,
+    service_url: &'static str,
+    data_dir: String,
+    config_dir: String,
+}
+
 #[tauri::command]
 fn desktop_profile() -> &'static str {
     profile()
+}
+
+/// 开发版「监控」页用的运行时信息（端口/实例/数据目录/PID）。
+#[tauri::command]
+fn desktop_runtime_info(app: tauri::AppHandle) -> RuntimeInfo {
+    let instance = std::env::var("APP_INSTANCE").unwrap_or_default();
+    let data_dir = std::env::var("APP_DATA_DIR")
+        .ok()
+        .or_else(|| {
+            app.path()
+                .app_data_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
+        })
+        .unwrap_or_default();
+    let config_dir = settings_path(&app)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    RuntimeInfo {
+        profile: profile(),
+        instance,
+        version: env!("CARGO_PKG_VERSION"),
+        pid: std::process::id(),
+        service_url: CONSOLE_URL,
+        data_dir,
+        config_dir,
+    }
 }
 
 #[tauri::command]
@@ -375,6 +414,7 @@ fn main() {
     let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             desktop_profile,
+            desktop_runtime_info,
             desktop_get_settings,
             desktop_set_settings
         ])

@@ -3,6 +3,7 @@ import {
   type DesktopSettings,
   desktopAvailable,
   getDesktopProfile,
+  getDesktopRuntimeInfo,
   getDesktopSettings,
   setDesktopSettings,
 } from "../src/core/desktop.ts";
@@ -54,6 +55,33 @@ describe("desktop bridge", () => {
       core: { invoke: (() => Promise.reject(new Error("old shell"))) as Invoke },
     };
     expect(await getDesktopProfile()).toBeNull();
+  });
+
+  test("Tauri 环境：runtime info 透传实例/端口/PID", async () => {
+    const info = {
+      profile: "dev" as const,
+      instance: "f3373",
+      version: "0.6.3",
+      pid: 123,
+      service_url: "http://127.0.0.1:8317",
+      data_dir: "/tmp/data",
+      config_dir: "/tmp/config",
+    };
+    let cmd = "";
+    w.__TAURI__ = {
+      core: {
+        invoke: (<T>(name: string) => {
+          cmd = name;
+          return Promise.resolve(info as T);
+        }) as Invoke,
+      },
+    };
+    expect(await getDesktopRuntimeInfo()).toEqual(info);
+    expect(cmd).toBe("desktop_runtime_info");
+  });
+
+  test("浏览器环境：runtime info 返回 null", async () => {
+    expect(await getDesktopRuntimeInfo()).toBeNull();
   });
 
   test("Tauri 环境：set 透传 settings 并返回归一化结果", async () => {

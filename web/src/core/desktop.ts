@@ -5,6 +5,16 @@
 
 export type DesktopProfile = "dev" | "release";
 
+export interface DesktopRuntimeInfo {
+  profile: "dev" | "release";
+  instance: string;
+  version: string;
+  pid: number;
+  service_url: string;
+  data_dir: string;
+  config_dir: string;
+}
+
 export interface DesktopSettings {
   /** 登录时自动启动（macOS LaunchAgent） */
   launch_at_login: boolean;
@@ -39,6 +49,17 @@ export async function getDesktopProfile(): Promise<DesktopProfile | null> {
     return p === "dev" ? "dev" : "release";
   } catch {
     return null; // 旧壳没有该命令：保持未知，不阻断设置页
+  }
+}
+
+/** 开发版监控页的运行时信息（实例/端口/PID/数据目录）；非桌面环境返回 null。 */
+export async function getDesktopRuntimeInfo(): Promise<DesktopRuntimeInfo | null> {
+  const invoke = invokeFn();
+  if (!invoke) return null;
+  try {
+    return await invoke<DesktopRuntimeInfo>("desktop_runtime_info");
+  } catch {
+    return null;
   }
 }
 

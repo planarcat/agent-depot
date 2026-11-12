@@ -400,6 +400,20 @@ export interface StateResponse {
   now: string;
 }
 
+/** /api/healthz：轻量运行指标（开发版监控页轮询）。 */
+export interface HealthzResponse {
+  ok?: boolean;
+  rev: number;
+  events: number;
+  rss_kb: number;
+  fds: number;
+  subs: number;
+  watched: number;
+  failed_watches: number;
+  degraded: boolean;
+  uptime_s: number;
+}
+
 export interface ModulesResponse {
   ok: boolean;
   modules: ModuleEntry[];
