@@ -297,9 +297,10 @@ fn ensure_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     if app.tray_by_id(TRAY_ID).is_some() {
         return Ok(());
     }
-    let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+    let name = display_name();
+    let show = MenuItem::with_id(app, "show", &format!("显示{name}"), true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "打开设置…", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 Agent Depot", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", &format!("退出{name}"), true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -312,6 +313,8 @@ fn ensure_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip(display_name())
+        // macOS：图标旁常驻文字——两版同开时菜单栏上一眼可分
+        .title(if is_dev_build() { "Dev".to_string() } else { String::new() })
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
