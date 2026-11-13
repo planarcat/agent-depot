@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   type DesktopSettings,
   desktopAvailable,
+  displayName,
   getDesktopProfile,
   getDesktopRuntimeInfo,
   getDesktopSettings,
@@ -55,6 +56,12 @@ describe("desktop bridge", () => {
       core: { invoke: (() => Promise.reject(new Error("old shell"))) as Invoke },
     };
     expect(await getDesktopProfile()).toBeNull();
+  });
+
+  test("displayName：开发版加 Dev 后缀，正式版/浏览器原样", () => {
+    expect(displayName("Agent Depot", "dev")).toBe("Agent Depot Dev");
+    expect(displayName("Agent Depot", "release")).toBe("Agent Depot");
+    expect(displayName("Agent Depot", null)).toBe("Agent Depot");
   });
 
   test("Tauri 环境：runtime info 透传实例/端口/PID", async () => {

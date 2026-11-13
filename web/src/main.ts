@@ -7,6 +7,7 @@
 
 import { registerAppActions } from "./core/actions.ts";
 import { api, post, setSlowRequestReporter } from "./core/api.ts";
+import { displayName, getDesktopProfile } from "./core/desktop.ts";
 import {
   applyModuleVisibility,
   byId,
@@ -2344,6 +2345,22 @@ document.addEventListener("DOMContentLoaded", () => {
       void switchView(view);
     };
   }
+
+  // 开发版品牌标识：窗口标题 / 顶栏名称带 Dev 后缀 + DEV 徽标（与托盘/Dock 一致）
+  void getDesktopProfile().then((profile) => {
+    const name = displayName("Agent Depot", profile);
+    document.title = name;
+    const brand = qs<HTMLElement>(".topbar__name");
+    if (brand) brand.textContent = name;
+    if (profile === "dev") {
+      document.body.dataset["profile"] = "dev";
+      const chip = document.createElement("span");
+      chip.className = "topbar__devchip";
+      chip.textContent = "DEV";
+      chip.setAttribute("aria-label", "开发版");
+      brand?.insertAdjacentElement("afterend", chip);
+    }
+  });
 
   loadState()
     .then(() => {

@@ -5,6 +5,11 @@
 
 export type DesktopProfile = "dev" | "release";
 
+/** 显示名：开发版加 " Dev" 后缀（窗口标题 / 顶栏 / 托盘 / Dock 一致）。 */
+export function displayName(base: string, profile: DesktopProfile | null): string {
+  return profile === "dev" ? `${base} Dev` : base;
+}
+
 export interface DesktopRuntimeInfo {
   profile: "dev" | "release";
   instance: string;

@@ -36,6 +36,7 @@
 | | 正式版 | 开发版 |
 |---|---|---|
 | 安装包 | `~/Applications/AgentDepot.app` | `~/Applications/AgentDepot-Dev.app` |
+| 显示名（窗口/顶栏/托盘/Dock） | `Agent Depot` | `Agent Depot Dev`（顶栏另带 DEV 徽标） |
 | bundle id | `local.planarcat.agent-depot` | `local.planarcat.agent-depot.dev` |
 | 构建 | `bash scripts/make-app.sh` | `bash scripts/make-app-dev.sh` |
 | 桌面设置文件 | `desktop.json` | `desktop-dev.json` |

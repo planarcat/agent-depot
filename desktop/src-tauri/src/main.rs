@@ -15,6 +15,7 @@ use tauri::{Manager, State};
 const DEFAULT_REPO: &str = "/Users/planarcat/Documents/Projects/@planarcat/agent-depot/WorkTrees/main";
 const CONSOLE_URL: &str = "http://127.0.0.1:8317";
 const PORT: u16 = 8317;
+const BASE_NAME: &str = "Agent Depot";
 const TRAY_ID: &str = "agent-depot-tray";
 const AUTOSTART_LABEL: &str = "local.planarcat.agent-depot";
 
@@ -38,6 +39,15 @@ fn profile() -> &'static str {
         "dev"
     } else {
         "release"
+    }
+}
+
+/// 显示名：开发版带 Dev 后缀（窗口标题 / 托盘 / Dock 名称），两版同开时一眼可分。
+fn display_name() -> String {
+    if is_dev_build() {
+        format!("{BASE_NAME} Dev")
+    } else {
+        BASE_NAME.to_string()
     }
 }
 
@@ -301,7 +311,7 @@ fn ensure_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     )?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip("Agent Depot")
+        .tooltip(display_name())
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -464,7 +474,7 @@ fn main() {
                 tauri::WebviewUrl::App("index.html".into())
             };
             let _window = tauri::WebviewWindowBuilder::new(app, "main", url)
-                .title("Agent Depot")
+                .title(display_name())
                 .inner_size(1480.0, 960.0)
                 .min_inner_size(960.0, 640.0)
                 // 静默启动：窗口先建好但不显示，托盘/菜单可随时唤起
@@ -628,6 +638,12 @@ mod tests {
         assert!(plist.contains(&format!("<string>{}</string>", autostart_label())));
         assert!(plist.contains("<string>--silent</string>"));
         assert!(plist.contains("RunAtLoad"));
+    }
+
+    #[test]
+    fn display_name_distinguishes_profiles() {
+        // 测试进程是 debug 构建 → 开发版
+        assert_eq!(display_name(), "Agent Depot Dev");
     }
 
     #[test]

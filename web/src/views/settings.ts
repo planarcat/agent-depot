@@ -8,6 +8,7 @@ import {
   type DesktopRuntimeInfo,
   type DesktopSettings,
   desktopAvailable,
+  displayName,
   getDesktopProfile,
   getDesktopRuntimeInfo,
   getDesktopSettings,
@@ -106,7 +107,8 @@ function switchPane(name: string): void {
 
 async function render(): Promise<void> {
   const ver = byId<HTMLElement>("settings-version");
-  if (ver) ver.textContent = `Agent Depot ${state.version}`;
+  if (ver)
+    ver.textContent = `${displayName("Agent Depot", await devProfileCached())} ${state.version}`;
   await syncMonitorNav();
   if (S.pane !== "monitor") stopMonitor();
   if (S.pane === "general") renderGeneral();
@@ -125,7 +127,8 @@ async function openSettings(): Promise<void> {
     return;
   }
   const ver = byId<HTMLElement>("settings-version");
-  if (ver) ver.textContent = `Agent Depot ${state.version}`;
+  if (ver)
+    ver.textContent = `${displayName("Agent Depot", await devProfileCached())} ${state.version}`;
   await render();
 }
 
