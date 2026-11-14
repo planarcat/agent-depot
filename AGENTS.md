@@ -7,8 +7,11 @@
 
 - **仓库本体（`.git`）在 `WorkTrees/main`**（2026-11-09 起）；外层 `agent-depot/` 是**普通文件夹**（无 `.git`，只有 `WorkTrees/` / `reports/`（日报）/ AGENTS.md+CLAUDE.md 锚点），**禁止在外层改代码**。
 - **main 分支常驻检出在 `WorkTrees/main`**：代码 / 测试 / 构建全在这里，depotd 也从这里起。
-- 新开发内容一律从 main 拉分支新建 worktree：
-  `git worktree add WorkTrees/<分支名> -b <分支名> main`
+- 新开发内容一律从 main 拉分支新建 worktree。**分支命名规范（2026-11-14 拍板）**：`<随机4位数字id>-<中文标题>`，
+  id 为 4 位纯数字（生成：`printf '%04d' $((RANDOM % 10000))`，如 `4821-会话迁移优化`）；日常不手搓 git——
+  外层 `./dev new <中文标题>` 建分支 worktree 即启动，`./dev <4位id|分支名>` 切换，`./dev stop` 停止。
+  手动等价命令（在外层仓根执行；⚠️ `-C` 进 main 检出后相对路径会嵌套出 `WorkTrees/main/WorkTrees/…`，
+  目标必须给绝对路径）：`git -C WorkTrees/main worktree add "$(pwd)/WorkTrees/<分支名>" -b <分支名> main`
   完工合回 main：`git -C WorkTrees/main merge --no-ff <分支名>`，然后 `git worktree remove WorkTrees/<分支名>`。
 - git hooks 走 main worktree 的**绝对路径**（`core.hooksPath` 已指向 `WorkTrees/main/scripts/hooks`）。
 - **禁止直接推送生产分支（main）**：一律 PR 审核流，由用户审核合并。
