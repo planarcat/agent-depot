@@ -519,13 +519,50 @@ async fn api_state(State(state): State<Arc<AppState>>) -> Response {
     jraw(200, body)
 }
 
-fn casr_available() -> bool {
-    std::process::Command::new("sh")
+/// casr 可执行文件定位：GUI/launchd 拉起的进程 PATH 常缺用户目录（~/bin、~/.local/bin），
+/// 按常见安装位探测绝对路径，都落空才按本进程 PATH 兜底（终端起 dev 实例的场景）。
+fn casr_path() -> Option<String> {
+    fn executable(p: &std::path::Path) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(p)
+                .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false)
+        }
+        #[cfg(not(unix))]
+        {
+            p.is_file()
+        }
+    }
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        let home = std::path::PathBuf::from(home);
+        dirs.push(home.join("bin"));
+        dirs.push(home.join(".local/bin"));
+    }
+    dirs.push("/opt/homebrew/bin".into());
+    dirs.push("/usr/local/bin".into());
+    for d in dirs {
+        let p = d.join("casr");
+        if executable(&p) {
+            return Some(p.to_string_lossy().into_owned());
+        }
+    }
+    let out = std::process::Command::new("sh")
         .arg("-c")
-        .arg("command -v casr >/dev/null 2>&1")
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .arg("command -v casr")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let found = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if found.is_empty() { None } else { Some(found) }
+}
+
+fn casr_available() -> bool {
+    casr_path().is_some()
 }
 
 // ---------- SSE ----------
@@ -1088,9 +1125,9 @@ async fn api_migrate(State(state): State<Arc<AppState>>, bytes: Bytes) -> Respon
             }));
         }
     }
-    if !casr_available() {
-        return jraw(200, json!({"ok": false, "error": "casr 未安装（brew/pip 安装后自动启用）"}));
-    }
+    let Some(casr_bin) = casr_path() else {
+        return jraw(200, json!({"ok": false, "error": "casr 未安装（放入 ~/bin / ~/.local/bin / /opt/homebrew/bin / /usr/local/bin 或 PATH 任一即自动启用）"}));
+    };
     // lineage
     let lid: String = {
         let existing: Option<String> = c
@@ -1126,9 +1163,9 @@ async fn api_migrate(State(state): State<Arc<AppState>>, bytes: Bytes) -> Respon
         "opencode" => "opc",
         other => other,
     };
-    let cmd_line = format!("casr resume {casr_target} {sid} --source {casr_source}");
+    let cmd_line = format!("{casr_bin} resume {casr_target} {sid} --source {casr_source}");
     let out = depot_core::gitsrc::run_cmd(
-        "casr",
+        &casr_bin,
         &["resume", casr_target, sid.as_str(), "--source", &casr_source],
         None,
         std::time::Duration::from_secs(120),
