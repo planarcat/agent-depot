@@ -719,6 +719,31 @@ pub fn sync_binding(conn: &Connection, hub: &Path, bid: i64, dir_id: i64, tid: i
 
 // ============ 容器发现 ============
 
+/// 容器内是否真有货：skills 至少一个带 SKILL.md 的子目录；mcp 至少一个
+/// 含 command/url 键的 .json（与 scan_into 的收录判据一致）。
+/// 空壳容器（如还没放条目的 skills/）不算数——否则会误把目录抬进容器模式，
+/// 让根层条目全部落空（2026-11-14 agent-skills 事故）。
+fn container_has_entries(dir: &Path, kind: &str) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else { return false };
+    for e in entries.filter_map(|e| e.ok()) {
+        let p = e.path();
+        if kind == "skills" {
+            if p.is_dir() && p.join("SKILL.md").is_file() { return true; }
+        } else if p.is_file()
+            && p.extension().map(|x| x.eq_ignore_ascii_case("json")).unwrap_or(false)
+        {
+            let hit = match fsutil::read_json(&p) {
+                Some(cfg) => cfg.as_object()
+                    .map(|o| o.contains_key("command") || o.contains_key("url"))
+                    .unwrap_or(false),
+                None => false,
+            };
+            if hit { return true; }
+        }
+    }
+    false
+}
+
 pub fn discover_layout(root: &Path) -> serde_json::Value {
     let mut out = serde_json::json!({"skills": [], "mcp": []});
     fn walk(dir: &Path, rel: &str, depth: usize, out: &mut serde_json::Value) {
@@ -735,12 +760,18 @@ pub fn discover_layout(root: &Path) -> serde_json::Value {
             let rel_child = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
             if name == "skills" || name == "mcp" {
                 let k = if name == "skills" { "skills" } else { "mcp" };
+                // 空容器不记录：见 container_has_entries 文档
+                if !container_has_entries(&full, k) { continue; }
                 let arr = out[k].as_array_mut().unwrap();
                 if !arr.contains(&serde_json::Value::String(rel_child.clone())) {
                     arr.push(serde_json::Value::String(rel_child));
                 }
                 continue;
             }
+            // 技能目录原子性：自带 SKILL.md 的目录是单个条目，内部（references、
+            // 收编的上游树等）不再下钻找容器——否则 vendored 副本会被误收编
+            // （agent-html-skills/references/skills 19 个 html-* 被当成目录条目）。
+            if full.join("SKILL.md").is_file() { continue; }
             walk(&full, &rel_child, depth + 1, out);
         }
     }
