@@ -1167,7 +1167,18 @@ export const ConnectView = (() => {
         const act = delBtn.dataset["act"];
         if (!act) return; /* is-na：该工具无此通道目标，不可链接 */
         const [dirId = "", toolId = "", ch = ""] = (delBtn.dataset["lane"] ?? "").split(":");
-        void applyLaneOp(+dirId, toolId, ch as Channel, act as "on" | "clean");
+        if (act === "clean") {
+          /* 破坏性动作保留一道二次确认（确认对话框 ≠ 暂存层）：断连会清理该工具内已同步条目 */
+          const tool = S.tools.find((x) => x.id === toolId);
+          HubUI.confirm(
+            "断连",
+            `将断开 ${Ch[ch as Channel]} → ${esc(tool ? tool.name : toolId)}，该工具内已同步的 ${Ch[ch as Channel]} 条目会被清理。确定？`,
+            () => void applyLaneOp(+dirId, toolId, ch as Channel, "clean"),
+            { danger: true },
+          );
+        } else {
+          void applyLaneOp(+dirId, toolId, ch as Channel, act as "on" | "clean");
+        }
         return;
       }
       const lane = target.closest<HTMLElement>(".cv-lineg[data-lane], .cv-line[data-lane]");
