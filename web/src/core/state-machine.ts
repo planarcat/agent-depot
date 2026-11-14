@@ -1,9 +1,10 @@
 /**
- * 连接画布状态机（纯逻辑，零 DOM）——四态连线 + 暂存编辑。
+ * 连接画布状态机（纯逻辑，零 DOM）——四态连线，点击即落库。
  *
- * 口径（2026-11-05 用户拍板）：
- *   绿实=全链接自动同步 / 绿虚=部分链接自动同步 / 灰虚=已链接不自动同步 / 无连线=无链接
- * 暂存语义：stage 覆盖真实绑定（"确认更改"才落库）；mode = copy | link。
+ * 口径（2026-11-05 拍板，2026-11-14 收敛）：
+ *   绿实=全链接自动同步 / 绿虚=部分链接自动同步 / 灰虚=已链接不自动同步 / 无连线=不画线
+ * 只有这四种状态，不存在暂存确认层——画布上的一切点击直接 PATCH/POST/DELETE 落库
+ * （原型「编辑态」搬来的 stage / 确认条 / is-pending 红线已删，见 FIGMA_OVERRIDES.md 2026-11-14）。
  */
 
 import type { DirBinding, DirLayout, ItemsResponse, TargetPublic } from "./types/api.ts";
@@ -14,15 +15,6 @@ export const CHANNEL_LABEL: Record<Channel, string> = { skills: "Skills", mcp: "
 
 /** 连线视觉态。 */
 export type LaneVisual = "full" | "part" | "blocked" | "paused" | "off";
-
-/** 暂存操作类型。 */
-export type StageKind = "on" | "paused" | "clean";
-
-export interface StageOp {
-  kind: StageKind;
-  excluded?: string[];
-  mode?: "copy" | "link";
-}
 
 export interface CanvasDir {
   id: number;
@@ -43,7 +35,6 @@ export interface CanvasState {
   selTool: string | null;
   selRepo: number | null;
   types: Record<Channel, boolean>;
-  stage: Map<string, StageOp>;
   panelShown: boolean;
 }
 
@@ -60,7 +51,6 @@ export function createCanvasState(): CanvasState {
     selTool: null,
     selRepo: null,
     types: { skills: true, mcp: true },
-    stage: new Map(),
     panelShown: false,
   };
 }
@@ -89,15 +79,11 @@ export function baseBind(
 
 /** 绑定存在（enabled 0/1 都算"已连线"）。 */
 export function laneOn(s: CanvasState, dirId: number, toolId: string, ch: Channel): boolean {
-  const st = s.stage.get(laneKey(dirId, toolId, ch));
-  if (st) return st.kind === "on" || st.kind === "paused";
   return baseBind(s, dirId, toolId, ch) !== null;
 }
 
 /** 已连线但暂停自动同步。 */
 export function lanePaused(s: CanvasState, dirId: number, toolId: string, ch: Channel): boolean {
-  const st = s.stage.get(laneKey(dirId, toolId, ch));
-  if (st) return st.kind === "paused";
   const b = baseBind(s, dirId, toolId, ch);
   return b !== null && !b.enabled;
 }
@@ -111,46 +97,26 @@ export function laneState(
   return laneOn(s, dirId, toolId, ch) ? "on" : "off";
 }
 
-/** 该通道下"不跟随"的条目（暂存优先）。 */
+/** 该通道下"不跟随"的条目。 */
 export function laneExcluded(
   s: CanvasState,
   dirId: number,
   toolId: string,
   ch: Channel,
 ): Set<string> {
-  const st = s.stage.get(laneKey(dirId, toolId, ch));
-  if (st?.excluded) return new Set(st.excluded);
   const b = baseBind(s, dirId, toolId, ch);
   return new Set(b?.excluded ?? []);
 }
 
-/** 同步模式（暂存优先，缺省 copy）。 */
+/** 同步模式（缺省 copy）。 */
 export function laneMode(
   s: CanvasState,
   dirId: number,
   toolId: string,
   ch: Channel,
 ): "copy" | "link" {
-  const st = s.stage.get(laneKey(dirId, toolId, ch));
-  if (st?.mode) return st.mode;
   const b = baseBind(s, dirId, toolId, ch);
   return b?.mode ?? "copy";
-}
-
-/** 写入暂存（缺省 kind 按当前是否已连线推导）。 */
-export function setStage(
-  s: CanvasState,
-  dirId: number,
-  toolId: string,
-  ch: Channel,
-  patch: Partial<StageOp>,
-): void {
-  const key = laneKey(dirId, toolId, ch);
-  const cur: StageOp = s.stage.get(key) ?? {
-    kind: laneOn(s, dirId, toolId, ch) ? "on" : "on",
-    excluded: [...laneExcluded(s, dirId, toolId, ch)],
-  };
-  s.stage.set(key, { ...cur, ...patch });
 }
 
 export function itemOn(
@@ -199,9 +165,4 @@ export function aggState(s: CanvasState, dirId: number, toolId: string): LaneVis
 /** 目录内某类条目名（从 items_view 响应提取，兼容旧 registry 字段）。 */
 export function namesFromItems(res: Pick<ItemsResponse, "items">): string[] {
   return res.items.map((i) => i.name);
-}
-
-/** 暂存条目 → 生效顺序（决定请求顺序：先建连/恢复，再排排除与模式，最后清理）。 */
-export function stageEntries(s: CanvasState): [string, StageOp][] {
-  return [...s.stage.entries()];
 }

@@ -1,19 +1,13 @@
 /* 连接画布（Skills / MCP 合并页）——三行看板 + 连线层。
-   样式与交互对齐原型《连接融合-v4-编辑态》：metastrip 统计带、150 方形卡、
-   绿实/绿虚/灰点连线、右上浮动条目面板（成对编辑）、线上按钮在通道卡底缘。
-   分步落地口径：条目详情/批量分发后续回填；改动经右下暂存条确认生效。 */
+   四态连线（2026-11-14 口径收敛）：绿实=全链接自动同步 / 绿虚=部分链接自动同步 /
+   灰虚=已链接不自动同步 / 无连线=不画线。所有点击直接落库——原型「编辑态」的
+   暂存确认层（红线 / 右下确认条）已删，见 FIGMA_OVERRIDES.md 2026-11-14 条目。 */
 
 import { api, post, send } from "../core/api.ts";
 import { byId, mustById, qs, qsa } from "../core/dom.ts";
 import { esc } from "../core/format.ts";
 import { MV } from "../core/mv.ts";
-import type {
-  CanvasState,
-  Channel,
-  LaneVisual,
-  StageKind,
-  StageOp,
-} from "../core/state-machine.ts";
+import type { CanvasState, Channel, LaneVisual } from "../core/state-machine.ts";
 import * as sm from "../core/state-machine.ts";
 import { toolColorCls, toolShort } from "../core/tools.ts";
 import type {
@@ -60,7 +54,6 @@ interface WantLine {
   d: string;
   solid?: boolean;
   st?: LaneVisual;
-  staged?: boolean;
   title?: string;
 }
 
@@ -79,7 +72,6 @@ export const ConnectView = (() => {
     selTool: null,
     selRepo: null,
     types: { skills: true, mcp: true },
-    stage: new Map(),
     panelShown: false,
     _panelShown: false,
   };
@@ -96,20 +88,11 @@ export const ConnectView = (() => {
   function laneOn(dirId: DirIdLike, toolId: string, ch: Channel): boolean {
     return sm.laneOn(S, normDir(dirId), toolId, ch);
   }
-  function lanePaused(dirId: DirIdLike, toolId: string, ch: Channel): boolean {
-    return sm.lanePaused(S, normDir(dirId), toolId, ch);
-  }
-  function laneState(dirId: DirIdLike, toolId: string, ch: Channel): "on" | "off" {
-    return sm.laneState(S, normDir(dirId), toolId, ch);
-  }
   function laneExcluded(dirId: DirIdLike, toolId: string, ch: Channel): Set<string> {
     return sm.laneExcluded(S, normDir(dirId), toolId, ch);
   }
   function laneMode(dirId: DirIdLike, toolId: string, ch: Channel): "copy" | "link" {
     return sm.laneMode(S, normDir(dirId), toolId, ch);
-  }
-  function setStage(dirId: DirIdLike, toolId: string, ch: Channel, patch: Partial<StageOp>): void {
-    sm.setStage(S, normDir(dirId), toolId, ch, patch);
   }
   function itemOn(item: string, dirId: DirIdLike, toolId: string, ch: Channel): boolean {
     return sm.itemOn(S, item, normDir(dirId), toolId, ch);
@@ -222,11 +205,6 @@ export const ConnectView = (() => {
             </div>
           </div>
           <aside class="cv-ipanel" id="cv-panel" hidden></aside>
-        </div>
-        <div class="cv__apply" id="cv-apply" hidden>
-          <span class="cv__apply-tip">有 <b id="cv-apply-n">0</b> 项未生效的更改</span>
-          <button class="hub-btn" id="cv-undo">撤销</button>
-          <button class="hub-btn hub-btn--primary" id="cv-confirm">确认更改</button>
         </div>
       </div>`;
   }
@@ -346,9 +324,7 @@ export const ConnectView = (() => {
       "#" +
       S.binds
         .map((b) => b.id + ":" + (b.channels || []).join("") + ":" + (b.excluded || []).length)
-        .join("|") +
-      "#" +
-      S.stage.size
+        .join("|")
     );
   }
 
@@ -556,14 +532,12 @@ export const ConnectView = (() => {
           if (!(c && S.types[ch] && targetOf(t.id, ch))) return;
           const st = channelState(selDir, t.id, ch);
           if (st === "off") return; /* 无链接 = 不画线 */
-          const staged = S.stage.has(laneKey(selDir, t.id, ch));
           const toolEl = el(`tool:${t.id}`);
           if (!toolEl) return;
           want.push({
             key: laneKey(selDir, t.id, ch),
             cls: "cv-line",
             st,
-            staged,
             d: seg(pt(c, "bottom"), pt(toolEl, "top")),
             /* off 已在上面 return，原三元恒落到「断开」 */
             title: `断开：${Ch[ch]} ↔ ${t.name}`,
@@ -645,7 +619,7 @@ export const ConnectView = (() => {
         }
       }
       if (o.solid) return;
-      const cls = o.cls + stSuffix(o.st) + (o.staged ? " is-pending" : "");
+      const cls = o.cls + stSuffix(o.st);
       if (vis.getAttribute("class") !== cls) vis.setAttribute("class", cls);
       if (o.st === "full" && !vis.getAttribute("pathLength")) vis.setAttribute("pathLength", "100");
       if (o.st !== "full" && vis.hasAttribute("pathLength")) vis.removeAttribute("pathLength");
@@ -796,22 +770,15 @@ export const ConnectView = (() => {
       const ps = pairStat(d, selTool);
       ttl = `${d.name} → ${t ? t.name : selTool}`;
       const modeRows = Channels.filter(
-        (ch) =>
-          S.types[ch] &&
-          targetOf(selTool, ch) &&
-          (laneOn(d.id, selTool, ch) || S.stage.get(laneKey(d.id, selTool, ch))),
+        (ch) => S.types[ch] && targetOf(selTool, ch) && laneOn(d.id, selTool, ch),
       )
         .map((ch) => {
           const cur = laneMode(d.id, selTool, ch);
-          const st = S.stage.get(laneKey(d.id, selTool, ch));
-          const b = baseBind(d.id, selTool, ch);
-          const pending =
-            st !== undefined && st.mode !== undefined && st.mode !== (b ? b.mode : "copy");
           return `<div class="cv-mrow"><span class="cv-mlab">${Ch[ch]}</span>
           <span class="cv-mode" data-dir="${d.id}" data-tool="${selTool}" data-ch="${ch}">
             <button data-mode="copy" class="${cur === "copy" ? "sel" : ""}" title="把目录条目实体复制进工具目录">复制</button>
             <button data-mode="link" class="${cur === "link" ? "sel" : ""}" title="在工具目录放指向本地库的软链接，内容自动跟随">链接</button>
-          </span>${pending ? '<span class="cv-pill part">待确认</span>' : ""}</div>`;
+          </span></div>`;
         })
         .join("");
       stat =
@@ -867,7 +834,7 @@ export const ConnectView = (() => {
         renderAll();
       };
     qsa<HTMLElement>(".cv-mode button", p).forEach((b) => {
-      b.onclick = () => {
+      b.onclick = async () => {
         const box = b.closest<HTMLElement>(".cv-mode");
         if (!box) return;
         const dirId = Number(box.dataset["dir"] ?? "");
@@ -875,13 +842,18 @@ export const ConnectView = (() => {
         const ch = box.dataset["ch"] as Channel | undefined;
         const mode = b.dataset["mode"];
         if (!ch || (mode !== "copy" && mode !== "link")) return;
-        if (laneMode(dirId, toolId, ch) === mode) return;
-        /* 保留暂停态：kind 取当前生效态，切模式不顺便恢复自动同步 */
-        setStage(dirId, toolId, ch, {
-          kind: lanePaused(dirId, toolId, ch) ? "paused" : "on",
-          mode,
-        });
-        renderAll();
+        const bind = baseBind(dirId, toolId, ch);
+        if (!bind) return;
+        if (bind.mode === mode) return;
+        /* 点击即落库：后端切模式并重同步 */
+        b.classList.add("is-loading");
+        const r = await send<PullResult>(`/api/skills/dir-bindings/${bind.id}`, "PATCH", { mode });
+        b.classList.remove("is-loading");
+        if (r.data.ok) {
+          await loadAll();
+          renderAll();
+          HubUI.toast("同步模式已切换", "success");
+        } else HubUI.toast(r.data.error || "同步模式切换失败", "error");
       };
     });
     qsa<HTMLElement>(".cv-brow[data-go]", p).forEach((r) => {
@@ -1195,20 +1167,20 @@ export const ConnectView = (() => {
         const act = delBtn.dataset["act"];
         if (!act) return; /* is-na：该工具无此通道目标，不可链接 */
         const [dirId = "", toolId = "", ch = ""] = (delBtn.dataset["lane"] ?? "").split(":");
-        setStage(+dirId, toolId, ch as Channel, { kind: act as StageKind });
-        renderAll();
+        void applyLaneOp(+dirId, toolId, ch as Channel, act as "on" | "clean");
         return;
       }
       const lane = target.closest<HTMLElement>(".cv-lineg[data-lane], .cv-line[data-lane]");
       if (lane) {
         const [dirId = "", toolId = "", ch = ""] = (lane.dataset["lane"] ?? "").split(":");
-        /* 口径（用户 2026-11-05）：绿线(自动同步)点击 → 暂停(灰虚线，不自动同步)；
-           灰虚线(已链接不自动同步)点击 → 全链接自动同步 = 恢复 + 清空排除 */
+        /* 口径（用户 2026-11-05 / 2026-11-14 收敛，点击即落库）：
+           绿线(自动同步)点击 → 暂停(灰虚线，不自动同步)；
+           灰虚线(已链接不自动同步)点击 → 恢复自动同步（blocked 连恢复带清空排除） */
         const st = channelState(+dirId, toolId, ch as Channel);
-        if (st === "paused" || st === "blocked")
-          setStage(+dirId, toolId, ch as Channel, { kind: "on", excluded: [] });
-        else setStage(+dirId, toolId, ch as Channel, { kind: "paused" });
-        renderAll();
+        if (st === "off") return;
+        if (st === "paused") void applyLaneOp(+dirId, toolId, ch as Channel, "on");
+        else if (st === "blocked") void applyLaneOp(+dirId, toolId, ch as Channel, "on", true);
+        else void applyLaneOp(+dirId, toolId, ch as Channel, "paused");
         return;
       }
       const dot = target.closest<HTMLElement>(".cv-tmini");
@@ -1239,12 +1211,6 @@ export const ConnectView = (() => {
         renderAll();
       }
     });
-    mustById("cv-undo").onclick = () => {
-      S.stage.clear();
-      renderAll();
-      HubUI.toast("已撤销未生效的更改", "info");
-    };
-    mustById("cv-confirm").onclick = applyStage;
     window.addEventListener("resize", () => drawLines());
     /* 面板开合改变主列宽、行内滚动移动卡片 —— 都不触发 resize，用 ResizeObserver / scroll 兜住（原型口径） */
     if (window.ResizeObserver) {
@@ -1260,81 +1226,78 @@ export const ConnectView = (() => {
     if (toolsrow) toolsrow.addEventListener("scroll", () => drawLines(), { passive: true });
   }
 
-  function toggleItem(item: string, toolId: string, ch: Channel): void {
+  async function toggleItem(item: string, toolId: string, ch: Channel): Promise<void> {
     if (!S.selDir) return;
-    if (laneState(S.selDir, toolId, ch) !== "on") {
+    const bind = baseBind(S.selDir, toolId, ch);
+    if (!bind) {
       HubUI.toast("该通道未链接——点通道卡下方 ↔ 先建立链接", "warn");
       return;
     }
     const ex = laneExcluded(S.selDir, toolId, ch);
     if (ex.has(item)) ex.delete(item);
     else ex.add(item);
-    setStage(S.selDir, toolId, ch, { excluded: [...ex] });
-    renderAll();
+    /* 点击即落库：单条目排除/恢复直接 PATCH */
+    const r = await send<PullResult>(`/api/skills/dir-bindings/${bind.id}`, "PATCH", {
+      excluded: [...ex],
+    });
+    if (r.data.ok) {
+      await loadAll();
+      renderAll();
+    } else HubUI.toast(r.data.error || "条目跟随切换失败", "error");
   }
 
-  /* ---------------- 生效 ---------------- */
+  /* ---------------- 点击即落库（无暂存层） ---------------- */
 
-  async function applyStage(): Promise<void> {
-    const entries = sm.stageEntries(S);
-    if (!entries.length) return;
-    const btn = mustById("cv-confirm");
-    btn.classList.add("is-loading");
-    let failed = 0;
-    for (const [key, op] of entries) {
-      const [dirId = "", toolId = "", ch = ""] = key.split(":");
-      const tgt = targetOf(toolId, ch as Channel);
-      let bind: DirBinding | null = baseBind(dirId, toolId, ch as Channel);
-      try {
-        if (op.kind === "on" || op.kind === "paused") {
-          /* 链接/恢复：无绑定先建；再按口径设置自动同步开关 */
-          if (!bind && tgt) {
-            const r = await post<PullResult>("/api/skills/dir-bindings", {
-              dir_id: +dirId,
-              target_ids: [tgt.id],
-              mode: op.mode || "copy",
-            });
-            if (!r.data.ok) failed += 1;
-            bind = baseBind(dirId, toolId, ch as Channel);
-          }
-          if (!bind) {
-            failed += 1;
-            continue;
-          }
-          const r2 = await send<PullResult>(`/api/skills/dir-bindings/${bind.id}`, "PATCH", {
-            enabled: op.kind !== "paused",
+  /** 单条连线的直接生效：on=建连/恢复自动同步，paused=暂停，clean=断连并清理。
+      clearExcluded 仅恢复 blocked 用（口径：恢复即清空排除）。 */
+  async function applyLaneOp(
+    dirId: DirIdLike,
+    toolId: string,
+    ch: Channel,
+    kind: "on" | "paused" | "clean",
+    clearExcluded = false,
+  ): Promise<void> {
+    const did = normDir(dirId);
+    let bind: DirBinding | null = baseBind(did, toolId, ch);
+    let ok = true;
+    try {
+      if (kind === "on" || kind === "paused") {
+        /* 链接/恢复：无绑定先建；再设置自动同步开关 */
+        const tgt = targetOf(toolId, ch);
+        if (!bind && tgt) {
+          const r = await post<PullResult>("/api/skills/dir-bindings", {
+            dir_id: did,
+            target_ids: [tgt.id],
+            mode: "copy",
           });
-          if (!r2.data.ok) failed += 1;
-          /* 暂存的同步模式（复制⇄链接）：与现值不同即 PATCH，后端切换并重同步 */
-          if (op.mode && bind.mode !== op.mode) {
-            const r3 = await send<PullResult>(`/api/skills/dir-bindings/${bind.id}`, "PATCH", {
-              mode: op.mode,
-            });
-            if (!r3.data.ok) failed += 1;
-          }
-        } else if (op.kind === "clean" && bind) {
-          const r = await send<PullResult>(`/api/skills/dir-bindings/${bind.id}?clean=1`, "DELETE");
-          if (!r.data.ok) failed += 1;
-          bind = null;
+          ok = ok && r.data.ok;
+          bind = baseBind(did, toolId, ch);
         }
-        if (bind && op.excluded) {
-          const r = await send<PullResult>(`/api/skills/dir-bindings/${bind.id}`, "PATCH", {
-            excluded: op.excluded,
+        if (!bind) {
+          HubUI.toast("该工具没有可链接的目录目标", "error");
+          return;
+        }
+        const r2 = await send<PullResult>(`/api/skills/dir-bindings/${bind.id}`, "PATCH", {
+          enabled: kind !== "paused",
+        });
+        ok = ok && r2.data.ok;
+        if (clearExcluded) {
+          const r3 = await send<PullResult>(`/api/skills/dir-bindings/${bind.id}`, "PATCH", {
+            excluded: [],
           });
-          if (!r.data.ok) failed += 1;
+          ok = ok && r3.data.ok;
         }
-      } catch {
-        failed += 1;
+      } else if (kind === "clean" && bind) {
+        const r = await send<PullResult>(`/api/skills/dir-bindings/${bind.id}?clean=1`, "DELETE");
+        ok = ok && r.data.ok;
+        bind = null;
       }
+    } catch {
+      ok = false;
     }
-    btn.classList.remove("is-loading");
-    S.stage.clear();
     await loadAll();
     renderAll();
-    HubUI.toast(
-      failed ? `有 ${failed} 项未能生效` : "已生效：连接变更已保存",
-      failed ? "error" : "success",
-    );
+    HubUI.toast(ok ? "连接变更已保存" : "连接变更未能生效", ok ? "success" : "error");
   }
 
   /* ---------------- 渲染入口 ---------------- */
@@ -1381,13 +1344,6 @@ export const ConnectView = (() => {
     renderTypes();
     renderTools();
     renderPanel();
-    const bar = byId("cv-apply");
-    if (bar) {
-      const n = S.stage.size;
-      bar.hidden = !(n > 0 && (S.selDir || S.selTool));
-      const el = byId("cv-apply-n");
-      if (el) el.textContent = String(n);
-    }
     const view = byId("view-connect");
     if (window.HubUI && HubUI.drawFrames && view) {
       HubUI.drawFrames(view); /* 选中卡 accent 描边路径（记忆页同款） */

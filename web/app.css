@@ -1618,8 +1618,6 @@ button.msg__att:hover { border-color: var(--c-accent); background: var(--c-accen
 .cv-lineg { cursor: pointer; }
 .cv-lineg .cv-line { pointer-events: none; }
 .cv-lineg:hover .cv-line { stroke-width: 4.5; opacity: .85; }
-/* 暂存中的连线：红色提示待生效 */
-.cv-line.is-pending { stroke: var(--c-err); opacity: .85; stroke-dasharray: 6 4; }
 
 /* ---- 线上按钮（原型 del-btn）：成对模式，通道卡底缘中心 ---- */
 .cv__lane-ops { position: absolute; inset: 0; pointer-events: none; z-index: var(--z-raised); }
@@ -1720,17 +1718,6 @@ button.msg__att:hover { border-color: var(--c-accent); background: var(--c-accen
 .cv-restline { font-size: var(--fs-s); color: var(--c-ink-4); line-height: 1.6;
   padding: var(--sp-1) 0; }
 .cv-empty { font-size: var(--fs-s); color: var(--c-ink-4); }
-
-/* ---- 暂存条（原型 apply-bar）：有未生效改动时右下角浮出 ---- */
-.cv__apply[hidden] { display: none; }
-.cv__apply { position: fixed; right: var(--sp-5); bottom: var(--sp-5); z-index: var(--z-dropdown);
-  display: inline-flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-2)
-  var(--sp-2) var(--sp-4); border: 1px solid var(--c-line); border-radius: 999px;
-  background: var(--c-surface-2); box-shadow: var(--sh-float); }
-@keyframes cv-applyin { from { opacity: 0; transform: translateY(6px); } }
-.cv__apply:not([hidden]) { animation: cv-applyin var(--t-base); }
-.cv__apply-tip { font-size: var(--fs-s); color: var(--c-ink-3); white-space: nowrap; }
-.cv__apply-tip b { color: var(--c-warn); font-weight: 600; }
 
 /* 仓库面板 / 目录管理弹窗里的行 */
 .cv-repo-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center;

@@ -15,8 +15,6 @@ import {
   lanePaused,
   laneState,
   namesFromItems,
-  setStage,
-  stageEntries,
   targetOf,
 } from "../src/core/state-machine.ts";
 import type { DirBinding, TargetPublic } from "../src/core/types/api.ts";
@@ -181,72 +179,10 @@ describe("排除项 → part / blocked", () => {
   });
 });
 
-describe("暂存 stage 覆盖", () => {
-  test("未绑定 + stage on → 视觉 on", () => {
-    const s = mk();
-    setStage(s, D, T, "skills", { kind: "on" });
-    expect(laneOn(s, D, T, "skills")).toBe(true);
-    expect(lanePaused(s, D, T, "skills")).toBe(false);
-    expect(channelState(s, D, T, "skills")).toBe("full");
-  });
-
-  test("已绑定 + stage clean → 视觉 off（待清理）", () => {
-    const s = mk({ binds: [bind()] });
-    setStage(s, D, T, "skills", { kind: "clean" });
-    expect(laneOn(s, D, T, "skills")).toBe(false);
-    expect(channelState(s, D, T, "skills")).toBe("off");
-    expect(aggState(s, D, T)).toBeNull();
-  });
-
-  test("stage paused 覆盖 enabled 绑定", () => {
-    const s = mk({ binds: [bind()] });
-    setStage(s, D, T, "skills", { kind: "paused" });
-    expect(lanePaused(s, D, T, "skills")).toBe(true);
-    expect(channelState(s, D, T, "skills")).toBe("paused");
-  });
-
-  test("stage excluded 覆盖 base excluded", () => {
-    const s = mk({ binds: [bind({ excluded: ["a", "b", "c"] })] });
-    setStage(s, D, T, "skills", { excluded: [] });
-    expect([...laneExcluded(s, D, T, "skills")]).toEqual([]);
-    expect(channelState(s, D, T, "skills")).toBe("full");
-  });
-
-  test("stage mode 覆盖 base mode", () => {
-    const s = mk({ binds: [bind({ mode: "copy" })] });
-    setStage(s, D, T, "skills", { mode: "link" });
-    expect(laneMode(s, D, T, "skills")).toBe("link");
-  });
-
+describe("同步模式", () => {
   test("base mode=link 时缺省读取 link", () => {
     const s = mk({ binds: [bind({ mode: "link" })] });
     expect(laneMode(s, D, T, "skills")).toBe("link");
-  });
-
-  test("setStage 不传 kind 时默认 on，并继承 base excluded", () => {
-    const s = mk({ binds: [bind({ excluded: ["a"] })] });
-    setStage(s, D, T, "skills", { mode: "link" });
-    const op = s.stage.get(laneKey(D, T, "skills"));
-    expect(op?.kind).toBe("on");
-    expect(op?.excluded).toEqual(["a"]);
-    expect(op?.mode).toBe("link");
-  });
-
-  test("连续 setStage 合并 patch", () => {
-    const s = mk();
-    setStage(s, D, T, "skills", { mode: "link" });
-    setStage(s, D, T, "skills", { excluded: ["x"] });
-    const op = s.stage.get(laneKey(D, T, "skills"));
-    expect(op?.mode).toBe("link");
-    expect(op?.excluded).toEqual(["x"]);
-  });
-
-  test("stage 按 目录:工具:通道 隔离", () => {
-    const s = mk();
-    setStage(s, D, T, "skills", { kind: "on" });
-    expect(laneOn(s, D, T, "skills")).toBe(true);
-    expect(laneOn(s, D, T, "mcp")).toBe(false);
-    expect(laneOn(s, 2, T, "skills")).toBe(false);
   });
 });
 
@@ -287,13 +223,6 @@ describe("aggState 聚合优先级", () => {
       expect(aggState(s, D, T)).toBe(want);
     });
   }
-
-  test("被 staged clean 的通道不参与聚合", () => {
-    const s = mk({ binds: [bind({ channels: ["skills", "mcp"] })] });
-    setStage(s, D, T, "mcp", { kind: "clean" });
-    expect(channelState(s, D, T, "mcp")).toBe("off");
-    expect(aggState(s, D, T)).toBe("full");
-  });
 });
 
 describe("辅助查询", () => {
@@ -325,13 +254,6 @@ describe("辅助查询", () => {
         ] as never,
       }),
     ).toEqual(["a", "b"]);
-  });
-
-  test("stageEntries 保持写入顺序", () => {
-    const s = mk();
-    setStage(s, 1, "claude", "skills", { kind: "on" });
-    setStage(s, 2, "codex", "mcp", { kind: "clean" });
-    expect(stageEntries(s).map(([k]) => k)).toEqual(["1:claude:skills", "2:codex:mcp"]);
   });
 
   test("通道标签", () => {
