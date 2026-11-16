@@ -13,8 +13,6 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Manager, State};
 
 const DEFAULT_REPO: &str = "/Users/planarcat/Documents/Projects/@planarcat/agent-depot/WorkTrees/main";
-const CONSOLE_URL: &str = "http://127.0.0.1:8317";
-const PORT: u16 = 8317;
 const BASE_NAME: &str = "Agent Depot";
 const TRAY_ID: &str = "agent-depot-tray";
 const AUTOSTART_LABEL: &str = "local.planarcat.agent-depot";
@@ -40,6 +38,24 @@ fn profile() -> &'static str {
     } else {
         "release"
     }
+}
+
+/// 端口跟构建身份走：debug=dev=8317（历史锚点）、release=正式=8318——两壳各探
+/// 各的端口、各拉各的服务，开机竞速不再决定数据目录（2026-11-16 排障：正式壳
+/// 先起 8317 → dev 窗口连上生产空库，664 条会话"消失"实为连错库）。
+/// 注意 ensure_service 跑在 tauri setup（init_profile）之前，这里不能用
+/// is_dev_build()（OnceLock 未 set）——好在 debug/release 与 bundle id 身份一致
+/// （make-app.sh 只出 release 包，dev 包恒为 debug 构建），cfg! 即真源。
+fn port() -> u16 {
+    if cfg!(debug_assertions) {
+        8317
+    } else {
+        8318
+    }
+}
+
+fn console_url() -> String {
+    format!("http://127.0.0.1:{}", port())
 }
 
 /// 显示名：开发版带 Dev 后缀（窗口标题 / 托盘 / Dock 名称），两版同开时一眼可分。
@@ -222,7 +238,7 @@ fn repo_dir() -> String {
 }
 
 fn service_up() -> bool {
-    match format!("127.0.0.1:{PORT}").parse() {
+    match format!("127.0.0.1:{}", port()).parse() {
         Ok(addr) => TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok(),
         Err(_) => false,
     }
@@ -363,7 +379,7 @@ struct RuntimeInfo {
     instance: String,
     version: &'static str,
     pid: u32,
-    service_url: &'static str,
+    service_url: String,
     data_dir: String,
     config_dir: String,
 }
@@ -395,7 +411,7 @@ fn desktop_runtime_info(app: tauri::AppHandle) -> RuntimeInfo {
         instance,
         version: env!("CARGO_PKG_VERSION"),
         pid: std::process::id(),
-        service_url: CONSOLE_URL,
+        service_url: console_url(),
         data_dir,
         config_dir,
     }
@@ -472,7 +488,7 @@ fn main() {
 
             let silent = (cli_silent || settings.silent_start) && settings.menu_bar;
             let url = if up {
-                tauri::WebviewUrl::External(CONSOLE_URL.parse().expect("valid console url"))
+                tauri::WebviewUrl::External(console_url().parse().expect("valid console url"))
             } else {
                 tauri::WebviewUrl::App("index.html".into())
             };

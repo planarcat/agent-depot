@@ -27,13 +27,18 @@
 - 设置页「桌面」的四个开关（开机启动 / 菜单栏挂载 / 静默启动 / Dock 图标）由 Tauri 命令
   `desktop_get_settings` / `desktop_set_settings` 驱动，配置落在
   `~/Library/Application Support/local.planarcat.agent-depot/desktop.json`。
-- 控制台是 remote URL（`http://127.0.0.1:8317`），IPC 放行靠
-  `desktop/src-tauri/capabilities/default.json` 的 `remote.urls`——**不要删**，删了设置页全失效。
+- 控制台是 remote URL，端口跟构建身份走（2026-11-16 双壳端口分离）：
+  **dev=8317 / 正式=8318**（`main.rs` 的 `port()`，`cfg!(debug_assertions)` 判定；
+  `run.sh` 按 `AGENT_DEPOT_PROFILE` 选默认端口）。IPC 放行靠
+  `desktop/src-tauri/capabilities/default.json` 的 `remote.urls`——两个端口的条目
+  **都不要删**，删了对应版本设置页全失效。两壳各 ensure 各的端口、各连各的库，
+  严禁把两版重新合到同一端口（会复发开机竞速连错库：dev 窗口连上生产空库）。
 - 静默启动依赖菜单栏挂载（Rust 侧 `normalized()` 会兜底）；开机启动写
   `~/Library/LaunchAgents/local.planarcat.agent-depot.plist`。
 - 改桌面壳后至少跑 `(cd desktop/src-tauri && cargo test)`；重装正式版用 `bash scripts/make-app.sh`。
 - **开发版与正式版必须隔离**：bundle id 以 `.dev` 结尾（或 debug 构建）→ `AgentDepot-Dev.app` /
-  `desktop-dev.json` / `*-dev.plist`；服务库由 `AGENT_DEPOT_PROFILE=dev|release` 选择。
+  `desktop-dev.json` / `*-dev.plist` / 服务 8317 + `~/.agent-depot-dev`；正式版 → 服务 8318 +
+  `~/.agent-depot`。
   新增桌面设置时禁止把两版写进同一条路径。
 
 ## 改 `web/` 之前的硬规则
