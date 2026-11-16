@@ -23,3 +23,8 @@ Docs/视觉路径卡/
 web/node_modules/
 web/dist/
 web/coverage/
+
+# depotd 运行产物（dev/release 双实例分文件，壳与 dev 脚本写在 worktree/外层根）
+.depot.pid
+.depot.branch
+.depot*.log
