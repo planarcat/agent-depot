@@ -1,7 +1,7 @@
 # Agent Depot · 设计规范（DESIGN.md）
 
 > 设计方向：**Müller-Brockmann 网格功能主义**（数学网格 · 严格对齐 · 双色方案 · 功能至上）。
-> 所有样式必须来自 `web/tokens.css` 的变量；**界面文件（html/app.css/hub-ui.css）中不允许出现游离的十六进制颜色或 px 字号** —— 由 `tests/lint_styles.py` 强制检查。
+> 所有样式必须来自 `web/tokens.css` 的变量；**界面文件（html/app.css/hub-ui.css）中不允许出现游离的十六进制颜色或 px 字号** —— 由门禁二进制 `depot-gate`（源码 `depotd/crates/depot-gate/`，原 `tests/lint_styles.py`）强制检查。
 
 ---
 
@@ -25,7 +25,7 @@
 
 1. 颜色 / 字号 / 间距 / 圆角 / 阴影 / 动效**只允许用 `web/tokens.css` 的变量**；需要新值就先加 token 再引用，不许就地写数值。
 2. 交互反馈一律走 `HubUI.*` 与 `.hub-*` 组件；不手写弹窗、不碰原生 `alert/confirm/prompt`。
-3. 交活前跑 `python3 tests/lint_styles.py`，必须 PASSED。
+3. 交活前跑 `depotd/target/debug/depot-gate styles`，必须 PASSED。
 4. 拿不准怎么写的，**先看 §11 禁止项（Anti-patterns）**，那里列的是踩过的坑；跨页面的结构问题（设置页 / 仪表盘 / 空态）看 **§12 应用结构模式**。
 
 > 仓库根 `AGENTS.md` 是给工具自动加载的硬规则，本文件是它的完整展开。
@@ -139,7 +139,7 @@
 ## 7. 检查
 
 ```bash
-python3 tests/lint_styles.py   # 游离色值/字号检查（CI 化）
+depotd/target/debug/depot-gate styles   # 游离色值/字号检查（check.sh 第 2 步）
 ```
 
 ## 8. 会话视图结构（v0.8）
@@ -241,7 +241,7 @@ python3 tests/lint_styles.py   # 游离色值/字号检查（CI 化）
 
 ## 11. 禁止项（Anti-patterns）
 
-写界面前逐条自查。带 🤖 的是 `tests/lint_styles.py` 能机检的，其余靠评审与自查。
+写界面前逐条自查。带 🤖 的是 `depot-gate styles` 能机检的，其余靠评审与自查。
 
 ### 颜色
 
@@ -315,7 +315,7 @@ python3 tests/lint_styles.py   # 游离色值/字号检查（CI 化）
 | `border-radius: 5px` 等非 token 值 | 少量（滚动条、进度条），`50%` / `999px` 属规范允许 | 并入 `--r-s(4)` 或新增专用 token |
 | 动效 token 两套并存（`--t-quick` 系 与 `--dur-*` + `--ease-*`） | 均在使用中 | 见 §4 补注：新代码二选一，不再新增第三套 |
 
-> 机检范围：`tests/lint_styles.py` 只覆盖**能零违规通过**的三条（游离色值 / px 字号 / 裸 z-index）。
+> 机检范围：`depot-gate styles` 只覆盖**能零违规通过**的三条（游离色值 / px 字号 / 裸 z-index）。
 > 间距与阴影两项因存量偏差未纳入，改动它们需要视觉确认，不做隐式重构。
 
 ## 12. 应用结构模式（外部知识提炼）
