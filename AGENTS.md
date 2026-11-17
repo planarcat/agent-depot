@@ -49,7 +49,7 @@
 4. 组件样式只进 `web/hub-ui.css`，页面布局只进 `web/app.css`，两者不混。
 5. 停用工具在**所有界面隐藏**（卡片 / 侧栏 / 列表 / 迁移目标）；工具编辑只在 设置 → 工具，会话页不得出现编辑入口。
 6. **用户指令 > Figma 稿子**：与稿子冲突时以用户明确指令为准。你让删/改的元素，稿子里**往往还留着**（稿子不会同步你的指令）——那些属于**过时内容，不许按稿子加回来**。动手前先翻仓库根 `FIGMA_OVERRIDES.md`（覆盖清单，**不写进 DESIGN.md**）；你每给一次「删 / 不要 / 去掉」这类指令，**同一轮就把那一条补进该清单**（含依据与日期），别让下一轮的人以为是漏做。
-7. **交活前自评**：对照 `DESIGN.md §11` 逐条过一遍，并对**主张 / 层级 / 执行 / 具体性 / 克制 / 变化** 六项打分（1–5），任一项 <3 先改再交；再跑 `python3 scripts/lint_baseline.py` 必须 PASSED（规则本体是 `tests/lint_styles.py`）。改 `data-testid` 须同步改 `tests/e2e*.mjs`。
+7. **交活前自评**：对照 `DESIGN.md §11` 逐条过一遍，并对**主张 / 层级 / 执行 / 具体性 / 克制 / 变化** 六项打分（1–5），任一项 <3 先改再交；再跑 `depotd/target/debug/depot-gate lint-baseline` 必须 PASSED（规则内建在 `depotd/crates/depot-gate/`）。改 `data-testid` 须同步改 `tests/e2e*.mjs`。
 8. **前端工具链是 Bun/TypeScript**：`cd web && bun install` → `bun run check:ci`（biome + 双 tsconfig + build + 体积预算 + core 覆盖率）。改 `src/` 后必须 `bun run build`（depotd 服务 `web/dist/`）；**禁止新增裸 `.js` 源文件**，新视图只在 `core/view-loader.ts` 注册动态 import。细节见 `web/README.md`。
 
 > 本文件只放硬规则与指向，**不复制 token 数值**——那份清单只在 `DESIGN.md`，避免两处打架。
@@ -67,14 +67,14 @@
    写测试报 `Operation not permitted` = **撞锁，不是权限问题**，别往环境/权限方向瞎试：
    ① `bash scripts/unlock-tests.sh` → ② 改 → ③ `bash scripts/lock-tests.sh` 锁回。解锁与写文件别放同一批并行工具调用（会抢在解锁前执行）。
    commit message 必须写清三件事：**解锁了哪些文件 / 为什么改（口径出处）/ 改了什么口径**。
-2. **软改松一律红灯**：`@unittest.skip` / `it.only` / `xit` / `expectedFailure` 被 `scripts/check_spec_guards.py` 扫到即红（check 第 0 步）。
+2. **软改松一律红灯**：`@unittest.skip` / `it.only` / `xit` / `expectedFailure` 被 `depot-gate spec-guards`（门禁二进制，源码 `depotd/crates/depot-gate/`）扫到即红（check 第 1 步）。
    确实必须跳过：在同一行加 `spec-guard: allowed <理由>` —— 留痕放行，输出里会列出来。
-3. **提交门禁**：暂存 `tests/` 或门禁本体（`scripts/check_spec_guards.py` / `lint_baseline.py` / `lint-baseline.json` / `mutate.py` / `mutation.config.json` / `lock-tests.sh` / `unlock-tests.sh` / `scripts/hooks/`）会被 pre-commit 拦下。
+3. **提交门禁**：暂存 `tests/` 或门禁本体（`depotd/crates/depot-gate/` / `scripts/lint-baseline.json` / `lock-tests.sh` / `unlock-tests.sh` / `scripts/hooks/`）会被 pre-commit 拦下。
    确认无误要放行：`LOCAL_GUARD_OK=1 git commit ...`（这个动作本身就是留痕）。**禁 `--no-verify`**（push 同理）。
 4. **门禁只在本机**：钩子本体 `scripts/local-guard.sh` 被 `.gitignore` 兜住；启用靠一条本机命令 `git config core.hooksPath scripts/hooks`（进仓的是 `scripts/hooks/pre-commit` 与 `pre-push`，惰性调用）。
 5. **锁的粒度**：`tests/` 用**本层** `uchg`（挡新建/改名/删除），**不用 `-R` 递归** —— 递归会把 `tests/evidence/` 一起锁死，e2e 就写不了截图与 `e2e-report-*.json`。实测：本层锁只挡这一层，子目录内部照旧可写，改/建/删判据三向皆拒。
-6. **lint 基线**（`scripts/lint_baseline.py`，check 第 1 步）：只对「本次变更文件」比对 `scripts/lint-baseline.json` 登记的存量，**新增告警即红**。
-   多分支安全：基点取（pre-push 远端 sha / 上游 / origin 默认分支 / 本地 main）与 HEAD 最近的 merge-base；合并对方带入的文件不算你的，解冲突时新塞的告警照拦；无远程时全量比对；改规则或基线自动全量。
+6. **lint 基线**（`depot-gate lint-baseline`，check 第 2 步）：只对「本次变更文件」比对 `scripts/lint-baseline.json` 登记的存量，**新增告警即红**。
+   多分支安全：基点取（pre-push 远端 sha / 上游 / origin 默认分支 / 本地 main）与 HEAD 最近的 merge-base；合并对方带入的文件不算你的，解冲突时新塞的告警照拦；无远程时全量比对；改门禁本体（`depotd/crates/depot-gate/`）或基线自动全量。
    基线**只许降**：修掉存量后 `--ratchet` 下调；**禁止靠改基线让新告警过关**（上调只能手改 JSON，会被第 3 条拦下留痕）。
 7. **变异门禁**（`scripts/mutate.py`，配置 `scripts/mutation.config.json`，报告 `reports/mutation.json`）：Python 标准库 `ast` 自研，在仓库副本里变异，不碰源码。
    口径：timeout 算 killed；阈值 high 80 / low 60 / break 60，低于 break 则 `exit 1`；规则集版本 `m1`，**得分不可与 Stryker / mutmut 横向比较**。
