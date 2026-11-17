@@ -17,18 +17,68 @@ const BASE_NAME: &str = "Agent Depot";
 const TRAY_ID: &str = "agent-depot-tray";
 const AUTOSTART_LABEL: &str = "local.planarcat.agent-depot";
 
-/// 构建身份：debug 构建、或 bundle id 以 `.dev` 结尾（make-app-dev.sh）= 开发版。
-/// dev 与 release 的设置文件、开机启动项、默认值、服务库全部隔离。
-/// 运行时以 bundle id 为准，避免「同一个 target 目录先后构建 release/dev」时
-/// 编译期环境变量未触发重编导致两版写同一份设置。
+/// 构建身份：bundle id 以 `.dev` 结尾（make-app-dev.sh 产物）或 debug 构建（cargo
+/// run / cargo test 的裸二进制）= 开发版。dev 与 release 的设置文件、开机启动项、
+/// 默认值、服务库全部隔离。
+/// 以 bundle id 为准而非编译期标记：同一 target 目录先后构建 release/dev 时环境
+/// 变量未必触发重编，且 dev 包本身就是 release 构建（cfg!(debug_assertions)=false）。
 static DEV_BUILD: OnceLock<bool> = OnceLock::new();
 
-fn init_profile(app: &tauri::AppHandle) {
-    let dev = app.config().identifier.ends_with(".dev") || cfg!(debug_assertions);
-    let _ = DEV_BUILD.set(dev);
+/// 从 Info.plist 文本判 bundle id 是否 `.dev` 结尾（Tauri bundler 产出 XML plist，
+/// `<key>CFBundleIdentifier</key>` 的下一行是 `<string>值</string>`）。
+fn plist_bundle_id_is_dev(text: &str) -> bool {
+    let Some(idx) = text.find("<key>CFBundleIdentifier</key>") else {
+        return false;
+    };
+    let rest = &text[idx..];
+    let Some(start) = rest.find("<string>") else {
+        return false;
+    };
+    let after = &rest[start + "<string>".len()..];
+    let Some(end) = after.find("</string>") else {
+        return false;
+    };
+    after[..end].trim().ends_with(".dev")
+}
+
+/// 运行期读所在 app bundle 的 Info.plist 判身份。裸二进制（无 Contents/Info.plist）
+/// 返回 false——release 身份，debug 场景由 resolve_dev_build 提前放行。
+#[cfg(target_os = "macos")]
+fn bundle_id_is_dev() -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let Some(contents) = exe
+        .ancestors()
+        .find(|p| p.file_name().is_some_and(|n| n == "Contents"))
+    else {
+        return false;
+    };
+    fs::read_to_string(contents.join("Info.plist"))
+        .map(|t| plist_bundle_id_is_dev(&t))
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn bundle_id_is_dev() -> bool {
+    false
+}
+
+/// 启动期判定构建身份，main() 第一件事就 set DEV_BUILD。不能依赖 tauri setup：
+/// ensure_service（选 run.sh 分支）与 port()（选探测端口）都先于 setup 执行，
+/// 拿不到 app.config().identifier；也**不能**回落 cfg!(debug_assertions)——
+/// make-app-dev.sh 用 `tauri build`（无 --debug）出包，dev 包同为 release 构建，
+/// cfg! 恒 false，会把 dev 壳误判成 release 拉到 8318 生产库
+/// （2026-11-17 开机故障根因：壳等 8317、run.sh 管 8318，双双报「服务未启动」）。
+fn resolve_dev_build() -> bool {
+    if cfg!(debug_assertions) {
+        return true;
+    }
+    bundle_id_is_dev()
 }
 
 fn is_dev_build() -> bool {
+    // 兜底只服务测试进程（cargo test 不跑 main，OnceLock 未 set，测试二进制恒 debug）。
     *DEV_BUILD.get().unwrap_or(&cfg!(debug_assertions))
 }
 
@@ -40,14 +90,27 @@ fn profile() -> &'static str {
     }
 }
 
-/// 端口跟构建身份走：debug=dev=8317（历史锚点）、release=正式=8318——两壳各探
+/// setup 期交叉校验：DEV_BUILD 已在 main() 由 Info.plist 判定（resolve_dev_build），
+/// 这里用 tauri 侧拿到的 bundle id 复核一次。两处同源（bundler 都写进 Info.plist），
+/// 不一致只告警不改判——OnceLock 已定，且真不一致说明打包产物异常，该暴露。
+fn verify_profile(app: &tauri::AppHandle) {
+    let expected = app.config().identifier.ends_with(".dev") || cfg!(debug_assertions);
+    if is_dev_build() != expected {
+        eprintln!(
+            "[desktop] 构建身份可疑：Info.plist 判定 dev={}，tauri bundle id={}（预期 {expected}）",
+            is_dev_build(),
+            app.config().identifier
+        );
+    }
+}
+
+/// 端口跟构建身份走：dev=8317（历史锚点）、release=8318——两壳各探
 /// 各的端口、各拉各的服务，开机竞速不再决定数据目录（2026-11-16 排障：正式壳
 /// 先起 8317 → dev 窗口连上生产空库，664 条会话"消失"实为连错库）。
-/// 注意 ensure_service 跑在 tauri setup（init_profile）之前，这里不能用
-/// is_dev_build()（OnceLock 未 set）——好在 debug/release 与 bundle id 身份一致
-/// （make-app.sh 只出 release 包，dev 包恒为 debug 构建），cfg! 即真源。
+/// 判定真源是 main() 最先 set 的 DEV_BUILD（见 resolve_dev_build），不能回落
+/// cfg!(debug_assertions)：dev 包是 release 构建，cfg! 恒 false。
 fn port() -> u16 {
-    if cfg!(debug_assertions) {
+    if is_dev_build() {
         8317
     } else {
         8318
@@ -446,6 +509,9 @@ fn desktop_set_settings(
 /* ==================== 入口 ==================== */
 
 fn main() {
+    // 身份判定必须最先做：ensure_service 按 profile 选 run.sh 分支与端口，
+    // 误判会把 dev 壳导向 8318 生产库（见 resolve_dev_build 文档）。
+    let _ = DEV_BUILD.set(resolve_dev_build());
     let up = ensure_service();
     let cli_silent = std::env::args().any(|a| a == "--silent");
 
@@ -480,7 +546,7 @@ fn main() {
             }
         })
         .setup(move |app| {
-            init_profile(app.handle());
+            verify_profile(app.handle());
             let settings = load_settings(app.handle());
             app.manage(DesktopState {
                 settings: Mutex::new(settings.clone()),
@@ -648,6 +714,24 @@ mod tests {
     #[test]
     fn xml_escape_covers_specials() {
         assert_eq!(xml_escape("a&b<c>d\"e'f"), "a&amp;b&lt;c&gt;d&quot;e&apos;f");
+    }
+
+    #[test]
+    fn plist_bundle_id_parsing() {
+        // Tauri bundler 实际格式：key 与 string 值分行
+        let dev = "<dict>\n  <key>CFBundleName</key><string>Agent Depot Dev</string>\n  <key>CFBundleIdentifier</key>\n  <string>local.planarcat.agent-depot.dev</string>\n</dict>";
+        assert!(plist_bundle_id_is_dev(dev));
+        let release = "<key>CFBundleIdentifier</key>\n<string>local.planarcat.agent-depot</string>";
+        assert!(!plist_bundle_id_is_dev(release));
+        // 同前缀但非 .dev 结尾不得误判
+        let tricky =
+            "<key>CFBundleIdentifier</key><string>local.planarcat.agent-depot.device</string>";
+        assert!(!plist_bundle_id_is_dev(tricky));
+        // 键缺失 / 非 plist 文本 → release
+        assert!(!plist_bundle_id_is_dev("no plist here"));
+        assert!(!plist_bundle_id_is_dev(
+            "<key>CFBundleName</key><string>x</string>"
+        ));
     }
 
     #[cfg(target_os = "macos")]
