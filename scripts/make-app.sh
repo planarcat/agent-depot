@@ -33,4 +33,10 @@ if [ -d "$APP" ]; then
 fi
 
 cp -R "$BUNDLE" "$APP"
+
+# 换了二进制必须重登记 LaunchServices：旧实例在系统里登记的 ad-hoc cdhash 还挂在
+# 这个安装路径上，不重登记的话，下次开机 launchd RunAtLoad 拉起新二进制会因
+# Launch Constraint Violation 被 SIGKILL（2026-11-17 实测）。
+LSREG="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+"$LSREG" -f "$APP" || true
 echo "built: $APP"
