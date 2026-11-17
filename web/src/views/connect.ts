@@ -1,7 +1,11 @@
 /* 连接画布（Skills / MCP 合并页）——三行看板 + 连线层。
    四态连线（2026-11-14 口径收敛）：绿实=全链接自动同步 / 绿虚=部分链接自动同步 /
    灰虚=已链接不自动同步 / 无连线=不画线。所有点击直接落库——原型「编辑态」的
-   暂存确认层（红线 / 右下确认条）已删，见 FIGMA_OVERRIDES.md 2026-11-14 条目。 */
+   暂存确认层（红线 / 右下确认条）已删，见 FIGMA_OVERRIDES.md 2026-11-14 条目。
+   2026-11-17 补原型缺口（依旧全部点击即落库，不引入任何暂存中间态）：
+   ① 图例可点选过滤连线 ② 面板条目搜索 ③ 成对批量全跟随/全排除 + 只看排除
+   ④ 未链接点条目圆点 = 建链并只跟随这一条 ⑤ 工具卡 hover 快捷接/断（断开走二次确认）
+   ⑥ 上游从属线点击 = 批量暂停/恢复该通道全部连线。 */
 
 import { api, post, send } from "../core/api.ts";
 import { byId, mustById, qs, qsa } from "../core/dom.ts";
@@ -24,11 +28,17 @@ import { HubUI } from "../hub-ui.ts";
 /** 工具实体（/api/state.tool_list 投影，画布只用到 id / name / color）。 */
 type ToolRow = CanvasState["tools"][number];
 
+/** 图例过滤键（原型 activeLegendFilter 口径；blocked 视觉同灰虚，归入 paused 组）。 */
+type LegendFilter = "full" | "part" | "paused";
+
 /** 画布状态：状态机契约 + 视图专有字段（目录 / 仓库用真实 API 类型）。 */
 interface ConnectState extends CanvasState {
   dirs: LocalDir[];
   repos: RemoteRepo[];
   _panelShown: boolean;
+  legend: LegendFilter | null /* 点图例聚焦同类线；null = 不过滤 */;
+  q: string /* 面板条目搜索词 */;
+  onlyEx: boolean /* 成对视图：只看被排除条目 */;
 }
 
 /** 目录 id 归一入参（渲染层可能来自 dataset 字符串）。 */
@@ -74,6 +84,9 @@ export const ConnectView = (() => {
     types: { skills: true, mcp: true },
     panelShown: false,
     _panelShown: false,
+    legend: null,
+    q: "",
+    onlyEx: false,
   };
 
   /* ---------------- 状态机薄适配（S 本身即 CanvasState，直接传入） ---------------- */
@@ -173,7 +186,7 @@ export const ConnectView = (() => {
 
   /* ---------------- 骨架 ---------------- */
 
-  const Build = "20261105-4"; /* 构建标记：DevTools 里看 .cv[data-build] 即知页面加载的是哪版 */
+  const Build = "20261117-1"; /* 构建标记：DevTools 里看 .cv[data-build] 即知页面加载的是哪版 */
 
   function shell(): string {
     return `
@@ -184,11 +197,11 @@ export const ConnectView = (() => {
           <span><b id="cv-st-remote">0</b>远程拉取</span>
           <span><b id="cv-st-deployed">0</b>已部署到工具</span>
           <span class="cv-sep"></span>
-          <span><i class="cv-lswatch is-full"></i>全链接 · 自动同步</span>
-          <span><i class="cv-lswatch is-part"></i>部分链接 · 自动同步</span>
-          <span><i class="cv-lswatch is-paused"></i>已链接 · 不自动同步</span>
+          <button class="cv-lf" data-lf="full" data-testid="cv-lf-full" title="点选：只亮「全链接」连线，再点取消"><i class="cv-lswatch is-full"></i>全链接 · 自动同步</button>
+          <button class="cv-lf" data-lf="part" data-testid="cv-lf-part" title="点选：只亮「部分链接」连线，再点取消"><i class="cv-lswatch is-part"></i>部分链接 · 自动同步</button>
+          <button class="cv-lf" data-lf="paused" data-testid="cv-lf-paused" title="点选：只亮灰虚线（含全部排除），再点取消"><i class="cv-lswatch is-paused"></i>已链接 · 不自动同步</button>
           <span><i class="cv-bdot off"></i>无连线 = 无链接</span>
-          <span class="cv-rule">点连线 = 暂停/恢复自动同步 · 卡上 × = 断连 · ↔ = 链接 · 选中目录后展示真链路 · 类型卡多选、工具卡单选</span>
+          <span class="cv-rule">点连线 = 暂停/恢复自动同步 · 卡上 × = 断连 · ↔ = 链接 · 选中目录后展示真链路 · 类型卡多选、工具卡单选 · 点图例过滤连线</span>
         </div>
         <div class="cv-main">
           <div class="cv-maincol">
@@ -477,6 +490,26 @@ export const ConnectView = (() => {
       el.classList.toggle("is-on", S.selTool === id);
       el.classList.toggle("is-off", !!S.selTool && S.selTool !== id);
     });
+    /* 工具卡快捷接 / 断（原型 onQuickToggleSourceToolLink 口径）：选中目录后 hover 工具卡露出；
+       每轮先清后插，随选中态与连线态刷新（断开为破坏性动作，按钮态随连线翻转） */
+    qsa<HTMLElement>(".cv-quick", host).forEach((b) => {
+      b.remove();
+    });
+    const qdid = S.selDir;
+    if (qdid) {
+      const dn = S.dirs.find((x) => x.id === qdid);
+      qsa<HTMLElement>('.tcard[data-src^="tool:"]', host).forEach((el) => {
+        const tid = (el.getAttribute("data-src") ?? "").slice(5);
+        const t0 = S.tools.find((x) => x.id === tid);
+        const linked = aggState(qdid, tid) !== null;
+        const label = `${dn ? dn.name : qdid} → ${t0 ? t0.name : tid}`;
+        el.insertAdjacentHTML(
+          "beforeend",
+          `<button class="cv-quick${linked ? " is-unlink" : ""}" data-quick="${linked ? "unlink" : "link"}" data-tool="${esc(tid)}"
+          data-testid="cv-quick-${esc(tid)}" title="${linked ? `断开 ${esc(label)} 的全部连线（清理该工具内已同步条目）` : `链接 ${esc(label)}（双通道，复制模式）`}">${linked ? IconUnlink : IconLink}</button>`,
+        );
+      });
+    }
   }
 
   /* ---------------- 连线 ---------------- */
@@ -504,23 +537,34 @@ export const ConnectView = (() => {
       return `M ${a.x} ${a.y} C ${a.x} ${a.y + dy}, ${b.x} ${b.y - dy}, ${b.x} ${b.y}`;
     };
 
-    /* 期望的连线集合：weak = 目录底部中心 → 通道卡顶部中心（单起点，同款绿实线，无交互）；
+    /* 期望的连线集合：weak = 目录底部中心 → 通道卡顶部中心（单起点，绿实线，可点批量暂停/恢复）；
        lane = 通道卡底部 → 工具卡顶部，四态。聚焦工具时只画选中者的 lane 线。 */
     const want: WantLine[] = [];
     const selDir = S.selDir;
     const selTool = S.selTool;
+    /* 图例过滤（原型 activeLegendFilter 口径）：blocked 视觉同灰虚，归入 paused 组 */
+    const lfMatch = (st: LaneVisual): boolean =>
+      !S.legend ||
+      (S.legend === "full"
+        ? st === "full"
+        : S.legend === "part"
+          ? st === "part"
+          : st === "paused" || st === "blocked");
+    const dirName = S.dirs.find((x) => x.id === selDir)?.name ?? "";
     const dirEl = selDir ? el("dir:" + selDir) || el("repo:" + selDir) : null;
     if (dirEl) {
       const fromDir = pt(dirEl, "bottom");
       const anyOn = S.types.skills || S.types.mcp;
+      const weakDim = !!S.legend && S.legend !== "full";
       Channels.forEach((ch) => {
         const c = el("ch:" + ch);
         if (c && !(anyOn && !S.types[ch])) {
           want.push({
             key: `w:${selDir}:${ch}`,
-            cls: "cv-line cv-line--weak",
+            cls: "cv-line cv-line--weak" + (weakDim ? " is-dim" : ""),
             solid: true,
             d: seg(fromDir, pt(c, "top")),
+            title: `批量暂停 / 恢复：${dirName} → ${Ch[ch]} 的全部连线`,
           });
         }
       });
@@ -536,7 +580,7 @@ export const ConnectView = (() => {
           if (!toolEl) return;
           want.push({
             key: laneKey(selDir, t.id, ch),
-            cls: "cv-line",
+            cls: "cv-line" + (lfMatch(st) ? "" : " is-dim"),
             st,
             d: seg(pt(c, "bottom"), pt(toolEl, "top")),
             /* off 已在上面 return，原三元恒落到「断开」 */
@@ -551,16 +595,17 @@ export const ConnectView = (() => {
        消失动效（原型 draw-out 口径）：实线向起点收起（dashoffset 0 → -100），
        虚线无收起形态 → 原地淡出。 */
     const wantKeys = new Set(want.map((o) => o.key));
-    qsa<SVGElement>(".cv-lineg[data-lane], .cv-line--weak[data-lane]", svg).forEach((n) => {
+    qsa<SVGElement>(".cv-lineg[data-lane], .cv-weakg[data-lane]", svg).forEach((n) => {
       const laneName = n.dataset["lane"];
       const marked = n as SVGElement & { _leaving?: boolean };
       if ((laneName !== undefined && wantKeys.has(laneName)) || marked._leaving) return;
-      const isGroup = n.classList.contains("cv-lineg");
+      const isGroup = n.classList.contains("cv-lineg") || n.classList.contains("cv-weakg");
       const ghost = n.cloneNode(true) as SVGElement;
       const gvis = isGroup ? qs<SVGElement>(".cv-line", ghost) : ghost;
       if (!gvis) return;
       marked._leaving = true;
-      const solid = isGroup ? gvis.classList.contains("is-on") : true; /* weak 从属线恒实线 */
+      /* 实线（绿实/从属线）收起；虚线（is-part / is-paused）无收起形态 → 淡出 */
+      const solid = !(gvis.classList.contains("is-part") || gvis.classList.contains("is-paused"));
       /* 画入动画在克隆体上会重播 → 摘除，改由内联样式接管收起过渡 */
       gvis.classList.remove("is-in");
       ghost.removeAttribute("data-lane");
@@ -590,7 +635,12 @@ export const ConnectView = (() => {
     const stSuffix = (st: LaneVisual | undefined): string => (st ? (StCls[st] ?? "") : "");
     const build = (o: WantLine): string => {
       if (o.solid) {
-        return `<path class="${o.cls} is-in" pathLength="100" data-lane="${o.key}" d="${o.d}"></path>`;
+        /* 从属线成组：命中线 + 实线，组可点（批量暂停/恢复），title 提供可发现性 */
+        return `<g class="cv-weakg" data-lane="${o.key}">
+        ${o.title ? `<title>${esc(o.title)}</title>` : ""}
+        <path class="cv-hit" d="${o.d}"></path>
+        <path class="${o.cls} is-in" pathLength="100" d="${o.d}"></path>
+      </g>`;
       }
       const extra = o.st === "full" ? " is-on is-in" : ` ${stSuffix(o.st)} is-fade`;
       return `<g class="cv-lineg" data-lane="${o.key}">
@@ -600,23 +650,21 @@ export const ConnectView = (() => {
     };
     want.forEach((o) => {
       const n = o.solid
-        ? svg.querySelector<Element>(`.cv-line--weak[data-lane="${o.key}"]`)
+        ? svg.querySelector<Element>(`.cv-weakg[data-lane="${o.key}"]`)
         : svg.querySelector<Element>(`.cv-lineg[data-lane="${o.key}"]`);
       if (!n) {
         svg.insertAdjacentHTML("beforeend", build(o));
         return;
       }
-      const vis = o.solid ? n : qs<Element>(".cv-line", n);
+      const vis = qs<Element>(".cv-line", n);
       if (!vis) return;
       /* 原地更新：路径/状态变了靠 CSS stroke 过渡，不重播画入 */
       if (vis.getAttribute("d") !== o.d) {
         vis.setAttribute("d", o.d);
         const rp = qs<Element>(".reveal", vis);
         if (rp) rp.setAttribute("d", o.d);
-        if (!o.solid) {
-          const hit = qs<Element>(".cv-hit", n);
-          if (hit) hit.setAttribute("d", o.d);
-        }
+        const hit = qs<Element>(".cv-hit", n);
+        if (hit) hit.setAttribute("d", o.d);
       }
       if (o.solid) return;
       const cls = o.cls + stSuffix(o.st);
@@ -724,6 +772,8 @@ export const ConnectView = (() => {
   }
 
   function chipFlow(): string {
+    const q = S.q.trim().toLowerCase();
+    const filtering = !!q || (S.onlyEx && !!S.selTool);
     let h = "";
     const groups: [Channel, string, string[]][] = [
       ["skills", "SKILLS", S.items.skills],
@@ -731,13 +781,27 @@ export const ConnectView = (() => {
     ];
     for (const [ch, label, items] of groups) {
       if (!S.types[ch]) continue; /* 类型卡未选中 → 该组不显示（与画布过滤同口径） */
-      h += `<div class="cv-cgroup"><span class="lab">${label}</span><span class="rule"></span><span class="n">${items.length}</span></div>`;
+      /* 原型 searchQuery / onlyExcluded 口径：按名称包含 + 只看排除（成对视图） */
+      const shown = items.filter((n) => {
+        if (q && !n.toLowerCase().includes(q)) return false;
+        if (S.onlyEx && S.selTool && !laneExcluded(S.selDir, S.selTool, ch).has(n)) return false;
+        return true;
+      });
+      h += `<div class="cv-cgroup"><span class="lab">${label}</span><span class="rule"></span><span class="n">${filtering ? `${shown.length}/${items.length}` : items.length}</span></div>`;
       h += items.length
-        ? `<div class="cv-cflow">${items.map((n) => itemRow(n, ch)).join("")}</div>`
+        ? shown.length
+          ? `<div class="cv-cflow">${shown.map((n) => itemRow(n, ch)).join("")}</div>`
+          : `<div class="cv-restline">${q || S.onlyEx ? "无匹配条目" : "此目录没有 " + label + " 条目"}</div>`
         : `<div class="cv-restline">此目录没有 ${label} 条目</div>`;
     }
     if (!h) h = '<div class="cv-restline">两类都已关闭 —— 点上方 Skills / MCP 卡片可重新开启</div>';
     return h;
+  }
+
+  /* 只重绘条目清单：搜索输入 / 只看排除切换时不整板重建，保住输入焦点与光标 */
+  function renderPanelList(): void {
+    const host = byId("cv-ipitems");
+    if (host) host.innerHTML = chipFlow();
   }
 
   function renderPanel(): void {
@@ -750,6 +814,8 @@ export const ConnectView = (() => {
       p.hidden = true;
       p.innerHTML = "";
       S._panelShown = false;
+      S.q = "";
+      S.onlyEx = false; /* 面板全关：搜索词 / 只看排除一并复位 */
       p.classList.remove("is-in", "is-pair");
       return;
     }
@@ -819,11 +885,26 @@ export const ConnectView = (() => {
         : '<div class="cv-restline">尚无连接。先点一个目录卡，再保持本工具卡选中，即可在右侧连接。</div>';
     }
     p.classList.toggle("is-pair", !!(d && selTool));
+    /* 条目工具行（原型 searchQuery / batch / onlyExcluded 口径）：目录视图只有搜索；成对视图加批量与只看排除 */
+    const isPair = !!(d && selTool);
+    const bar =
+      d && !repo
+        ? `<div class="cv-itoolbar">
+        <input id="cv-q" class="hub-input cv-q" placeholder="搜索条目…" value="${esc(S.q)}" data-testid="cv-q">${
+          isPair
+            ? `<button class="cv-bbtn" data-batch="follow" data-testid="cv-batch-follow" title="取消全部排除，恢复全量跟随">全部跟随</button>
+        <button class="cv-bbtn" data-batch="exclude" data-testid="cv-batch-exclude" title="排除全部条目（连线转灰虚，工具内文件保留）">全部排除</button>
+        <button class="cv-bbtn${S.onlyEx ? " is-on" : ""}" data-onlyex data-testid="cv-onlyex" title="只显示被排除的条目">只看排除</button>`
+            : ""
+        }
+      </div>`
+        : "";
     p.innerHTML = `
       <div class="cv-iph"><b>${esc(ttl)}</b>
         <button class="cv-iph__x" id="cv-panel-x" title="收起">✕</button></div>
       <div class="cv-pstat">${stat}</div>
-      <div class="cv-ipitems">${list}</div>`;
+      ${bar}
+      <div class="cv-ipitems" id="cv-ipitems">${list}</div>`;
 
     const x = byId("cv-panel-x");
     if (x)
@@ -832,6 +913,28 @@ export const ConnectView = (() => {
         S.selTool = null;
         S.selRepo = null;
         renderAll();
+      };
+    const qin = byId<HTMLInputElement>("cv-q");
+    if (qin) {
+      qin.oninput = () => {
+        S.q = qin.value;
+        renderPanelList();
+      };
+      if (S.q) {
+        /* renderAll 重建面板后恢复搜索焦点与光标（输入态不因点圆点等操作丢失） */
+        qin.focus();
+        qin.setSelectionRange(qin.value.length, qin.value.length);
+      }
+    }
+    qsa<HTMLElement>("[data-batch]", p).forEach((b) => {
+      b.onclick = () => void batchItems(b.dataset["batch"] === "follow");
+    });
+    const ox = qs<HTMLElement>("[data-onlyex]", p);
+    if (ox)
+      ox.onclick = () => {
+        S.onlyEx = !S.onlyEx;
+        ox.classList.toggle("is-on", S.onlyEx);
+        renderPanelList();
       };
     qsa<HTMLElement>(".cv-mode button", p).forEach((b) => {
       b.onclick = async () => {
@@ -1083,6 +1186,14 @@ export const ConnectView = (() => {
     root.addEventListener("click", (e: MouseEvent) => {
       const target = e.target;
       if (!(target instanceof Element)) return;
+      /* 工具卡快捷接/断（原型 onQuickToggleSourceToolLink 口径）：先于卡分支拦下，不触发选中 */
+      const quick = target.closest<HTMLElement>(".cv-quick[data-tool]");
+      if (quick) {
+        const toolId = quick.dataset["tool"] ?? "";
+        if (toolId && S.selDir)
+          void quickToggleSourceTool(quick.dataset["quick"] === "unlink", toolId);
+        return;
+      }
       /* 卡片悬停动作（拉取/编辑/移除）：须先于卡分支，且不冒泡成选中 */
       const actBtn = target.closest<HTMLElement>(".tcard[data-src] [data-act]");
       if (actBtn) {
@@ -1112,10 +1223,20 @@ export const ConnectView = (() => {
         fold.closest(".srcgroup")?.classList.toggle("is-closed");
         return;
       }
+      /* 图例点选过滤（原型 activeLegendFilter 口径）：高亮同类线，再点取消 */
+      const lfBtn = target.closest<HTMLElement>("[data-lf]");
+      if (lfBtn) {
+        const lf = lfBtn.dataset["lf"] as LegendFilter | undefined;
+        S.legend = S.legend === lf ? null : lf || null;
+        renderAll();
+        return;
+      }
       const card = target.closest<HTMLElement>(".tcard[data-src]");
       if (card) {
         const k = card.getAttribute("data-src");
         if (!k) return;
+        /* 选中目录 / 仓库 / 工具卡时清掉图例过滤（原型 handleSelectSource/ToolCard 口径）；类型卡不清 */
+        if (!k.startsWith("ch:")) S.legend = null;
         if (k.startsWith("dir:")) {
           const id = +k.slice(4);
           if (S.selDir === id) {
@@ -1181,9 +1302,17 @@ export const ConnectView = (() => {
         }
         return;
       }
-      const lane = target.closest<HTMLElement>(".cv-lineg[data-lane], .cv-line[data-lane]");
+      const lane = target.closest<HTMLElement>(
+        ".cv-lineg[data-lane], .cv-weakg[data-lane], .cv-line[data-lane]",
+      );
       if (lane) {
-        const [dirId = "", toolId = "", ch = ""] = (lane.dataset["lane"] ?? "").split(":");
+        const laneKey0 = lane.dataset["lane"] ?? "";
+        const [dirId = "", toolId = "", ch = ""] = laneKey0.split(":");
+        /* 上游从属线（w:目录:通道）＝ 批量暂停/恢复该通道全部下游（原型 handleClickUpperEdge 口径） */
+        if (toolId === "" || laneKey0.startsWith("w:")) {
+          if (dirId && ch) void batchToggleChannel(Number(dirId), ch as Channel);
+          return;
+        }
         /* 口径（用户 2026-11-05 / 2026-11-14 收敛，点击即落库）：
            绿线(自动同步)点击 → 暂停(灰虚线，不自动同步)；
            灰虚线(已链接不自动同步)点击 → 恢复自动同步（blocked 连恢复带清空排除） */
@@ -1212,13 +1341,14 @@ export const ConnectView = (() => {
       }
       if (
         !target.closest(
-          ".cv-ipanel, .cv__apply, .cv__lines, .cv__lane-ops, .hub-modal, .hub-btn",
+          ".cv-ipanel, .cv__apply, .cv__lines, .cv__lane-ops, .hub-modal, .hub-btn, [data-lf]",
         ) &&
-        (S.selDir || S.selTool || S.selRepo)
+        (S.selDir || S.selTool || S.selRepo || S.legend)
       ) {
         S.selDir = null;
         S.selTool = null;
         S.selRepo = null;
+        S.legend = null; /* 点空白退出 = 全部退出（原型 handleExitEditingMode 口径） */
         renderAll();
       }
     });
@@ -1241,7 +1371,34 @@ export const ConnectView = (() => {
     if (!S.selDir) return;
     const bind = baseBind(S.selDir, toolId, ch);
     if (!bind) {
-      HubUI.toast("该通道未链接——点通道卡下方 ↔ 先建立链接", "warn");
+      /* 原型口径（点击即落库版）：未链接时点条目圆点 = 建链并只跟随这一条 */
+      const tgt = targetOf(toolId, ch);
+      if (!tgt) {
+        HubUI.toast("该工具没有可链接的目录目标", "warn");
+        return;
+      }
+      const r0 = await post<PullResult>("/api/skills/dir-bindings", {
+        dir_id: normDir(S.selDir),
+        target_ids: [tgt.id],
+        mode: "copy",
+      });
+      const nb = baseBind(S.selDir, toolId, ch);
+      if (!(r0.data.ok && nb)) {
+        HubUI.toast(r0.data.error || "建链失败", "error");
+        await loadAll();
+        renderAll();
+        return;
+      }
+      const others = (S.items[ch] || []).filter((n) => n !== item);
+      const r1 = await send<PullResult>(`/api/skills/dir-bindings/${nb.id}`, "PATCH", {
+        excluded: others,
+      });
+      await loadAll();
+      renderAll();
+      HubUI.toast(
+        r1.data.ok ? `已链接，仅「${item}」跟随` : "已建链，但跟随设置未能生效",
+        r1.data.ok ? "success" : "warn",
+      );
       return;
     }
     const ex = laneExcluded(S.selDir, toolId, ch);
@@ -1258,6 +1415,136 @@ export const ConnectView = (() => {
   }
 
   /* ---------------- 点击即落库（无暂存层） ---------------- */
+
+  /** 成对面板批量条目（原型 onStageBatchAllItems 口径，落库版）：
+      follow=true 全部跟随（清空排除），false 全部排除（连线转灰虚 blocked，工具内文件保留）。 */
+  async function batchItems(follow: boolean): Promise<void> {
+    const did = S.selDir;
+    const tid = S.selTool;
+    if (!(did && tid)) return;
+    let ok = true;
+    let n = 0;
+    for (const ch of Channels) {
+      const bind = baseBind(did, tid, ch);
+      if (!bind) continue;
+      const names = S.items[ch] || [];
+      if (!follow && names.length === 0) continue; /* 条目清单未加载，无法安全全排除 */
+      const r = await send<PullResult>(`/api/skills/dir-bindings/${bind.id}`, "PATCH", {
+        excluded: follow ? [] : names.slice(),
+      });
+      ok = ok && r.data.ok;
+      n += 1;
+    }
+    await loadAll();
+    renderAll();
+    HubUI.toast(
+      n === 0
+        ? "该目录与工具尚无连线"
+        : ok
+          ? follow
+            ? "已恢复全部条目跟随"
+            : "已排除全部条目"
+          : "批量操作未能全部生效",
+      n === 0 ? "info" : ok ? "success" : "warn",
+    );
+  }
+
+  /** 上游从属线批量（原型 handleClickUpperEdge 口径，落库版）：
+      该目录某通道的全部下游连线，全暂停则一键恢复，否则一键暂停；排除清单不动。 */
+  async function batchToggleChannel(dirId: number, ch: Channel): Promise<void> {
+    const rows = S.tools
+      .filter((t) => (S.selTool ? t.id === S.selTool : true))
+      .map((t) => ({ t, bind: baseBind(dirId, t.id, ch) }))
+      .filter((x): x is { t: ToolRow; bind: DirBinding } => !!x.bind && !!targetOf(x.t.id, ch));
+    if (!rows.length) {
+      HubUI.toast("该通道还没有连线可批量切换", "info");
+      return;
+    }
+    const enable = rows.every((x) => !x.bind.enabled); /* 全暂停 → 一键恢复；否则 → 一键暂停 */
+    let ok = true;
+    for (const x of rows) {
+      const r = await send<PullResult>(`/api/skills/dir-bindings/${x.bind.id}`, "PATCH", {
+        enabled: enable,
+      });
+      ok = ok && r.data.ok;
+    }
+    await loadAll();
+    renderAll();
+    const dn = S.dirs.find((d) => d.id === dirId);
+    HubUI.toast(
+      ok
+        ? `${enable ? "已恢复" : "已暂停"} ${dn ? dn.name + " → " + Ch[ch] + " 的" : ""}${rows.length} 条连线自动同步`
+        : "批量操作未能全部生效",
+      ok ? "success" : "warn",
+    );
+  }
+
+  /** 工具卡 hover 快捷接 / 断（原型 onQuickToggleSourceToolLink 口径，落库版）：
+      link = 双通道建链并启用；unlink = 断开全部连线——破坏性，走二次确认（同线上 ×）。 */
+  async function quickToggleSourceTool(unlink: boolean, toolId: string): Promise<void> {
+    const did = S.selDir;
+    if (!did) return;
+    const t = S.tools.find((x) => x.id === toolId);
+    const dn = S.dirs.find((x) => x.id === did);
+    const label = `${dn ? dn.name : did} → ${t ? t.name : toolId}`;
+    if (unlink) {
+      const binds = Channels.map((ch) => baseBind(did, toolId, ch)).filter(
+        (b): b is DirBinding => !!b,
+      );
+      if (!binds.length) {
+        HubUI.toast("该目录与工具尚未连线", "info");
+        return;
+      }
+      HubUI.confirm(
+        "断开全部连线",
+        `将断开 ${esc(label)} 的 ${binds.length} 条连线，该工具内已同步条目会被清理。确定？`,
+        async () => {
+          let ok = true;
+          for (const b of binds) {
+            const r = await send<PullResult>(`/api/skills/dir-bindings/${b.id}?clean=1`, "DELETE");
+            ok = ok && r.data.ok;
+          }
+          await loadAll();
+          renderAll();
+          HubUI.toast(ok ? "已断开全部连线" : "部分连线未能断开", ok ? "success" : "error");
+        },
+        { danger: true },
+      );
+      return;
+    }
+    let ok = true;
+    let n = 0;
+    for (const ch of Channels) {
+      if (!targetOf(toolId, ch)) continue;
+      let bind = baseBind(did, toolId, ch);
+      if (!bind) {
+        const tgt = targetOf(toolId, ch);
+        const r = await post<PullResult>("/api/skills/dir-bindings", {
+          dir_id: did,
+          target_ids: [tgt ? tgt.id : 0],
+          mode: "copy",
+        });
+        ok = ok && r.data.ok;
+        bind = baseBind(did, toolId, ch);
+      }
+      if (!bind) continue;
+      const r2 = await send<PullResult>(`/api/skills/dir-bindings/${bind.id}`, "PATCH", {
+        enabled: true,
+      });
+      ok = ok && r2.data.ok;
+      n += 1;
+    }
+    await loadAll();
+    renderAll();
+    HubUI.toast(
+      n === 0
+        ? "该工具没有可链接的目录目标"
+        : ok
+          ? `已链接 ${label} 的 ${n} 条通道`
+          : "链接未能完成",
+      n === 0 ? "info" : ok ? "success" : "error",
+    );
+  }
 
   /** 单条连线的直接生效：on=建连/恢复自动同步，paused=暂停，clean=断连并清理。
       clearExcluded 仅恢复 blocked 用（口径：恢复即清空排除）。 */
@@ -1347,6 +1634,10 @@ export const ConnectView = (() => {
     set("cv-st-local", localN);
     set("cv-st-remote", remoteN);
     set("cv-st-deployed", deployed);
+    /* 图例激活态（点选过滤） */
+    qsa<HTMLElement>(".cv-lf").forEach((b) => {
+      b.classList.toggle("is-active", S.legend === b.dataset["lf"]);
+    });
   }
 
   function renderAll(): void {

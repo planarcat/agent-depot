@@ -1557,6 +1557,15 @@ button.msg__att:hover { border-color: var(--c-accent); background: var(--c-accen
 .cv-lswatch.is-full { border-top-style: solid; border-top-color: var(--c-ok); }
 .cv-lswatch.is-part { border-top-style: dashed; border-top-color: var(--c-ok); }
 .cv-lswatch.is-paused { border-top-style: dashed; border-top-color: var(--c-ink-4); }
+/* 图例可点选过滤（原型 activeLegendFilter 口径）：点选高亮同类线、其余压暗，再点取消 */
+.cv-lf { border: 0; background: none; padding: 2px 6px; border-radius: var(--r-xs);
+  display: inline-flex; align-items: center; gap: 6px; color: var(--c-ink-3); cursor: pointer;
+  font-size: inherit; white-space: nowrap;
+  transition: color var(--t-quick), background var(--t-quick); }
+.cv-lf:hover { background: var(--c-accent-soft); }
+.cv-lf.is-active { color: var(--c-accent); background: var(--c-accent-soft); font-weight: 600; }
+/* 图例过滤生效时：不匹配的连线压暗（hover 仍可加粗视认） */
+.cv-line.is-dim { opacity: .07; }
 
 /* ---- 主区：左画布 + 右浮动条目面板 ---- */
 .cv-main { display: flex; gap: var(--sp-3); flex: 1; min-height: 0; align-items: flex-start; }
@@ -1618,6 +1627,10 @@ button.msg__att:hover { border-color: var(--c-accent); background: var(--c-accen
 .cv-lineg { cursor: pointer; }
 .cv-lineg .cv-line { pointer-events: none; }
 .cv-lineg:hover .cv-line { stroke-width: 4.5; opacity: .85; }
+/* 上游从属线成组可点（原型 handleClickUpperEdge 口径）：批量暂停/恢复该通道全部下游连线 */
+.cv-weakg { cursor: pointer; }
+.cv-weakg .cv-line--weak { pointer-events: none; }
+.cv-weakg:hover .cv-line--weak { stroke-width: 4.5; opacity: .85; }
 
 /* ---- 线上按钮（原型 del-btn）：成对模式，通道卡底缘中心 ---- */
 .cv__lane-ops { position: absolute; inset: 0; pointer-events: none; z-index: var(--z-raised); }
@@ -1665,6 +1678,29 @@ button.msg__att:hover { border-color: var(--c-accent); background: var(--c-accen
 .cv-pill.ok { background: var(--c-ok-soft); color: var(--c-ok); }
 .cv-pill.part { background: var(--c-warn-soft); color: var(--c-warn); }
 .cv-ipitems { flex: 0 1 auto; overflow-y: auto; padding: var(--sp-2) var(--sp-3); }
+
+/* ---- 面板条目工具行（原型 searchQuery / batch / onlyExcluded 口径）---- */
+.cv-itoolbar { display: flex; align-items: center; gap: 6px; padding: 6px var(--sp-3);
+  border-bottom: 1px solid var(--c-line); flex: none; }
+.cv-itoolbar .hub-input { flex: 1; min-width: 0; height: 30px; font-size: var(--fs-s); }
+.cv-bbtn { border: 1px solid var(--c-line); border-radius: var(--r-xs); background: var(--c-surface);
+  color: var(--c-ink-3); font-size: var(--fs-xs); padding: 4px 8px; cursor: pointer; flex: none;
+  white-space: nowrap;
+  transition: color var(--t-quick), border-color var(--t-quick), background var(--t-quick); }
+.cv-bbtn:hover { color: var(--c-accent); border-color: var(--c-accent-line); background: var(--c-accent-soft); }
+.cv-bbtn.is-on { color: var(--c-accent); border-color: var(--c-accent-line);
+  background: var(--c-accent-soft); font-weight: 600; }
+
+/* ---- 工具卡快捷接 / 断（原型 onQuickToggleSourceToolLink 口径；选中目录后 hover 露出）---- */
+.cv-quick { position: absolute; top: 6px; right: 6px; width: 26px; height: 26px;
+  border: 1px solid var(--c-line); border-radius: var(--r-xs); background: var(--c-surface);
+  color: var(--c-ink-3); display: none; align-items: center; justify-content: center; padding: 0;
+  cursor: pointer; z-index: var(--z-raised);
+  transition: color var(--t-quick), border-color var(--t-quick), background var(--t-quick); }
+.tcard:hover .cv-quick { display: inline-flex; }
+.cv-quick svg { width: 14px; height: 14px; }
+.cv-quick:hover { color: var(--c-accent); border-color: var(--c-accent-line); background: var(--c-accent-soft); }
+.cv-quick.is-unlink:hover { color: var(--c-err); border-color: var(--c-err); background: var(--c-err-soft); }
 
 /* ---- 条目行（原型 c-item）：名称胶囊 + 工具色点列 ---- */
 .cv-cgroup { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-1) 0; }
