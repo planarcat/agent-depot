@@ -1,0 +1,15 @@
+[package]
+name = "gen-icon"
+version = "1.0.0"
+edition = "2021"
+
+# 桌面图标源图生成器（原 desktop/assets/gen_icon.py，2026-11-17 随「去 Python 化」移植）。
+# 独立零依赖小项目：不进 depotd workspace，不进门禁链路（一次性生成工具）。
+# 用法：cargo run --manifest-path desktop/tools/gen-icon/Cargo.toml -- [输出路径]
+# 产物默认 icon-source.png（1024x1024 RGBA）→ 再用 `tauri icon <产物>` 生成全套图标。
+
+[[bin]]
+name = "gen-icon"
+path = "src/main.rs"
+
+[dependencies]

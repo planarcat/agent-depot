@@ -7,7 +7,7 @@ use crate::error::{CoreError as CE, Result};
 use crate::fsutil;
 
 /// 领域事件。`kind` 对位 legacy ops.action；`payload.extra` 为各操作的字段契约
-/// （spec_ops_sse 契约 8 逐字段钉住）。
+/// （spec_ops_sse.rs 契约 8 逐字段钉住）。
 pub struct Event<'a> {
     pub module: &'a str,
     pub actor: &'a str,
@@ -50,7 +50,7 @@ pub fn append(tx: &Connection, ev: &Event) -> Result<i64> {
 }
 
 fn json_wrap(extra: &serde_json::Value) -> String {
-    // legacy detail 包裹契约：{"actor": …, "extra": {…}}（spec_ops_sse 契约 8）
+    // legacy detail 包裹契约：{"actor": …, "extra": {…}}（spec_ops_sse.rs 契约 8）
     serde_json::json!({ "actor": "local", "extra": extra }).to_string()
 }
 

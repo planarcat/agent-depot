@@ -28,3 +28,9 @@ depot-memory = { path = "../depot-memory" }
 depot-watch = { path = "../depot-watch" }
 rusqlite = { workspace = true }
 futures = { workspace = true }
+
+[dev-dependencies]
+# 行为真源 spec（tests/spec_*.rs）：黑盒 HTTP 打本 crate 的 depotd 二进制
+ureq = { workspace = true }
+tempfile = { workspace = true }
+libc = { workspace = true }

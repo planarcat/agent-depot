@@ -1,5 +1,5 @@
 //! 会话解析（scanners.py 对位）：多工具 JSONL/SQLite 采集、内容搜索、导出。
-//! 契约来源：spec_sessions（Tier 1）。
+//! 契约来源：depotd/tests/spec_sessions.rs（Tier 1）。
 
 use std::path::{Path, PathBuf};
 

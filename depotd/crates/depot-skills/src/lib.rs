@@ -1,5 +1,5 @@
 //! Skills 领域：registry（手动条目/版本链）、分发四态、目录绑定、容器发现、targets。
-//! 契约来源：tests/spec/spec_dispatch / spec_versioning / spec_bindings（Tier 1 行为真源）。
+//! 契约来源：depotd/tests/spec_dispatch.rs / spec_versioning.rs / spec_bindings.rs（Tier 1 行为真源）。
 
 use std::path::{Path, PathBuf};
 use std::collections::BTreeMap;

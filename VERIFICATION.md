@@ -1,6 +1,10 @@
 # 测试记录 · Verification
 
-> 最新更新：2026-11-07（行为规格套件 78 条 + 变异门禁扩容至 7 文件 + 4 个真 bug 修复）。原始报告在 `tests/evidence/`。
+> 最新更新：2026-11-17（仓库去 Python 化：spec 78 条移植 cargo 集成测试 + 门禁工具 Rust 化）。原始报告在 `tests/evidence/`。
+
+## 仓库去 Python 化（2026-11-17 · 判据形态迁移，一条不丢）
+
+用户拍板「行为真源移除、门禁工具改 Rust」。**迁移不是删判据**：spec 78 条从 `tests/spec/*.py`（Python unittest 黑盒打 depotd）逐条翻译为 `depotd/crates/depotd/tests/spec_*.rs`（cargo 集成测试，每文件一个独立 depotd 实例 + 独立沙箱，语义对齐原 `scripts/run_spec_rust.sh`），78/78 全绿后原 .py 才删除。两个升级：CrashRecovery 从软跳变**真测**（kill -9 + 同端口重启）；spec 判据进 cargo test 后行为层可被 cargo-mutants 变异打到。门禁工具同步 Rust 化：`depot-gate` 三子命令（spec-guards / lint-baseline / styles，原 3 个 .py）+ 14 条基线判据迁移（`depot-gate/tests/lint_baseline.rs`，断言文案原样）。杂项：`md2html.py` 删（零调用方）；`gen_icon.py` → `desktop/tools/gen-icon`（零依赖 Rust，产物目检一致）。check.sh 变 6 步：depot-gate 构建 → spec-guards → lint-baseline → 前端 check:ci → cargo 单测 + spec 78 → 桌面壳。下方各表格与「行为规格套件」章节为**历史口径**，工具名以本节为准。
 
 ### watcher 变异得分 33.00% → 74.03%（2026-10-17 补判据）
 

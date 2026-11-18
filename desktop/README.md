@@ -76,7 +76,7 @@ PATH="$HOME/.cargo/bin:$PATH" ./node_modules/.bin/tauri build
 | 想改什么 | 改哪里 |
 |---|---|
 | 窗口标题 / 尺寸 | `src-tauri/src/main.rs`：`.title()` / `.inner_size()` |
-| 应用图标 | 替换 `assets/icon-source.png`（1024×1024；可用 `assets/gen_icon.py` 重新生成），然后 `./node_modules/.bin/tauri icon assets/icon-source.png` |
+| 应用图标 | 替换 `assets/icon-source.png`（1024×1024；可用 `cargo run --manifest-path desktop/tools/gen-icon/Cargo.toml -- assets/icon-source.png` 重新生成），然后 `./node_modules/.bin/tauri icon assets/icon-source.png` |
 | 端口 | `src-tauri/src/main.rs` 的 `PORT`（与 `run.sh` 的 `HUB_PORT` 保持一致） |
 | 菜单栏菜单项 / 托盘事件 | `src-tauri/src/main.rs`：`ensure_tray()` |
 | 桌面设置默认值 / 持久化 | `src-tauri/src/main.rs`：`DesktopSettings` / `settings_path()` |

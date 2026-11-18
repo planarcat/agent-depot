@@ -1,4 +1,4 @@
-//! MCP 领域：JSON/TOML 注入、registry CRUD、verify、回退（spec_mcp Tier 1 行为真源）。
+//! MCP 领域：JSON/TOML 注入、registry CRUD、verify、回退（行为真源 depotd/tests/spec_mcp.rs）。
 
 use std::path::{Path, PathBuf};
 
@@ -64,7 +64,7 @@ pub fn normalize_config(cfg: &serde_json::Value, name: &str) -> Option<serde_jso
 // ============ 注入 plan/apply ============
 
 /// 嵌套取 section（Python _section_get 口径）：途中层缺失/非 dict → 替换为 {}，
-/// 末层保证是 dict（spec_mcp 钉现状：非 dict 层静默替换）。
+/// 末层保证是 dict（spec_mcp.rs 钉现状：非 dict 层静默替换）。
 pub(crate) fn section_get<'a>(
     data: &'a mut serde_json::Value, key_path: &str,
 ) -> &'a mut serde_json::Map<String, serde_json::Value> {
