@@ -880,13 +880,27 @@ export const ConnectView = (() => {
       </div>`,
       )
       .join("");
+    const dirRow = `
+      <div class="cv-repo-row">
+        <span class="cv-repo-row__kind">目录</span>
+        <span class="cv-repo-row__meta" title="${repo.dir ? esc(repo.dir.path) : ""}">${
+          repo.dir ? `${esc(repo.dir.name)} · ${esc(repo.dir.path)}` : "未关联（拉取条目进默认库）"
+        }</span>
+        ${repo.dir ? '<button class="hub-btn btn-sm" data-repo-dir="clear">解除</button>' : ""}
+      </div>
+      <div class="cv-repo-row">
+        <span class="cv-repo-row__kind">换绑</span>
+        <input class="hub-input" id="cv-repo-dir-path" placeholder="粘贴本地目录路径；留空 = 自动创建">
+        <button class="hub-btn btn-sm" data-repo-dir="attach">关联</button>
+      </div>`;
     p.innerHTML = `
       <div class="cv-iph"><b>${esc(repo.name)}</b>
         <button class="cv-iph__x" id="cv-panel-x" title="收起">✕</button></div>
       <div class="cv-pstat"><span class="cv-pill">只读跟随上游</span>
         <span class="txt">分支 ${esc(repo.branch || "main")}${repo.subdir ? " · " + esc(repo.subdir) : ""} · ${esc(repo.url)}</span></div>
       <div class="cv-ipitems">${rows || '<div class="cv-restline">该仓库还没有启用模块</div>'}
-        <div class="cv-restline">远程仓库只读跟随上游：拉取后条目进入本地库，连接工具请在左侧选本地目录操作。</div></div>`;
+        ${dirRow}
+        <div class="cv-restline">拉取的条目落进关联目录，成为左侧可连线工具的目录卡；未关联时进默认库（画布不可连线）。</div></div>`;
     const x = byId("cv-panel-x");
     if (x)
       x.onclick = () => {
@@ -905,6 +919,27 @@ export const ConnectView = (() => {
         b.classList.remove("is-loading");
         HubUI.toast(
           r.data.ok ? "已拉取" : "拉取失败：" + (r.data.error ?? ""),
+          r.data.ok ? "success" : "error",
+        );
+        await loadAll();
+        renderAll();
+      };
+    });
+    qsa<HTMLElement>("[data-repo-dir]", p).forEach((b) => {
+      b.onclick = async () => {
+        if (b.classList.contains("is-loading")) return;
+        const op = b.dataset["repoDir"];
+        const input = byId<HTMLInputElement>("cv-repo-dir-path");
+        if (op === "attach" && repo.dir && !(input?.value ?? "").trim()) {
+          HubUI.toast("已关联目录；换绑请先填新路径，或先解除", "warn");
+          return;
+        }
+        b.classList.add("is-loading");
+        const payload = op === "clear" ? { dir_clear: true } : { dir: (input?.value ?? "").trim() };
+        const r = await send<PullResult>(`/api/remote-repos/${repo.id}`, "PATCH", payload);
+        b.classList.remove("is-loading");
+        HubUI.toast(
+          r.data.ok ? "目录已更新" : "更新失败：" + (r.data.error ?? ""),
           r.data.ok ? "success" : "error",
         );
         await loadAll();
@@ -1031,12 +1066,15 @@ export const ConnectView = (() => {
       bodyHTML: `
         <label class="hub-field">名称<input class="hub-input" id="dlg-rname" placeholder="例如 team-skills"></label>
         <label class="hub-field">Git 地址<input class="hub-input" id="dlg-rurl" placeholder="https://…git"></label>
-        <label class="hub-field">分支<input class="hub-input" id="dlg-rbranch" value="main"></label>`,
+        <label class="hub-field">分支<input class="hub-input" id="dlg-rbranch" value="main"></label>
+        <label class="hub-field">本地目录（可选）<input class="hub-input" id="dlg-rdir" placeholder="留空 = 自动创建并关联">
+          <span class="hub-field__hint">拉取的条目落进该目录，成为可连线工具的目录卡；留空则在默认位置自动创建。</span></label>`,
       confirmText: "添加",
       onConfirm: async (_v, close) => {
         const name = mustById<HTMLInputElement>("dlg-rname").value.trim();
         const url = mustById<HTMLInputElement>("dlg-rurl").value.trim();
         const branch = mustById<HTMLInputElement>("dlg-rbranch").value.trim() || "main";
+        const dir = mustById<HTMLInputElement>("dlg-rdir").value.trim();
         if (!(name && url)) {
           HubUI.toast("名称与地址必填", "error");
           return false;
@@ -1047,6 +1085,7 @@ export const ConnectView = (() => {
           branch,
           subdir: "",
           modules: ["skills"],
+          dir,
         });
         if (r.data.ok) {
           close();

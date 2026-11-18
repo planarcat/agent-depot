@@ -405,7 +405,7 @@ pub fn sync_from_cache(conn: &Connection, hub: &Path, source_id: i64) -> Result<
     if items.is_empty() {
         return ok_err("本地缓存里没解析到任何 skill");
     }
-    let (added, changed, removed) = apply_items(conn, source_id, &items, &commit, &subdir, &files, &cache, "skill");
+    let (added, changed, removed) = apply_items(conn, source_id, &items, &commit, &subdir, &files, &cache, KIND);
     log_op(conn, "sync-local", "ok", Event {
         module: "skills",
         actor: "local", kind: "", subject: None, outcome: "",
@@ -427,12 +427,37 @@ fn src_row(conn: &Connection, source_id: i64) -> Option<(String, String, String,
     .ok()
 }
 
+/// 仓库关联目录（2026-11-18 用户口径：添加仓库时可选本地目录作为落盘目录，
+/// 不填在 <hub>/repos/<名> 自动创建；local_dirs.origin = 'repo:<repo_id>' 作关联标记）。
+pub fn repo_dir_of(conn: &Connection, repo_id: i64) -> Option<(i64, std::path::PathBuf)> {
+    conn.query_row(
+        "SELECT id, path FROM local_dirs WHERE origin=?1 LIMIT 1",
+        [format!("repo:{repo_id}")],
+        |r| Ok((r.get::<_, i64>(0)?, std::path::PathBuf::from(r.get::<_, String>(1)?))),
+    )
+    .ok()
+}
+
+fn repo_dir_for_source(conn: &Connection, source_id: i64) -> Option<(i64, std::path::PathBuf)> {
+    let rid: Option<i64> = conn
+        .query_row("SELECT repo_id FROM sources WHERE id=?1", [source_id], |r| r.get(0))
+        .ok()
+        .flatten();
+    rid.and_then(|rid| repo_dir_of(conn, rid))
+}
+
 /// items 表差分应用（pull / sync-local 共用后半段）。
 fn apply_items(
     conn: &Connection, source_id: i64,
     items: &[gitsrc::SourceItem], commit: &str, _subdir: &str,
     _files: &BTreeMap<String, String>, _cache: &Path, dep_kind: &str,
 ) -> (Vec<String>, Vec<String>, Vec<String>) {
+    // 历史行 kind 曾写成单数 'skill'，与读取方 KIND='skills' 错位导致「拉取即落库」
+    // 从不生效（2026-11-18 修复）；在此幂等归一，存量库拉一次即自愈。
+    let _ = conn.execute(
+        "UPDATE items SET kind=?1 WHERE source_id=?2 AND kind!=?1",
+        rusqlite::params![KIND, source_id],
+    );
     let old: HashMap<String, Option<String>> = {
         match conn.prepare(
             "SELECT name, source_hash FROM items WHERE source_id=?1") {
@@ -531,7 +556,18 @@ pub fn pull_source(
             match old.iter().find(|(n, _)| *n == it.name) {
                 None => a.push(it.name.clone()),
                 Some((_, h)) if h.as_deref() != Some(it.source_hash.as_str()) => c.push(it.name.clone()),
-                _ => {}
+                _ => {
+                    // 源条目已知但 registry 缺失（历史拉取未落库）→ 视为待落库，重拉自愈
+                    let in_reg: bool = conn
+                        .query_row(
+                            "SELECT 1 FROM registry_items WHERE kind=?1 AND name=?2",
+                            rusqlite::params![KIND, it.name], |_| Ok(true),
+                        )
+                        .unwrap_or(false);
+                    if !in_reg {
+                        a.push(it.name.clone());
+                    }
+                }
             }
         }
         let rm: Vec<String> = old
@@ -562,7 +598,7 @@ pub fn pull_source(
             "added": added, "changed": changed, "removed": removed,
             "removed_detail": detail}));
     }
-    let (a2, c2, rm2) = apply_items(conn, source_id, &items, &commit, &subdir, &files, &cache, "skill");
+    let (a2, c2, rm2) = apply_items(conn, source_id, &items, &commit, &subdir, &files, &cache, KIND);
     for nm in &rm2 {
         match removed_action {
             Some("localize") => {
@@ -622,6 +658,7 @@ pub fn registry_current_hash(conn: &Connection, hub: &Path, name: &str) -> Optio
 
 fn materialize(
     conn: &Connection, hub: &Path, source_id: i64, name: &str, path: &str, commit: &str,
+    into: Option<&Path>,
 ) -> std::result::Result<BTreeMap<String, String>, String> {
     let src = src_row(conn, source_id);
     let Some((_, url, branch, subdir, _)) = src else {
@@ -634,7 +671,11 @@ fn materialize(
     } else {
         format!("{}/", path.trim_end_matches('/'))
     };
-    let dest = registry_root(hub).join(name);
+    // 仓库关联了本地目录 → 物化进该目录；否则落默认库
+    let dest = match into {
+        Some(root) => root.join(name),
+        None => registry_root(hub).join(name),
+    };
     let tmp = dest.with_file_name(format!(
         "{}.hub-tmp-{}",
         name,
@@ -723,14 +764,16 @@ pub fn update_registry(
             results.push(json!({"item": name, "status": "failed", "reason": "源中没有该条目"}));
             continue;
         };
-        let reg: Option<(Option<String>, Option<String>, Option<String>, Option<String>)> = conn
+        let reg: Option<(Option<String>, Option<String>, Option<String>, Option<String>, Option<i64>)> = conn
             .query_row(
-                "SELECT version, hash, source_hash_at, prev_version FROM registry_items \
+                "SELECT version, hash, source_hash_at, prev_version, dir_id FROM registry_items \
                  WHERE kind=?1 AND name=?2",
                 rusqlite::params![KIND, name],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .ok();
+        let repo_dir = repo_dir_for_source(conn, sid);
+        let want_dir = repo_dir.as_ref().map(|(d, _)| *d);
         let commit: Option<String> = conn
             .query_row("SELECT last_commit FROM sources WHERE id=?1", [sid], |r| r.get(0))
             .ok()
@@ -740,7 +783,7 @@ pub fn update_registry(
             continue;
         };
         let cur_hash = registry_current_hash(conn, hub, name);
-        if let Some((_, reg_hash, _, _)) = &reg {
+        if let Some((_, reg_hash, _, _, _)) = &reg {
             if cur_hash.is_some() && reg_hash.is_some() && cur_hash != *reg_hash && !force {
                 results.push(json!({"item": name, "status": "conflict-local-modified",
                     "reason": "本地库中该技能已被修改（保留本地；可 force 覆盖）"}));
@@ -754,14 +797,21 @@ pub fn update_registry(
                 continue;
             }
         }
-        if let Some((_, reg_hash, src_at, _)) = &reg {
-            if src_at.as_deref() == Some(src_hash.as_str()) && cur_hash == *reg_hash {
+        if let Some((_, reg_hash, src_at, _, reg_dir)) = &reg {
+            // 关联目录变化（含首次关联已有仓库）时不走 unchanged 短路：物化搬迁到新目录
+            if src_at.as_deref() == Some(src_hash.as_str())
+                && cur_hash == *reg_hash
+                && *reg_dir == want_dir
+            {
                 let v = reg.as_ref().and_then(|r| r.0.clone());
                 results.push(json!({"item": name, "status": "unchanged", "version": v}));
                 continue;
             }
         }
-        let written = match materialize(conn, hub, sid, name, &path.unwrap_or_default(), &commit) {
+        let written = match materialize(
+            conn, hub, sid, name, &path.unwrap_or_default(), &commit,
+            repo_dir.as_ref().map(|(_, p)| p.as_path()),
+        ) {
             Ok(w) => w,
             Err(e) => {
                 results.push(json!({"item": name, "status": "failed",
@@ -776,14 +826,14 @@ pub fn update_registry(
             .unwrap_or((None, None));
         conn.execute(
             "INSERT INTO registry_items(kind, name, source_id, version, hash, updated_at, \
-             prev_version, prev_hash, source_hash_at) VALUES(?,?,?,?,?,?,?,?,?) \
+             prev_version, prev_hash, source_hash_at, dir_id) VALUES(?,?,?,?,?,?,?,?,?,?) \
              ON CONFLICT(kind, name) DO UPDATE SET source_id=excluded.source_id, \
              version=excluded.version, hash=excluded.hash, updated_at=excluded.updated_at, \
              prev_version=excluded.prev_version, prev_hash=excluded.prev_hash, \
-             source_hash_at=excluded.source_hash_at",
+             source_hash_at=excluded.source_hash_at, dir_id=excluded.dir_id",
             rusqlite::params![
                 KIND, name, sid, version, new_hash, fsutil::now_iso(),
-                pv, ph, src_hash
+                pv, ph, src_hash, want_dir
             ],
         )
         .map_err(CoreError::from)

@@ -362,6 +362,8 @@ export interface RemoteRepo {
   created_at: string;
   modules: string[];
   sources: Record<string, SourceRow>;
+  /** 仓库关联的本地落盘目录（拉取条目物化于此，可连线工具）；null = 未关联（条目进默认库） */
+  dir: { id: number; name: string; path: string } | null;
 }
 
 /* ---------------- /api/state ---------------- */

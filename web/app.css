@@ -1727,6 +1727,7 @@ button.msg__att:hover { border-color: var(--c-accent); background: var(--c-accen
 .cv-repo-row__meta { font-size: var(--fs-s); color: var(--c-ink-4); }
 .hub-field { display: flex; flex-direction: column; gap: var(--sp-1); margin-bottom: var(--sp-3);
   font-size: var(--fs-s); color: var(--c-ink-3); }   /* 添加仓库弹窗表单行 */
+.hub-field__hint { font-size: var(--fs-xs); color: var(--c-ink-4); }
 
 /* 连接画布 · 同步方式（复制/链接）分段选择 */
 .cv-modes { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }

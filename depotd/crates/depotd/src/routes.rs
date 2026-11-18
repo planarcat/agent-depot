@@ -2078,6 +2078,138 @@ async fn api_unwire_memory(State(state): State<Arc<AppState>>, AxPath(tid): AxPa
 
 // ---------- remote repos ----------
 
+// ---------- 仓库关联目录（2026-11-18 用户口径：添加仓库可指定本地目录作为落盘目录，
+// 不填在 <hub>/repos/<名> 自动创建；local_dirs.origin='repo:<rid>' 作关联标记，零迁移） ----------
+
+fn repo_dir_row(conn: &rusqlite::Connection, rid: i64) -> Option<(i64, String, String)> {
+    conn.query_row(
+        "SELECT id, name, path FROM local_dirs WHERE origin=?1 LIMIT 1",
+        [format!("repo:{rid}")],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+    .ok()
+}
+
+/// local_dirs.name 口径：ASCII 字母数字开头，允许 . _ -，≤64；其余字符折为 -。
+fn sanitize_dir_name(raw: &str) -> String {
+    let mut s: String = raw
+        .trim()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' { ch } else { '-' })
+        .collect();
+    if !s.chars().next().map(|c| c.is_ascii_alphanumeric()).unwrap_or(false) {
+        s = format!("repo-{s}");
+    }
+    s.chars().take(64).collect()
+}
+
+/// 给仓库登记关联目录：raw 非空 → 该路径（须已存在）；空 → <hub>/repos/<slug> 自动创建。
+/// 已登记的同路径目录直接改挂到本仓库（幂等换绑）。返回 (dir_id, name, path)。
+fn attach_repo_dir(
+    conn: &rusqlite::Connection, rid: i64, repo_name: &str, raw: &str,
+) -> std::result::Result<(i64, String, String), String> {
+    let base: PathBuf = if raw.trim().is_empty() {
+        let slug = sanitize_dir_name(repo_name);
+        let slug = if slug.is_empty() || slug.chars().all(|c| c == '-') {
+            format!("repo-{rid}")
+        } else {
+            slug
+        };
+        depot_core::paths::hub_dir().join("repos").join(&slug)
+    } else {
+        let p = depot_core::tools::shellexpand(raw.trim());
+        let p = p.canonicalize().unwrap_or(p);
+        if !p.is_dir() {
+            return Err(format!("目录不存在：{raw}（可先创建，或留空由 hub 在默认位置自动建）"));
+        }
+        p
+    };
+    let _ = std::fs::create_dir_all(&base);
+    let real = base.canonicalize().unwrap_or_else(|_| base.clone());
+    let existing = list_dirs_full(conn);
+    for d in &existing {
+        let other = PathBuf::from(d["path"].as_str().unwrap_or(""));
+        let other = other.canonicalize().unwrap_or_else(|_| other.clone());
+        if real == other {
+            // 同路径重复关联：直接改挂到本仓库
+            let id = d["id"].as_i64().unwrap_or(0);
+            let _ = conn.execute(
+                "UPDATE local_dirs SET origin=?1 WHERE id=?2",
+                rusqlite::params![format!("repo:{rid}"), id],
+            );
+            return Ok((
+                id,
+                d["name"].as_str().unwrap_or_default().to_string(),
+                d["path"].as_str().unwrap_or_default().to_string(),
+            ));
+        }
+        if real.starts_with(&other) || other.starts_with(&real) {
+            return Err(format!("与已链接目录重叠：{}", d["name"].as_str().unwrap_or("")));
+        }
+    }
+    let mut name = sanitize_dir_name(repo_name);
+    if name.is_empty() || name.chars().all(|c| c == '-') {
+        name = format!("repo-{rid}");
+    }
+    let mut n = 2;
+    loop {
+        let taken: bool = conn
+            .query_row("SELECT 1 FROM local_dirs WHERE name=?1", [&name], |_| Ok(true))
+            .unwrap_or(false);
+        if !taken {
+            break;
+        }
+        name = format!("{}-{n}", sanitize_dir_name(repo_name));
+        n += 1;
+    }
+    conn.execute(
+        "INSERT INTO local_dirs(name, path, origin, created_at) VALUES(?,?,?,?)",
+        rusqlite::params![name, real.to_string_lossy(), format!("repo:{rid}"),
+            depot_core::fsutil::now_iso()],
+    )
+    .map_err(|e| format!("登记失败：{e}"))?;
+    Ok((conn.last_insert_rowid(), name, real.to_string_lossy().to_string()))
+}
+
+/// 仓库全部源重新物化（换绑目录后把已有条目搬进新目录；conflict-local-modified 原地保留）。
+fn rematerialize_repo(conn: &rusqlite::Connection, rid: i64) -> Vec<Value> {
+    let hub = depot_core::paths::hub_dir();
+    let mut out = Vec::new();
+    let sids: Vec<i64> = {
+        match conn.prepare("SELECT id FROM sources WHERE repo_id=?1 ORDER BY id") {
+            Ok(mut stmt) => stmt
+                .query_map([rid], |r| r.get(0))
+                .map(|x| x.filter_map(|r| r.ok()).collect())
+                .unwrap_or_default(),
+            Err(_) => vec![],
+        }
+    };
+    for sid in sids {
+        let kind: String = conn
+            .query_row("SELECT kind FROM sources WHERE id=?1", [sid], |r| r.get(0))
+            .unwrap_or_default();
+        let names: Vec<String> = {
+            match conn.prepare("SELECT name FROM items WHERE source_id=?1 ORDER BY id") {
+                Ok(mut stmt) => stmt
+                    .query_map([sid], |r| r.get(0))
+                    .map(|x| x.filter_map(|r| r.ok()).collect())
+                    .unwrap_or_default(),
+                Err(_) => vec![],
+            }
+        };
+        if names.is_empty() {
+            continue;
+        }
+        let mut r = if kind == "mcp" {
+            depot_mcp::extra::update_registry(conn, &hub, &names, Some(sid), false)
+        } else {
+            depot_skills::extra::update_registry(conn, &hub, &names, Some(sid), false)
+        };
+        out.append(&mut r);
+    }
+    out
+}
+
 async fn api_remote_repos(State(state): State<Arc<AppState>>, method: Method, bytes: Bytes) -> Response {
     let c = wc(&state);
     match method {
@@ -2129,6 +2261,10 @@ async fn api_remote_repos(State(state): State<Arc<AppState>>, method: Method, by
                 let mods: Vec<String> = srcs.iter().filter_map(|s| s["kind"].as_str().map(|k| k.to_string())).collect();
                 repo["modules"] = json!(mods);
                 repo["sources"] = json!(srcs);
+                repo["dir"] = match repo_dir_row(&c, rid) {
+                    Some((id, name, path)) => json!({"id": id, "name": name, "path": path}),
+                    None => Value::Null,
+                };
             }
             jraw(200, json!({"ok": true, "repos": repos,
                 "modules": [{"id": "skills", "name": "Skills"}, {"id": "mcp", "name": "MCP"}]}))
@@ -2170,18 +2306,32 @@ async fn api_remote_repos(State(state): State<Arc<AppState>>, method: Method, by
                 let _ = c.execute(
                     "INSERT INTO sources(kind, name, url, branch, subdir, repo_id, created_at) \
                      VALUES(?,?,?,?,?,?,?)",
-                    rusqlite::params![kind, name, url, branch, subdir, rid,
-                        depot_core::fsutil::now_iso()],
+                     rusqlite::params![kind, name, url, branch, subdir, rid,
+                         depot_core::fsutil::now_iso()],
                 );
             }
+            // 关联目录：留空 → <hub>/repos/<名> 自动创建（2026-11-18 口径）
+            let dir_raw = data.get("dir").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            let dir_info = match attach_repo_dir(&c, rid, &name, &dir_raw) {
+                Ok(v) => v,
+                Err(e) => {
+                    // 回滚本次插入，保持原子性
+                    let _ = c.execute("DELETE FROM sources WHERE repo_id=?1", [rid]);
+                    let _ = c.execute("DELETE FROM remote_repos WHERE id=?1", [rid]);
+                    return jraw(400, json!({"ok": false, "error": e}));
+                }
+            };
             let _ = depot_core::events::append(&c, &depot_core::events::Event {
                 module: "system", actor: "local", kind: "repo:create", subject: None,
-                outcome: "ok", error_code: None, extra: json!({"repo_id": rid, "name": name}),
+                outcome: "ok", error_code: None,
+                extra: json!({"repo_id": rid, "name": name,
+                    "dir": {"id": dir_info.0, "name": dir_info.1, "path": dir_info.2}}),
                 item_kind: None, item_name: None, item_version: None,
                 source_id: None, target_id: None,
             });
             after_write(&state, "hub", false);
-            jraw(200, json!({"ok": true, "id": rid, "repo": {"id": rid, "name": name}}))
+            jraw(200, json!({"ok": true, "id": rid, "repo": {"id": rid, "name": name},
+                "dir": {"id": dir_info.0, "name": dir_info.1, "path": dir_info.2}}))
         }
         _ => jerr(404, "not found"),
     }
@@ -2218,13 +2368,80 @@ async fn api_remote_repos_id(State(state): State<Arc<AppState>>, AxPath(rid): Ax
             );
         }
     }
+    // 关联目录：dir=路径（换绑/补绑，已有条目搬进新目录）/ dir=null 或 dir_clear=true（解除，条目原地保留）
+    let mut dir_op: Option<Option<String>> = None;
+    if let Some(v) = data.get("dir") {
+        match v {
+            Value::String(s) => dir_op = Some(Some(s.trim().to_string())),
+            Value::Null => dir_op = Some(None),
+            _ => {}
+        }
+    }
+    if data.get("dir_clear").and_then(|b| b.as_bool()).unwrap_or(false) {
+        dir_op = Some(None);
+    }
+    let mut dir_changed: Option<Value> = None;
+    if let Some(op) = dir_op {
+        let old = repo_dir_row(&c, rid);
+        match op {
+            Some(path) => {
+                // 已关联时空路径换绑 → 维持现状（前端防呆的后端兜底）
+                if path.is_empty() {
+                    if let Some((oid, dname, dpath)) = &old {
+                        dir_changed = Some(json!({"id": oid, "name": dname, "path": dpath}));
+                        let _ = depot_core::events::append(&c, &depot_core::events::Event {
+                            module: "system", actor: "local", kind: "repo:update", subject: None,
+                            outcome: "ok", error_code: None, extra: json!({"repo_id": rid}),
+                            item_kind: None, item_name: None, item_version: None,
+                            source_id: None, target_id: None,
+                        });
+                        after_write(&state, "hub", false);
+                        return jraw(200, json!({"ok": true, "dir": dir_changed}));
+                    }
+                }
+                let repo_name: String = c
+                    .query_row("SELECT name FROM remote_repos WHERE id=?1", [rid], |r| r.get(0))
+                    .unwrap_or_default();
+                let attached = match attach_repo_dir(&c, rid, &repo_name, &path) {
+                    Ok(v) => v,
+                    Err(e) => return jraw(400, json!({"ok": false, "error": e})),
+                };
+                if let Some((oid, _, _)) = &old {
+                    if oid != &attached.0 {
+                        let _ = c.execute(
+                            "UPDATE local_dirs SET origin='linked' WHERE id=?1",
+                            rusqlite::params![oid],
+                        );
+                    }
+                }
+                let results = rematerialize_repo(&c, rid);
+                dir_changed = Some(json!({"id": attached.0, "name": attached.1, "path": attached.2}));
+                let _ = depot_core::events::append(&c, &depot_core::events::Event {
+                    module: "system", actor: "local", kind: "repo:dir", subject: None, outcome: "ok",
+                    error_code: None,
+                    extra: json!({"repo_id": rid, "dir": dir_changed, "moved": results}),
+                    item_kind: None, item_name: None, item_version: None,
+                    source_id: None, target_id: None,
+                });
+            }
+            None => {
+                if let Some((oid, _, _)) = &old {
+                    let _ = c.execute(
+                        "UPDATE local_dirs SET origin='linked' WHERE id=?1",
+                        rusqlite::params![oid],
+                    );
+                }
+                dir_changed = Some(Value::Null);
+            }
+        }
+    }
     let _ = depot_core::events::append(&c, &depot_core::events::Event {
         module: "system", actor: "local", kind: "repo:update", subject: None, outcome: "ok",
         error_code: None, extra: json!({"repo_id": rid}),
         item_kind: None, item_name: None, item_version: None, source_id: None, target_id: None,
     });
     after_write(&state, "hub", false);
-    jraw(200, json!({"ok": true}))
+    jraw(200, json!({"ok": true, "dir": dir_changed}))
 }
 
 // ---------- local dirs ----------
