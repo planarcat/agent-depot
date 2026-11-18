@@ -239,8 +239,14 @@ export const ConnectView = (() => {
     const dirCount = (d: LocalDir): number => (d.counts.skills || 0) + (d.counts.mcp || 0);
     const repoCount = (r: RemoteRepo): number =>
       Object.values<SourceRow>(r.sources || {}).reduce((a, s) => a + (s.item_count || 0), 0);
-    const activeId = S.selDir ? "dir:" + S.selDir : S.selRepo ? "repo:" + S.selRepo : null;
     const dimAll = !!(S.selDir || S.selRepo);
+    const activeIds = new Set<string>();
+    if (S.selDir) activeIds.add("dir:" + S.selDir);
+    if (S.selRepo) {
+      activeIds.add("repo:" + S.selRepo);
+      const rd = S.repos.find((r) => r.id === S.selRepo)?.dir;
+      if (rd) activeIds.add("dir:" + rd.id);
+    }
     if (host.dataset["sig"] !== rowSig() || !host.querySelector(".srcgroups")) {
       host.dataset["sig"] = rowSig();
       const sources = [
@@ -252,7 +258,7 @@ export const ConnectView = (() => {
           count: dirCount(d),
           title: `${d.name} · ${dirCount(d)} 条 · ${d.path}${layoutHint(d)}`,
           tag: srcTag(d.id, "\u2192"),
-          off: dimAll && activeId !== "dir:" + d.id,
+          off: dimAll && !activeIds.has("dir:" + d.id),
           acts: [
             {
               key: "dirdel",
@@ -271,7 +277,7 @@ export const ConnectView = (() => {
           count: repoCount(r),
           title: `${r.name} · ${repoCount(r)} 条 · ${r.url}`,
           tag: srcTag(r.id, "\u21d0"),
-          off: dimAll && activeId !== "repo:" + r.id,
+          off: dimAll && !activeIds.has("repo:" + r.id),
           acts: [
             { key: "pull", label: "拉取", icon: MV.ic("refresh"), title: "拉取该仓库" },
             { key: "edit", label: "编辑", icon: MV.ic("edit"), title: "编辑仓库配置" },
@@ -289,7 +295,7 @@ export const ConnectView = (() => {
         prefix: "cv",
         sources,
         counts: Object.fromEntries(sources.map((s0) => [s0.id, s0.count] as const)),
-        activeId,
+        activeId: [...activeIds][0] ?? null,
         groups: [
           {
             kind: "local",
@@ -308,7 +314,7 @@ export const ConnectView = (() => {
         ],
       });
     }
-    applyCardStates(host, activeId, dimAll); /* 选中变化只切类：保住描边生长/底色扫入过渡 */
+    applyCardStates(host, activeIds, dimAll); /* 选中变化只切类：保住描边生长/底色扫入过渡 */
   }
 
   /* 行内重建签名：只含数据（计数 + 绑定 + 暂存）。
@@ -328,10 +334,10 @@ export const ConnectView = (() => {
     );
   }
 
-  function applyCardStates(host: HTMLElement, activeId: string | null, dimAll: boolean): void {
+  function applyCardStates(host: HTMLElement, activeIds: Set<string>, dimAll: boolean): void {
     qsa<HTMLElement>(".tcard[data-src]", host).forEach((el) => {
-      const id = el.getAttribute("data-src");
-      const active = activeId !== null && id === String(activeId);
+      const id = el.getAttribute("data-src") ?? "";
+      const active = activeIds.has(id);
       el.classList.toggle("is-on", active);
       el.classList.toggle("is-off", !!dimAll && !active);
     });
@@ -884,9 +890,8 @@ export const ConnectView = (() => {
       <div class="cv-repo-row">
         <span class="cv-repo-row__kind">目录</span>
         <span class="cv-repo-row__meta" title="${repo.dir ? esc(repo.dir.path) : ""}">${
-          repo.dir ? `${esc(repo.dir.name)} · ${esc(repo.dir.path)}` : "未关联（拉取条目进默认库）"
+          repo.dir ? `${esc(repo.dir.name)} · ${esc(repo.dir.path)}` : "关联目录创建中…"
         }</span>
-        ${repo.dir ? '<button class="hub-btn btn-sm" data-repo-dir="clear">解除</button>' : ""}
       </div>
       <div class="cv-repo-row">
         <span class="cv-repo-row__kind">换绑</span>
@@ -900,7 +905,7 @@ export const ConnectView = (() => {
         <span class="txt">分支 ${esc(repo.branch || "main")}${repo.subdir ? " · " + esc(repo.subdir) : ""} · ${esc(repo.url)}</span></div>
       <div class="cv-ipitems">${rows || '<div class="cv-restline">该仓库还没有启用模块</div>'}
         ${dirRow}
-        <div class="cv-restline">拉取的条目落进关联目录，成为左侧可连线工具的目录卡；未关联时进默认库（画布不可连线）。</div></div>`;
+        <div class="cv-restline">拉取的条目落进关联目录，成为左侧可连线工具的目录卡；选中仓库即展示其目录的真链路。</div></div>`;
     const x = byId("cv-panel-x");
     if (x)
       x.onclick = () => {
@@ -996,7 +1001,7 @@ export const ConnectView = (() => {
     renderAll();
   }
 
-  /* 编辑仓库配置（名称 / 地址 / 分支） */
+  /* 编辑仓库配置（名称 / 地址 / 分支 / 关联目录） */
   function editRepo(rid: string): void {
     const repo = S.repos.find((r) => String(r.id) === String(rid));
     if (!repo) return;
@@ -1005,12 +1010,15 @@ export const ConnectView = (() => {
       bodyHTML: `
         <label class="hub-field">名称<input class="hub-input" id="dlg-rname" value="${esc(repo.name)}"></label>
         <label class="hub-field">Git 地址<input class="hub-input" id="dlg-rurl" value="${esc(repo.url)}"></label>
-        <label class="hub-field">分支<input class="hub-input" id="dlg-rbranch" value="${esc(repo.branch || "main")}"></label>`,
+        <label class="hub-field">分支<input class="hub-input" id="dlg-rbranch" value="${esc(repo.branch || "main")}"></label>
+        <label class="hub-field">本地目录（拉取条目落这里，可连线工具）<input class="hub-input" id="dlg-rdir" value="${esc(repo.dir ? repo.dir.path : "")}" placeholder="留空 = 保持不变；填新路径 = 换绑">
+          <span class="hub-field__hint">当前：${repo.dir ? esc(repo.dir.path) : "自动创建后关联"}。改路径保存即换绑，已有条目自动搬进新目录。</span></label>`,
       confirmText: "保存",
       onConfirm: async (_v, close) => {
         const name = mustById<HTMLInputElement>("dlg-rname").value.trim();
         const url = mustById<HTMLInputElement>("dlg-rurl").value.trim();
         const branch = mustById<HTMLInputElement>("dlg-rbranch").value.trim() || "main";
+        const dir = mustById<HTMLInputElement>("dlg-rdir").value.trim();
         if (!(name && url)) {
           HubUI.toast("名称与地址必填", "error");
           return false;
@@ -1019,6 +1027,7 @@ export const ConnectView = (() => {
           name,
           url,
           branch,
+          ...(dir && dir !== (repo.dir ? repo.dir.path : "") ? { dir } : {}),
         });
         if (r.data.ok) {
           close();
@@ -1179,12 +1188,20 @@ export const ConnectView = (() => {
             .catch(() => renderAll());
         } else if (k.startsWith("repo:")) {
           const id = +k.slice(5);
-          S.selRepo = S.selRepo === id ? null : id;
+          const deselect = S.selRepo === id;
+          S.selRepo = deselect ? null : id;
           if (S.selRepo) {
-            S.selDir = null;
             S.selTool = null;
+            // 仓库必有关联目录（后端惰性补齐）：选中仓库 = 聚焦其目录，直接展示真链路
+            S.selDir = S.repos.find((r) => r.id === id)?.dir?.id ?? null;
+            S.types = { skills: true, mcp: true };
+          } else {
+            S.selDir = null;
           }
           renderAll();
+          loadItems()
+            .then(renderAll)
+            .catch(() => renderAll());
         } else if (k.startsWith("ch:")) {
           const ch = k.slice(3) as Channel;
           S.types[ch] = !S.types[ch];

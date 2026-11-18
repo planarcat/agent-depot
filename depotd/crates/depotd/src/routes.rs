@@ -2236,6 +2236,13 @@ async fn api_remote_repos(State(state): State<Arc<AppState>>, method: Method, by
             let mut repos = repos;
             for repo in repos.iter_mut() {
                 let rid = repo["id"].as_i64().unwrap_or(0);
+                // 关联目录是仓库固有属性（2026-11-18 口径）：存量未关联仓库惰性补默认目录
+                if repo_dir_row(&c, rid).is_none() {
+                    let rname: String = repo["name"].as_str().unwrap_or("").to_string();
+                    if let Ok((id, dname, dpath)) = attach_repo_dir(&c, rid, &rname, "") {
+                        repo["dir"] = json!({"id": id, "name": dname, "path": dpath});
+                    }
+                }
                 let srcs: Vec<Value> = {
                     match c.prepare(
                         "SELECT id, kind, repo_id, name, last_sync_at, last_commit, last_error, \
