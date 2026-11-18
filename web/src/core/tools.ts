@@ -17,6 +17,7 @@ const TOOL_SHORT: Record<string, string> = {
   autoclaw: "AC",
   "trae-cn": "TR",
   agents: "AG",
+  antigravity: "AN",
   "pi-agent": "PI",
   cursor: "CU",
 };

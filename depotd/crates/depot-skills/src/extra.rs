@@ -1932,6 +1932,7 @@ pub fn seed_defaults(conn: &Connection) -> Vec<String> {
         ("WorkBuddy Skills (全局)", "skills_dir", "workbuddy", format!("{home}/.workbuddy/skills")),
         ("ZCode Skills (全局)", "skills_dir", "zcode", format!("{home}/.zcode/skills")),
         ("AutoClaw Skills (全局)", "skills_dir", "autoclaw", format!("{home}/.openclaw-autoclaw/skills")),
+        ("Antigravity Skills (全局)", "skills_dir", "antigravity", format!("{home}/.gemini/config/skills")),
     ];
     let mut created = Vec::new();
     for (nm, kind, tool, path) in defaults {

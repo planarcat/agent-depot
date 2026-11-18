@@ -639,6 +639,7 @@ pub fn seed_defaults(conn: &Connection) -> Vec<String> {
         ("WorkBuddy (全局)", "mcp_json", "workbuddy", format!("{home}/.workbuddy/mcp.json"), Some("mcpServers")),
         ("ZCode (全局)", "mcp_json", "zcode", format!("{home}/.zcode/cli/config.json"), Some("mcp.servers")),
         ("AutoClaw (全局)", "mcp_json", "autoclaw", format!("{home}/.openclaw-autoclaw/openclaw.json"), Some("mcp.servers")),
+        ("Antigravity (全局)", "mcp_json", "antigravity", format!("{home}/.gemini/config/mcp_config.json"), Some("mcpServers")),
     ];
     let mut created = Vec::new();
     for (nm, kind, tool, path, fkey) in defaults {

@@ -25,7 +25,10 @@ pub const BUILTIN_TOOLS: &str = r#"[
   "root":"~/.trae-cn","skills_dir":"~/.trae-cn/skills",
   "mcp_config":"~/Library/Application Support/Trae CN/User/mcp.json","mcp_format":"mcpServers"},
  {"id":"agents","name":"Agents","adapter":"agents","builtin":true,"color":8,
-  "skills_dir":"~/.agents/skills"}
+  "skills_dir":"~/.agents/skills"},
+ {"id":"antigravity","name":"Antigravity","adapter":"antigravity","builtin":true,"color":9,
+  "root":"~/.gemini/antigravity/conversations","skills_dir":"~/.gemini/config/skills",
+  "mcp_config":"~/.gemini/config/mcp_config.json","mcp_format":"mcpServers"}
 ]"#;
 
 pub const ADAPTER_LABELS: &[(&str, &str)] = &[
@@ -39,6 +42,7 @@ pub const ADAPTER_LABELS: &[(&str, &str)] = &[
     ("autoclaw", "AutoClaw（JSONL 目录）"),
     ("trae-cn", "Trae CN（会话库加密，暂不可采集）"),
     ("agents", "共享技能目录（仅 Skills 分发，无会话采集）"),
+    ("antigravity", "Antigravity（SQLite/protobuf 会话库，暂不可采集）"),
 ];
 
 pub fn adapter_root_default(adapter: &str) -> Option<&'static str> {
@@ -53,6 +57,7 @@ pub fn adapter_root_default(adapter: &str) -> Option<&'static str> {
         "autoclaw" => "~/.openclaw-autoclaw/agents",
         "trae-cn" => "~/.trae-cn",
         "agents" => "~/.agents/skills",
+        "antigravity" => "~/.gemini/antigravity/conversations",
         _ => return None,
     })
 }
@@ -152,6 +157,7 @@ pub fn load_tools(conn: &Connection) -> Vec<Value> {
 
 pub const BUILTIN_IDS: &[&str] = &[
     "claude", "codex", "opencode", "workbuddy", "zcode", "autoclaw", "trae-cn", "agents",
+    "antigravity",
 ];
 
 pub fn tool_by_id(conn: &Connection, tid: &str) -> Option<Value> {

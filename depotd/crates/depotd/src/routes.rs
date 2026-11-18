@@ -1817,6 +1817,7 @@ fn adapter_name(id: &str) -> &'static str {
         "autoclaw" => "AutoClaw",
         "trae-cn" => "Trae CN",
         "agents" => "共享技能目录",
+        "antigravity" => "Antigravity",
         _ => "未知",
     }
 }
