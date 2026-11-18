@@ -1,7 +1,7 @@
 # AGENTS.md · Agent Depot
 
 本地优先的 AI Agent 资产枢纽：多工具会话采集 / 浏览 / 迁移，外加记忆、Skills 分发、MCP 写入、台账。  
-技术面：Rust 后端（`depotd/`，axum + rusqlite）+ TypeScript 前端（`web/`，Bun 构建/测试，零运行时依赖；`web/dist/` 由 depotd 优先服务）。Python 后端已于 2026-11-11 移除；`tests/spec/*.py` 保留——它们是黑盒行为真源（经 HUB_BASE 打任意引擎），不是后端代码。
+技术面：Rust 后端（`depotd/`，axum + rusqlite）+ TypeScript 前端（`web/`，Bun 构建/测试，零运行时依赖；`web/dist/` 由 depotd 优先服务）。**仓内零 Python**（2026-11-17 完成）：Python 后端 2026-11-11 移除后，行为真源 spec 78 条已移植为 cargo 集成测试（`depotd/crates/depotd/tests/spec_*.rs`），门禁工具收进 `depotd/crates/depot-gate`。
 
 ## 仓库布局：WorkTrees 工作流（2026-11-08）
 
@@ -20,7 +20,7 @@
   推上远程覆盖 main）。check.sh 顶部已统一 unset 这些变量——**不要移除**；
   新增任何跑 git 的测试一律显式 `-C <夹具目录>`。
 - 日常门禁（在对应 worktree 内跑）：`bash scripts/soak_check.sh`（内存/事件门禁）、
-  `bash scripts/run_spec_rust.sh`（spec 78 行为闸门）、`(cd web && bun run check:ci)`（前端全链路）。
+  `(cd depotd && cargo test --workspace)`（含 spec 78 行为真源，每文件一个独立 depotd 实例 + 独立沙箱）、`(cd web && bun run check:ci)`（前端全链路）。
 
 ## 桌面壳（`desktop/`）硬规则
 
@@ -57,17 +57,20 @@
 
 ## 质量卡口（改任何源码之前先读）
 
-- `bash tests/check.sh` = 本仓 check 全链路（spec 守卫 → **前端 biome + tsc + bun build + 体积/覆盖率门禁** → cargo 单测 → 行为真源 spec 78 条打 depotd），**pre-push 自动跑，不绿推不出去**。
+- `bash tests/check.sh` = 本仓 check 全链路（depot-gate 门禁 → **前端 biome + tsc + bun build + 体积/覆盖率门禁** → cargo 单测 + 行为真源 spec 78 条 → 桌面壳单测），**pre-push 自动跑，不绿推不出去**。
 - `bash tests/run_all.sh` = check 全链路 + E2E 三步（真 Chrome），**交活前完整验收**。
-- 变异门禁已随 Python 栈移除（Rust 侧暂无对应物）；行为回归以 `bash scripts/run_spec_rust.sh` 为准。
+- 行为真源 spec 78 条 = `depotd/crates/depotd/tests/spec_*.rs`（原 `tests/spec/*.py` 于 2026-11-17 迁入，
+  判据一条不丢：黑盒 HTTP、错误钉结构不钉文案、CrashRecovery 升级为真测）。
+- **变异门禁待建**：旧 `scripts/mutate.py`（Python ast 自研）已随 Python 栈移除；继任者 **cargo-mutants**，
+  判据前提已成立（spec 78 条进了 cargo test，变异能打到行为层），试点从 `cargo mutants --file crates/depot-core` 起步。
 
 所有卡口都是惰性调用：机器上没铺体系就直接放行；检查不许挂进 `run.sh` 与 dev 启动链路。
 
-1. **测试是判据，改它要留痕**：`tests/` 目录（本层）与全部判据文件（`tests/**/*.py`·`*.mjs`，含 `fixtures/`）默认被 macOS 内核锁（`chflags uchg`）。
+1. **测试是判据，改它要留痕**：`tests/` 目录（本层）与判据文件（`tests/**/*.mjs`，含 `fixtures/`；Rust 行为判据在 `depotd/crates/*/tests/`，由 git PR 审核流保护）默认被 macOS 内核锁（`chflags uchg`）。
    写测试报 `Operation not permitted` = **撞锁，不是权限问题**，别往环境/权限方向瞎试：
    ① `bash scripts/unlock-tests.sh` → ② 改 → ③ `bash scripts/lock-tests.sh` 锁回。解锁与写文件别放同一批并行工具调用（会抢在解锁前执行）。
    commit message 必须写清三件事：**解锁了哪些文件 / 为什么改（口径出处）/ 改了什么口径**。
-2. **软改松一律红灯**：`@unittest.skip` / `it.only` / `xit` / `expectedFailure` 被 `depot-gate spec-guards`（门禁二进制，源码 `depotd/crates/depot-gate/`）扫到即红（check 第 1 步）。
+2. **软改松一律红灯**：`it.only` / `it.skip` / `describe.skip` / `xit` / `it.todo`（以及残留的 `@unittest.skip` / `pytest.skip` 形态）被 `depot-gate spec-guards`（门禁二进制，源码 `depotd/crates/depot-gate/`）扫到即红（check 第 1 步）。
    确实必须跳过：在同一行加 `spec-guard: allowed <理由>` —— 留痕放行，输出里会列出来。
 3. **提交门禁**：暂存 `tests/` 或门禁本体（`depotd/crates/depot-gate/` / `scripts/lint-baseline.json` / `lock-tests.sh` / `unlock-tests.sh` / `scripts/hooks/`）会被 pre-commit 拦下。
    确认无误要放行：`LOCAL_GUARD_OK=1 git commit ...`（这个动作本身就是留痕）。**禁 `--no-verify`**（push 同理）。
@@ -76,14 +79,15 @@
 6. **lint 基线**（`depot-gate lint-baseline`，check 第 2 步）：只对「本次变更文件」比对 `scripts/lint-baseline.json` 登记的存量，**新增告警即红**。
    多分支安全：基点取（pre-push 远端 sha / 上游 / origin 默认分支 / 本地 main）与 HEAD 最近的 merge-base；合并对方带入的文件不算你的，解冲突时新塞的告警照拦；无远程时全量比对；改门禁本体（`depotd/crates/depot-gate/`）或基线自动全量。
    基线**只许降**：修掉存量后 `--ratchet` 下调；**禁止靠改基线让新告警过关**（上调只能手改 JSON，会被第 3 条拦下留痕）。
-7. **变异门禁**（`scripts/mutate.py`，配置 `scripts/mutation.config.json`，报告 `reports/mutation.json`）：Python 标准库 `ast` 自研，在仓库副本里变异，不碰源码。
-   口径：timeout 算 killed；阈值 high 80 / low 60 / break 60，低于 break 则 `exit 1`；规则集版本 `m1`，**得分不可与 Stryker / mutmut 横向比较**。
-   时序型测试（如 `test_watcher`）有 ±1 个变异的抖动，对比时以存活清单差异为准，不只看总分。
-   等价变异（杀不死也不该杀）：在那一行加 `# mutate: disable <理由>`，理由必填，输出里列为留痕跳过。
-8. **改判据的提交规则**：除第 1 条三要素，commit message 还要带**变异得分改前 → 改后**（涉及被盯模块时）与**判据数变化**（check 用例数）。
-   降分、判据数减少、软改松增多 = 改松，直接打回。
+7. **变异门禁（待建）**：旧 `scripts/mutate.py`（Python `ast` 自研）已随 Python 栈移除（口径出处：本文档 2026-11-14 预留「后端转 Rust 后改用 cargo-mutants」）。
+   落地时沿用旧语义：阈值制（建议 break 50 起步爬坡到 high 80 / low 60 / break 60，低于 break 即 `exit 1`）；timeout 算 killed；
+   等价变异（杀不死也不该杀）用 `#[mutants::skip]` + 紧邻注释写清理由，输出列为留痕跳过（跳过 ≠ 通过）；
+   得分只与本仓基线比，**不与 Stryker / mutmut 横向比较**；基线只许降；报告落 `reports/mutation/`。
+8. **改判据的提交规则**：除第 1 条三要素，commit message 还要带**判据数变化**（check 用例数）；
+   cargo-mutants 落地后加「变异得分改前 → 改后」（涉及被盯模块时）。
+   判据数减少、软改松增多 = 改松，直接打回。
 9. **已知跳过项（跳过 ≠ 通过）**：前端**变异测试**跳过（跑真 Chrome 数小时，收益低）；但前端已有 `bun test` 单测（208 条，core 覆盖 ≥90%）+ e2e 19 条，不再属于「只有 E2E、没有单测」；
-   Rust 外壳 `desktop/src-tauri` 没有 `#[test]`，变异得分没有参考意义 → 记跳过（后端转 Rust 后改用 `cargo-mutants`）。
+   Rust 外壳 `desktop/src-tauri` 没有 `#[test]`，变异得分没有参考意义 → 记跳过。
 
 > 出处：`~/Documents/灵创引擎/Docs/AI开发质量体系-落地方指南.md`（本仓为其适配落地，逐条实测记录见 `VERIFICATION.md`）。
 

@@ -28,3 +28,6 @@ web/coverage/
 .depot.pid
 .depot.branch
 .depot*.log
+
+# Rust 构建产物(含独立小工具)
+target/

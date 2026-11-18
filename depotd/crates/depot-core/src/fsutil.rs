@@ -1,7 +1,7 @@
 //! 文件原语：树哈希（黄金样本逐字节规格）、list_files、原子写、备份（同秒碰撞
 //! `-n` 后缀）、safe_rm（hub 边界守卫）。
 //!
-//! tree hash 算法定义（升格为规格，spec_hash 黄金样本逐字节钉住）：
+//! tree hash 算法定义（升格为规格，spec_hash 黄金样本逐字节钉住，判据 crates/depotd/tests/spec_hash.rs）：
 //! `sha256( for rel in sorted(files): rel + "\0" + files[rel] + "\n" )`，
 //! 其中 files = list_files(root) 的 {相对路径: 文件 sha256}（跳过 .DS_Store）。
 
@@ -257,12 +257,12 @@ mod tests {
             let full = root.join(rel);
             fs::create_dir_all(full.parent().unwrap()).unwrap();
             // 内容不重要——只要 list_files 的 sha 与录制时一致。
-            // 录制时各文件内容见 spec_hash.build_tree；这里以 golden 内记录的
+            // 录制时各文件内容见 spec_hash 判据的 build_tree；这里以 golden 内记录的
             // 文件 sha 反推内容不可行，因此直接写入确定内容并依赖"重新录制一致性"：
-            // Python 端 build_tree 的内容是确定的（见 spec_hash.py）。
+            // 判据现居 crates/depotd/tests/spec_hash.rs（原 tests/spec/spec_hash.py）。
             let _ = &full;
         }
-        // 内容按 spec_hash.build_tree 逐字节复刻：
+        // 内容按 spec_hash 判据的 build_tree 逐字节复刻：
         let contents: Vec<(&str, &str)> = vec![
             ("alpha/SKILL.md", "---\nname: alpha\n---\n正文\n"),
             ("alpha/sub/deep.txt", "deep\n"),

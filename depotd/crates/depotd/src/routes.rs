@@ -1,4 +1,4 @@
-//! 全部 /api 路由（Tier 1 契约：spec 78 + e2e 19 + 前端消费面）。
+//! 全部 /api 路由（Tier 1 契约：行为真源 spec 78 条 = depotd/tests/spec_*.rs + e2e 19 + 前端消费面）。
 //! 响应口径与 Python server.py 逐条对齐：模块域结果 ok:false → 400；
 //! 404 仅用于「不存在」类；模块禁用 → 503。
 
