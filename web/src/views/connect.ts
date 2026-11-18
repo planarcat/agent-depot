@@ -249,41 +249,36 @@ export const ConnectView = (() => {
     }
     if (host.dataset["sig"] !== rowSig() || !host.querySelector(".srcgroups")) {
       host.dataset["sig"] = rowSig();
+      /* 本地是本地，远仓是远仓（2026-11-18 口径）：仓库关联目录（origin='repo:<id>'）
+         是仓库的内部实现，不出现在「本地」组——仓库卡就是它的连线入口 */
+      const localDirs = S.dirs.filter((d) => !d.origin.startsWith("repo:"));
       const sources = [
-        ...S.dirs.map((d) => {
-          /* 仓库关联目录（origin='repo:<id>'）：标注归属，不提供移除（口径：仓库必有目录） */
-          const rd = d.origin.startsWith("repo:")
-            ? S.repos.find((r) => "repo:" + r.id === d.origin)
-            : undefined;
-          return {
-            id: "dir:" + d.id,
-            name: d.name,
-            short: shortName(d.name),
-            cls: "chip--accent",
-            count: dirCount(d),
-            title: `${d.name} · ${dirCount(d)} 条 · ${d.path}${layoutHint(d)}${rd ? `（仓库 ${rd.name} 的关联目录）` : ""}`,
-            tag: srcTag(d.id, "\u2192"),
-            off: dimAll && !activeIds.has("dir:" + d.id),
-            acts: rd
-              ? []
-              : [
-                  {
-                    key: "dirdel",
-                    label: "移除",
-                    icon: MV.ic("trash"),
-                    title: "移除该目录（磁盘文件保留）",
-                    danger: true,
-                  },
-                ],
-          };
-        }),
+        ...localDirs.map((d) => ({
+          id: "dir:" + d.id,
+          name: d.name,
+          short: shortName(d.name),
+          cls: "chip--accent",
+          count: dirCount(d),
+          title: `${d.name} · ${dirCount(d)} 条 · ${d.path}${layoutHint(d)}`,
+          tag: srcTag(d.id, "\u2192"),
+          off: dimAll && !activeIds.has("dir:" + d.id),
+          acts: [
+            {
+              key: "dirdel",
+              label: "移除",
+              icon: MV.ic("trash"),
+              title: "移除该目录（磁盘文件保留）",
+              danger: true,
+            },
+          ],
+        })),
         ...S.repos.map((r) => ({
           id: "repo:" + r.id,
           name: r.name,
           short: shortName(r.name),
           cls: "chip--muted",
           count: repoCount(r),
-          title: `${r.name} · ${repoCount(r)} 条 · ${r.url}`,
+          title: `${r.name} · ${repoCount(r)} 条 · ${r.url}${r.dir ? ` · 落盘 ${r.dir.path}` : ""}`,
           tag: srcTag(r.id, "\u21d0"),
           off: dimAll && !activeIds.has("repo:" + r.id),
           acts: [
@@ -310,7 +305,7 @@ export const ConnectView = (() => {
             label: "本地",
             desc: "默认目录 + 已链接目录",
             actions: ["关联目录"],
-            ids: S.dirs.map((d) => "dir:" + d.id),
+            ids: localDirs.map((d) => "dir:" + d.id),
           },
           {
             kind: "remote",
@@ -809,8 +804,17 @@ export const ConnectView = (() => {
       /* 仅选工具：来源列表，点击行回到成对编辑 */
       if (!selTool) return;
       const rows = S.dirs
-        .map((dd) => ({ d: dd, st: aggState(dd.id, selTool) }))
-        .filter((x): x is { d: LocalDir; st: LaneVisual } => x.st !== null);
+        .map((dd) => ({
+          d: dd,
+          st: aggState(dd.id, selTool),
+          /* 本地是本地，远仓是远仓：仓库关联目录的连线以仓库名呈现，点击回到仓库卡 */
+          repo: dd.origin.startsWith("repo:")
+            ? S.repos.find((r) => "repo:" + r.id === dd.origin)
+            : undefined,
+        }))
+        .filter(
+          (x): x is { d: LocalDir; st: LaneVisual; repo: RemoteRepo | undefined } => x.st !== null,
+        );
       const nItems = rows.reduce((a, x) => a + (x.d.counts.skills || 0) + (x.d.counts.mcp || 0), 0);
       ttl = t ? t.name : selTool;
       stat = `<span class="cv-pill ${rows.length ? "ok" : ""}">${
@@ -821,13 +825,13 @@ export const ConnectView = (() => {
         ? rows
             .map(
               (x) =>
-                `<div class="cv-brow" data-go="${x.d.id}"><span class="tool-dot ${t ? toolDotCls(t) : ""}"></span>
-          <span class="nm">${esc(x.d.name)}</span>
+                `<div class="cv-brow" data-go="${x.d.id}"${x.repo ? ` data-repo="${x.repo.id}"` : ""}><span class="tool-dot ${t ? toolDotCls(t) : ""}"></span>
+          <span class="nm">${esc(x.repo ? x.repo.name : x.d.name)}</span>
           <span class="st ${x.st === "full" ? "ok" : "part"}">${
             x.st === "full"
               ? `完整跟随 ${(x.d.counts.skills || 0) + (x.d.counts.mcp || 0)} 条`
               : "部分跟随"
-          }</span></div>`,
+          }${x.repo ? " · 远程拉取" : ""}</span></div>`,
             )
             .join("")
         : '<div class="cv-restline">尚无连接。先点一个目录卡，再保持本工具卡选中，即可在右侧连接。</div>';
@@ -874,7 +878,14 @@ export const ConnectView = (() => {
       r.onclick = () => {
         const go = r.dataset["go"];
         if (go === undefined) return;
-        S.selDir = Number(go);
+        const rid = r.dataset["repo"];
+        if (rid) {
+          /* 来自仓库的连线：回到仓库卡选中态（仓库卡 = 其目录的连线入口） */
+          S.selRepo = Number(rid);
+          S.selDir = Number(go);
+        } else {
+          S.selDir = Number(go);
+        }
         loadItems()
           .then(renderAll)
           .catch(() => renderAll());
@@ -1381,7 +1392,10 @@ export const ConnectView = (() => {
     const dirCount = (d: LocalDir): number => (d.counts.skills || 0) + (d.counts.mcp || 0);
     const repoCount = (r: RemoteRepo): number =>
       Object.values<SourceRow>(r.sources || {}).reduce((a, s) => a + (s.item_count || 0), 0);
-    const localN = S.dirs.reduce((a, d) => a + dirCount(d), 0);
+    /* 本地是本地，远仓是远仓：仓库关联目录的条目归「远程拉取」，不计入本地 */
+    const localN = S.dirs
+      .filter((d) => !d.origin.startsWith("repo:"))
+      .reduce((a, d) => a + dirCount(d), 0);
     const remoteN = S.repos.reduce((a, r) => a + repoCount(r), 0);
     /* 已部署到工具：各 (目录×工具×通道) 跟随中的条目数之和（blocked 不计） */
     const deployed = S.dirs.reduce(
