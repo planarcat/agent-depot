@@ -250,25 +250,33 @@ export const ConnectView = (() => {
     if (host.dataset["sig"] !== rowSig() || !host.querySelector(".srcgroups")) {
       host.dataset["sig"] = rowSig();
       const sources = [
-        ...S.dirs.map((d) => ({
-          id: "dir:" + d.id,
-          name: d.name,
-          short: shortName(d.name),
-          cls: "chip--accent",
-          count: dirCount(d),
-          title: `${d.name} · ${dirCount(d)} 条 · ${d.path}${layoutHint(d)}`,
-          tag: srcTag(d.id, "\u2192"),
-          off: dimAll && !activeIds.has("dir:" + d.id),
-          acts: [
-            {
-              key: "dirdel",
-              label: "移除",
-              icon: MV.ic("trash"),
-              title: "移除该目录（磁盘文件保留）",
-              danger: true,
-            },
-          ],
-        })),
+        ...S.dirs.map((d) => {
+          /* 仓库关联目录（origin='repo:<id>'）：标注归属，不提供移除（口径：仓库必有目录） */
+          const rd = d.origin.startsWith("repo:")
+            ? S.repos.find((r) => "repo:" + r.id === d.origin)
+            : undefined;
+          return {
+            id: "dir:" + d.id,
+            name: d.name,
+            short: shortName(d.name),
+            cls: "chip--accent",
+            count: dirCount(d),
+            title: `${d.name} · ${dirCount(d)} 条 · ${d.path}${layoutHint(d)}${rd ? `（仓库 ${rd.name} 的关联目录）` : ""}`,
+            tag: srcTag(d.id, "\u2192"),
+            off: dimAll && !activeIds.has("dir:" + d.id),
+            acts: rd
+              ? []
+              : [
+                  {
+                    key: "dirdel",
+                    label: "移除",
+                    icon: MV.ic("trash"),
+                    title: "移除该目录（磁盘文件保留）",
+                    danger: true,
+                  },
+                ],
+          };
+        }),
         ...S.repos.map((r) => ({
           id: "repo:" + r.id,
           name: r.name,
